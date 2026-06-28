@@ -32,8 +32,15 @@ dependencies {
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
 }
 
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
 kotlin {
-    jvmToolchain(17)
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 compose.desktop {
@@ -44,8 +51,9 @@ compose.desktop {
             // Real OS installers via jpackage; the JRE is bundled, so end users
             // don't need Java installed.
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
+            // jpackage requires MAJOR > 0 (esp. for the macOS .dmg).
             packageName = "TTSRoad"
-            packageVersion = "0.1.0"
+            packageVersion = "1.0.0"
             description = "TTSRoad desktop client"
             vendor = "Perspektiva"
         }
