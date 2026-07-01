@@ -22,17 +22,11 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
 
     // One shared client + one Retrofit per base URL so connections, the TLS session, and
     // thread pools are reused across calls (a new client per request would re-handshake).
-    @Volatile
-    private var authHeader: String? = null
-
+    // The Authorization header is passed per-call (see TtsRoadApi) rather than through a
+    // shared mutable field, so concurrent calls can't race on / clobber each other's token.
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
-        .addInterceptor { chain ->
-            val builder = chain.request().newBuilder()
-            authHeader?.let { builder.header("Authorization", it) }
-            chain.proceed(builder.build())
-        }
         .build()
 
     private val apiCache = HashMap<String, TtsRoadApi>()
@@ -43,9 +37,8 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
         password: String,
         totpCode: String? = null,
     ): LoginResult = withContext(Dispatchers.IO) {
-        val normalized = normalizeBaseUrl(baseUrl)
-        authHeader = null
         try {
+            val normalized = normalizeBaseUrl(baseUrl)
             val response = api(normalized).login(
                 LoginRequest(
                     username = username.trim(),
@@ -79,18 +72,15 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
     suspend fun logout() = withContext(Dispatchers.IO) {
         val session = sessionStore.current()
         runCatching {
-            if (session.isLoggedIn) {
-                authHeader = session.authorizationHeader
-                api(session.serverUrl).logout()
-            }
+            session.authorizationHeader?.let { auth -> api(session.serverUrl).logout(auth) }
         }
         sessionStore.clearToken()
     }
 
-    suspend fun library(): LibraryResponse = withAuthorizedApi { it.library() }
+    suspend fun library(): LibraryResponse = withAuthorizedApi { api, auth -> api.library(auth) }
 
     suspend fun chapters(fictionId: Int, playableOnly: Boolean = false): ChaptersResponse =
-        withAuthorizedApi { it.chapters(fictionId = fictionId, playableOnly = playableOnly) }
+        withAuthorizedApi { api, auth -> api.chapters(auth, fictionId = fictionId, playableOnly = playableOnly) }
 
     suspend fun saveProgress(
         fictionId: Int,
@@ -99,9 +89,9 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
         isPlayed: Boolean,
     ): PlaybackProgressResponse? = withContext(Dispatchers.IO) {
         val session = sessionStore.current()
-        if (!session.isLoggedIn) return@withContext null
-        authHeader = session.authorizationHeader
+        val auth = session.authorizationHeader ?: return@withContext null
         api(session.serverUrl).saveProgress(
+            auth,
             PlaybackProgressRequest(fictionId, chapterId, positionSeconds.coerceAtLeast(0.0), isPlayed),
         )
     }
@@ -109,12 +99,23 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
     /** Authorization header that audio requests must carry (bearer-protected MP3s). */
     fun authHeaderValue(): String? = sessionStore.current().authorizationHeader
 
-    private suspend fun <T> withAuthorizedApi(block: suspend (TtsRoadApi) -> T): T =
+    /**
+     * Audio/cover URLs from the API are normally absolute (the server prefixes them with its
+     * configured BASE_URL), but fall back to a bare path like `/audio/slug/file.mp3` if the
+     * admin hasn't set BASE_URL. Resolve that case against the server we're actually logged into.
+     */
+    fun resolveUrl(url: String): String {
+        if (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)) {
+            return url
+        }
+        return sessionStore.current().serverUrl.trimEnd('/') + url
+    }
+
+    private suspend fun <T> withAuthorizedApi(block: suspend (TtsRoadApi, String) -> T): T =
         withContext(Dispatchers.IO) {
             val session = sessionStore.current()
-            require(session.isLoggedIn) { "Not logged in" }
-            authHeader = session.authorizationHeader
-            block(api(session.serverUrl))
+            val auth = requireNotNull(session.authorizationHeader) { "Not logged in" }
+            block(api(session.serverUrl), auth)
         }
 
     private fun api(baseUrl: String): TtsRoadApi {

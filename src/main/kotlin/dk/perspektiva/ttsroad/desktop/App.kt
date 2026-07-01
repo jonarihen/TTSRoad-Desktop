@@ -4,19 +4,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -43,18 +44,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImagePainter
+import coil3.compose.SubcomposeAsyncImage
+import coil3.compose.SubcomposeAsyncImageContent
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.LoginResult
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.player.Mp3PlaybackController
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import dk.perspektiva.ttsroad.desktop.player.PlayerUiState
-import dk.perspektiva.ttsroad.desktop.player.StubPlaybackController
 import dk.perspektiva.ttsroad.desktop.ui.AarisCard
 import dk.perspektiva.ttsroad.desktop.ui.AarisColor
 import dk.perspektiva.ttsroad.desktop.ui.MetaText
@@ -62,17 +68,44 @@ import kotlinx.coroutines.launch
 
 private enum class Screen { Library, Player, Settings }
 
+// Layout tokens mirrored from the web app's aaris.css so the desktop client reads as the same
+// product: `.container` centers content at max-width 1280px with 28px gutters; player/forms cap
+// at 560px. Content is centered rather than stretched edge-to-edge across a wide desktop window.
+private val ContentMaxWidth = 1200.dp
+private val NarrowMaxWidth = 560.dp
+private val PageGutter = 28.dp
+
 private sealed interface Load<out T> {
     data object Loading : Load<Nothing>
     data class Ok<T>(val value: T) : Load<T>
     data class Err(val message: String) : Load<Nothing>
 }
 
+/** Vertically scrolling page whose content is capped at [maxWidth] and centered, with page gutters. */
+@Composable
+private fun PageScroll(
+    maxWidth: Dp = ContentMaxWidth,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(
+            Modifier
+                .align(Alignment.CenterHorizontally)
+                .widthIn(max = maxWidth)
+                .fillMaxWidth()
+                .padding(horizontal = PageGutter, vertical = PageGutter),
+            verticalArrangement = verticalArrangement,
+            content = content,
+        )
+    }
+}
+
 @Composable
 fun App() {
     val sessionStore = remember { SessionStore() }
     val repository = remember { TtsRoadRepository(sessionStore) }
-    val playback = remember { StubPlaybackController(repository) }
+    val playback = remember { Mp3PlaybackController(repository) }
     val session by sessionStore.session.collectAsState()
     var screen by remember { mutableStateOf(Screen.Library) }
 
@@ -101,20 +134,26 @@ fun App() {
 
 @Composable
 private fun HeaderBar(serverName: String, current: Screen, onSelect: (Screen) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().background(AarisColor.Bg).padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        MetaText(text = "// $serverName", color = AarisColor.Accent)
-        Spacer(Modifier.width(20.dp))
-        Text("TTSROAD", style = MaterialTheme.typography.titleLarge, color = AarisColor.Ink)
-        Spacer(Modifier.weight(1f))
-        Screen.entries.forEach { s ->
-            TextButton(onClick = { onSelect(s) }) {
-                Text(
-                    text = s.name.uppercase(),
-                    color = if (s == current) AarisColor.Accent else AarisColor.Muted,
-                )
+    Box(Modifier.fillMaxWidth().background(AarisColor.Bg)) {
+        Row(
+            Modifier
+                .align(Alignment.Center)
+                .widthIn(max = ContentMaxWidth)
+                .fillMaxWidth()
+                .padding(horizontal = PageGutter, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetaText(text = "// $serverName", color = AarisColor.Accent)
+            Spacer(Modifier.width(20.dp))
+            Text("TTSROAD", style = MaterialTheme.typography.titleLarge, color = AarisColor.Ink)
+            Spacer(Modifier.weight(1f))
+            Screen.entries.forEach { s ->
+                TextButton(onClick = { onSelect(s) }) {
+                    Text(
+                        text = s.name.uppercase(),
+                        color = if (s == current) AarisColor.Accent else AarisColor.Muted,
+                    )
+                }
             }
         }
     }
@@ -212,29 +251,45 @@ private fun LibraryScreen(
         is Load.Err -> CenterError(s.message)
         is Load.Ok -> {
             val library = s.value
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+            PageScroll {
                 if (library.continueListening.isNotEmpty()) {
                     SectionTitle("01", "Continue listening")
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(16.dp))
                     library.continueListening.take(8).forEach { chapter ->
-                        ChapterRow(chapter) {
+                        ChapterRow(chapter, repository) {
                             scope.launch { playback.play(chapter, chapter.fiction); onOpenPlayer() }
                         }
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(10.dp))
                     }
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(32.dp))
                 }
                 SectionTitle("02", "Fictions")
-                Spacer(Modifier.height(12.dp))
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 180.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth().height(((library.fictions.size / 4 + 1) * 300).dp),
-                ) {
-                    items(library.fictions, key = { it.id }) { fiction ->
-                        FictionCard(fiction)
+                Spacer(Modifier.height(16.dp))
+                FictionGrid(library.fictions, repository)
+            }
+        }
+    }
+}
+
+/**
+ * Even-column grid that fills the available width, matching the web app's
+ * `repeat(auto-fill, minmax(200px, 1fr))`: cards are at least ~200dp wide and stretch to fill,
+ * so there is never a ragged right edge regardless of window width.
+ */
+@Composable
+private fun FictionGrid(fictions: List<FictionSummary>, repository: TtsRoadRepository) {
+    val gap = 18.dp
+    val minCard = 200.dp
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val columns = maxOf(1, ((maxWidth + gap).value / (minCard + gap).value).toInt())
+        Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+            fictions.chunked(columns).forEach { rowItems ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    rowItems.forEach { fiction ->
+                        FictionCard(fiction, repository, Modifier.weight(1f))
                     }
+                    // Keep cards in a short final row at their natural width instead of stretching.
+                    repeat(columns - rowItems.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
@@ -242,14 +297,16 @@ private fun LibraryScreen(
 }
 
 @Composable
-private fun FictionCard(fiction: FictionSummary) {
-    AarisCard(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            CoverTile(fiction.title, Modifier.fillMaxWidth().aspectRatio(0.7f))
+private fun FictionCard(fiction: FictionSummary, repository: TtsRoadRepository, modifier: Modifier = Modifier) {
+    AarisCard(modifier = modifier) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            CoverTile(
+                fiction.title,
+                fiction.coverImageUrl?.let(repository::resolveUrl),
+                Modifier.fillMaxWidth().aspectRatio(2f / 3f),
+            )
             Text(fiction.title, style = MaterialTheme.typography.titleMedium, color = AarisColor.Ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            fiction.author?.takeIf { it.isNotBlank() }?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium, color = AarisColor.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            fiction.author?.takeIf { it.isNotBlank() }?.let { MetaText(it) }
             LinearProgressIndicator(progress = { fiction.readyFraction }, color = AarisColor.Accent, trackColor = AarisColor.Line, modifier = Modifier.fillMaxWidth())
             MetaText("${fiction.doneChapters}/${fiction.totalChapters} ready")
         }
@@ -257,10 +314,14 @@ private fun FictionCard(fiction: FictionSummary) {
 }
 
 @Composable
-private fun ChapterRow(chapter: ChapterSummary, onPlay: () -> Unit) {
+private fun ChapterRow(chapter: ChapterSummary, repository: TtsRoadRepository, onPlay: () -> Unit) {
     AarisCard(modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            CoverTile(chapter.resolvedFictionTitle ?: chapter.resolvedTitle, Modifier.size(56.dp))
+            CoverTile(
+                chapter.resolvedFictionTitle ?: chapter.resolvedTitle,
+                chapter.resolvedCoverUrl?.let(repository::resolveUrl),
+                Modifier.size(56.dp),
+            )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(chapter.resolvedTitle, style = MaterialTheme.typography.titleMedium, color = AarisColor.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -277,13 +338,14 @@ private fun ChapterRow(chapter: ChapterSummary, onPlay: () -> Unit) {
 @Composable
 private fun PlayerScreen(playback: PlaybackController) {
     val s: PlayerUiState by playback.state.collectAsState()
-    Column(
-        Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Box(Modifier.fillMaxSize().padding(horizontal = PageGutter, vertical = 24.dp), contentAlignment = Alignment.TopCenter) {
+        Column(
+            Modifier.widthIn(max = NarrowMaxWidth).fillMaxWidth().fillMaxHeight(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
         MetaText(text = "// Now Playing", color = AarisColor.Accent)
         Box(Modifier.weight(1f).padding(vertical = 20.dp), contentAlignment = Alignment.Center) {
-            CoverTile(s.fictionTitle ?: s.title, Modifier.height(280.dp).aspectRatio(0.7f))
+            CoverTile(s.fictionTitle ?: s.title, s.coverImageUrl, Modifier.height(280.dp).aspectRatio(0.7f))
         }
         Text(s.title, style = MaterialTheme.typography.headlineSmall, color = AarisColor.Ink, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         s.fictionTitle?.let { Spacer(Modifier.height(8.dp)); MetaText(it) }
@@ -306,7 +368,12 @@ private fun PlayerScreen(playback: PlaybackController) {
             OutlinedButton(onClick = { playback.skipBy(30_000) }, enabled = s.hasMedia, shape = RectangleShape) { Text("+30") }
         }
         Spacer(Modifier.height(8.dp))
-        MetaText(text = "Audio backend not wired yet — see PlaybackController", color = AarisColor.Dim)
+        val error = s.error
+        when {
+            error != null -> Text(error, color = MaterialTheme.colorScheme.error)
+            !s.hasMedia -> MetaText(text = "Buffering…", color = AarisColor.Dim)
+        }
+        }
     }
 }
 
@@ -315,7 +382,7 @@ private fun SettingsScreen(sessionStore: SessionStore, repository: TtsRoadReposi
     val scope = rememberCoroutineScope()
     val session by sessionStore.session.collectAsState()
     var busy by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    PageScroll(maxWidth = NarrowMaxWidth, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         MetaText(text = "// Session", color = AarisColor.Accent)
         AarisCard {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -354,14 +421,34 @@ private fun SectionTitle(kicker: String, title: String) {
 }
 
 @Composable
-private fun CoverTile(fallback: String, modifier: Modifier) {
+private fun CoverTile(fallback: String, coverUrl: String?, modifier: Modifier) {
     Box(
         modifier.background(AarisColor.BgInput).border(1.dp, AarisColor.Line),
         contentAlignment = Alignment.Center,
     ) {
-        // TODO: async cover image loading (e.g. Coil 3 for desktop). Placeholder letter for now.
-        Text(fallback.trim().take(1).uppercase().ifBlank { "T" }, style = MaterialTheme.typography.headlineSmall, color = AarisColor.Accent)
+        if (coverUrl != null) {
+            SubcomposeAsyncImage(
+                model = coverUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                val painterState by painter.state.collectAsState()
+                if (painterState is AsyncImagePainter.State.Success) {
+                    SubcomposeAsyncImageContent()
+                } else {
+                    CoverFallbackLetter(fallback)
+                }
+            }
+        } else {
+            CoverFallbackLetter(fallback)
+        }
     }
+}
+
+@Composable
+private fun CoverFallbackLetter(fallback: String) {
+    Text(fallback.trim().take(1).uppercase().ifBlank { "T" }, style = MaterialTheme.typography.headlineSmall, color = AarisColor.Accent)
 }
 
 @Composable

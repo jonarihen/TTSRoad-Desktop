@@ -3,7 +3,7 @@ import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 plugins {
     kotlin("jvm") version "2.1.0"
     id("org.jetbrains.kotlin.plugin.compose") version "2.1.0"
-    id("org.jetbrains.compose") version "1.7.3"
+    id("org.jetbrains.compose") version "1.8.2"
 }
 
 group = "dk.perspektiva.ttsroad.desktop"
@@ -30,6 +30,19 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.moshi:moshi:1.15.1")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
+
+    // Pure-JVM MP3 decoding, registered as a javax.sound.sampled SPI so chapter audio
+    // (downloaded with the bearer auth header attached) can be played via SourceDataLine
+    // without an external native player like VLC.
+    implementation("com.googlecode.soundlibs:mp3spi:1.9.5.4")
+    implementation("com.googlecode.soundlibs:jlayer:1.0.1.4")
+    implementation("com.googlecode.soundlibs:tritonus-share:0.3.7.4")
+
+    // Async cover-image loading + in-memory/disk caching (covers are served unauthenticated).
+    // Pinned to 3.2.0 (not the latest 3.5.0): newer releases bump their kotlin-stdlib dependency
+    // past what our Kotlin 2.1.0 compiler's metadata reader accepts.
+    implementation("io.coil-kt.coil3:coil-compose:3.2.0")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
 }
 
 java {
