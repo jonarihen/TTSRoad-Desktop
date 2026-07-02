@@ -66,9 +66,19 @@ compose.desktop {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             // jpackage requires MAJOR > 0 (esp. for the macOS .dmg).
             packageName = "TTSRoad"
-            packageVersion = "1.0.0"
+            packageVersion = "1.0.1"
             description = "TTSRoad desktop client"
             vendor = "Perspektiva"
+
+            windows {
+                // Without these the MSI installs with no Start menu / desktop entry at all.
+                menu = true
+                shortcut = true
+                menuGroup = "TTSRoad"
+                // Stable across releases so newer MSIs upgrade in place instead of
+                // installing side by side.
+                upgradeUuid = "9c3f5a1e-7d42-4b8a-b6f0-2f1a44e6d9c3"
+            }
         }
     }
 }
