@@ -82,6 +82,9 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
     suspend fun chapters(fictionId: Int, playableOnly: Boolean = false): ChaptersResponse =
         withAuthorizedApi { api, auth -> api.chapters(auth, fictionId = fictionId, playableOnly = playableOnly) }
 
+    suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
+        withAuthorizedApi { api, auth -> api.markPlayback(auth, PlaybackMarkRequest(chapterIds, played)) }
+
     suspend fun saveProgress(
         fictionId: Int,
         chapterId: Int,

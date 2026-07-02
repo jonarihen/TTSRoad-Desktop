@@ -81,6 +81,7 @@ data class ChapterSummary(
     @param:Json(name = "fiction_title") val fictionTitle: String? = null,
     @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
     @param:Json(name = "resume_seconds") val resumeSeconds: Double? = null,
+    @param:Json(name = "resume_time_label") val resumeTimeLabel: String? = null,
 ) {
     val resolvedChapterId: Int get() = id.takeIf { it > 0 } ?: apiChapterId ?: 0
     val resolvedFictionId: Int get() = fictionId.takeIf { it > 0 } ?: fiction?.id ?: 0
@@ -113,4 +114,16 @@ data class PlaybackProgressRequest(
 data class PlaybackProgressResponse(
     val status: String = "",
     @param:Json(name = "chapter_id") val chapterId: Int = 0,
+)
+
+data class PlaybackMarkRequest(
+    @param:Json(name = "chapter_ids") val chapterIds: List<Int>,
+    val played: Boolean,
+)
+
+data class PlaybackMarkResponse(
+    val status: String = "",
+    val played: Boolean = false,
+    @param:Json(name = "chapter_ids") val chapterIds: List<Int> = emptyList(),
+    val count: Int = 0,
 )

@@ -30,4 +30,10 @@ interface TtsRoadApi {
         @Header("Authorization") auth: String,
         @Body request: PlaybackProgressRequest,
     ): PlaybackProgressResponse
+
+    @POST("api/mobile/playback/mark")
+    suspend fun markPlayback(
+        @Header("Authorization") auth: String,
+        @Body request: PlaybackMarkRequest,
+    ): PlaybackMarkResponse
 }

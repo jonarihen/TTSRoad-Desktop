@@ -1,7 +1,10 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CardDefaults
@@ -12,8 +15,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -114,18 +121,33 @@ fun AarisTag(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** Flat, thin-bordered panel — the AARIS `.panel`. */
+/**
+ * Flat, thin-bordered panel — the AARIS `.panel`. Clickable cards get desktop hover feedback
+ * (raised background, lightened border, hand cursor) like the web app's `.panel:hover`.
+ */
 @Composable
 fun AarisCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    val colors = CardDefaults.outlinedCardColors(containerColor = AarisColor.BgRaise, contentColor = AarisColor.Ink)
-    val border = BorderStroke(1.dp, AarisColor.Line)
-    if (onClick != null) {
-        OutlinedCard(onClick = onClick, modifier = modifier, colors = colors, border = border) { content() }
-    } else {
-        OutlinedCard(modifier = modifier, colors = colors, border = border) { content() }
+    if (onClick == null) {
+        OutlinedCard(
+            modifier = modifier,
+            colors = CardDefaults.outlinedCardColors(containerColor = AarisColor.BgRaise, contentColor = AarisColor.Ink),
+            border = BorderStroke(1.dp, AarisColor.Line),
+        ) { content() }
+        return
     }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val container by animateColorAsState(if (hovered) AarisColor.BgHover else AarisColor.BgRaise)
+    val borderColor by animateColorAsState(if (hovered) AarisColor.Dim else AarisColor.Line)
+    OutlinedCard(
+        onClick = onClick,
+        modifier = modifier.pointerHoverIcon(PointerIcon.Hand),
+        interactionSource = interaction,
+        colors = CardDefaults.outlinedCardColors(containerColor = container, contentColor = AarisColor.Ink),
+        border = BorderStroke(1.dp, borderColor),
+    ) { content() }
 }
