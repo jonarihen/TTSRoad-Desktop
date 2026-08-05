@@ -1,0 +1,6 @@
+# The wrapper script must keep LF endings or it will not execute on Linux/macOS after a
+# checkout on a machine with core.autocrlf=true.
+gradlew         text eol=lf
+*.sh            text eol=lf
+gradlew.bat     text eol=crlf
+gradle/wrapper/gradle-wrapper.jar binary

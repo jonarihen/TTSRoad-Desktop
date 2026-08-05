@@ -25,12 +25,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -41,7 +39,6 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
-import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
@@ -55,15 +52,11 @@ fun FictionDetailScreen(
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var state by remember { mutableStateOf<Load<ChaptersResponse>>(Load.Loading) }
-    var actionError by remember { mutableStateOf<String?>(null) }
-
-    suspend fun load() {
-        state = runCatching { repository.chapters(fiction.id) }
-            .fold({ Load.Ok(it) }, { Load.Err(it.message ?: "Could not load chapters") })
+    val holder = rememberStateHolder(repository, fiction.id) {
+        FictionDetailStateHolder(repository, fiction.id)
     }
-
-    LaunchedEffect(fiction.id) { load() }
+    val state by holder.state.collectAsState()
+    val actionError by holder.actionError.collectAsState()
 
     PageScroll {
         BackLink("Library", onBack)
@@ -104,13 +97,7 @@ fun FictionDetailScreen(
                             scope.launch { playback.playQueue(chapters, chapter.resolvedChapterId, s.value.fiction) }
                         },
                         onMarkPlayed = { played ->
-                            scope.launch {
-                                actionError = null
-                                runCatching {
-                                    repository.markPlayed(listOf(chapter.resolvedChapterId), played)
-                                    load()
-                                }.onFailure { actionError = it.message ?: "Could not update chapter" }
-                            }
+                            holder.setPlayed(chapter.resolvedChapterId, played)
                         },
                     )
                     HorizontalDivider(thickness = 1.dp, color = AarisColor.LineSoft)

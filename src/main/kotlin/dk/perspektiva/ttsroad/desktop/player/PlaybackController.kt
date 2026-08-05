@@ -4,16 +4,14 @@ import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import java.io.File
-import java.io.IOException
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioInputStream
-import javax.sound.sampled.AudioSystem
-import javax.sound.sampled.DataLine
-import javax.sound.sampled.SourceDataLine
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,8 +20,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import okhttp3.OkHttpClient
-import okhttp3.Request
 
 data class QueueItem(
     val chapterId: Int,
@@ -48,7 +44,8 @@ data class PlayerUiState(
 
 /**
  * Playback abstraction for the desktop client — the UI only ever drives playback through this
- * interface, so the audio backend can be swapped without touching UI code.
+ * interface, so the audio backend can be swapped without touching UI code, and UI tests can run
+ * against a fake that never opens an audio device.
  */
 interface PlaybackController {
     val state: StateFlow<PlayerUiState>
@@ -67,27 +64,41 @@ interface PlaybackController {
     fun skipToQueueIndex(index: Int)
     fun setSpeed(speed: Float)
     fun stop()
+
+    /**
+     * Tears down background work owned by the controller. Called when the app window closes; the
+     * default no-op keeps test fakes from having to care.
+     */
+    fun release() = Unit
 }
 
 /**
- * Downloads the bearer-protected chapter MP3 to a temp file with OkHttp (auth header attached),
- * decodes it via the mp3spi/JLayer `javax.sound.sampled` SPI, and plays the resulting PCM through
- * a [SourceDataLine]. Seeking re-decodes from the start of the (already-local) temp file and
- * discards up to the target offset, since a streamed MP3 decoder has no random-access index —
- * simple and exact, at the cost of a brief pause on long seeks.
+ * Downloads the bearer-protected chapter MP3 through an [AudioDownloadStore], decodes it through
+ * an [AudioEngine], and writes the resulting PCM to that engine's output line. Seeking re-decodes
+ * from the start of the (already-local) file and discards up to the target offset, since a
+ * streamed MP3 decoder has no random-access index — simple and exact, at the cost of a brief
+ * pause on long seeks.
  *
  * The queue is a plain list of chapters: one playback job walks it, downloading each chapter as
  * it becomes current and advancing when decoding reaches end-of-stream.
+ *
+ * [downloads], [engine] and [ioDispatcher] are constructor parameters so the whole state machine
+ * can be exercised without a network or a sound card.
  */
-class Mp3PlaybackController(private val repository: TtsRoadRepository) : PlaybackController {
+class Mp3PlaybackController(
+    private val repository: TtsRoadRepository,
+    private val downloads: AudioDownloadStore,
+    private val engine: AudioEngine = JavaSoundAudioEngine(),
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+) : PlaybackController {
     private val _state = MutableStateFlow(PlayerUiState())
     override val state: StateFlow<PlayerUiState> = _state.asStateFlow()
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val httpClient = OkHttpClient()
+    private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
 
     private var playJob: Job? = null
-    private var tempFile: File? = null
+
+    @Volatile private var tempFile: File? = null
 
     private var queue: List<ChapterSummary> = emptyList()
     private var queueFiction: FictionSummary? = null
@@ -174,6 +185,11 @@ class Mp3PlaybackController(private val repository: TtsRoadRepository) : Playbac
         _state.value = PlayerUiState()
     }
 
+    override fun release() {
+        stop()
+        scope.cancel()
+    }
+
     private fun stopJob() {
         playJob?.cancel()
         playJob = null
@@ -199,7 +215,7 @@ class Mp3PlaybackController(private val repository: TtsRoadRepository) : Playbac
                 queueIndex = index
                 publishMetadata(index, positionMs)
                 val reachedEnd = try {
-                    val file = download(chapter.audio!!.url)
+                    val file = downloads.download(chapter.audio!!.url)
                     tempFile = file
                     wantsPlaying = true
                     _state.update { it.copy(hasMedia = true, isPlaying = true) }
@@ -244,13 +260,11 @@ class Mp3PlaybackController(private val repository: TtsRoadRepository) : Playbac
 
     /** Decodes and plays one chapter; returns true when it reached end-of-stream naturally. */
     private suspend fun CoroutineScope.runPlaybackLoop(file: File, startMs: Long, chapter: ChapterSummary): Boolean {
-        var decoded = openDecodedStream(file)
+        var decoded = engine.decode(file)
         val format = decoded.format
-        val info = DataLine.Info(SourceDataLine::class.java, format)
-        val line: SourceDataLine
+        val line: AudioLine
         try {
-            line = AudioSystem.getLine(info) as SourceDataLine
-            line.open(format)
+            line = engine.open(format)
         } catch (e: Exception) {
             decoded.close()
             throw e
@@ -271,7 +285,7 @@ class Mp3PlaybackController(private val repository: TtsRoadRepository) : Playbac
                 seekRequestMs?.let { targetMs ->
                     seekRequestMs = null
                     decoded.close()
-                    decoded = openDecodedStream(file)
+                    decoded = engine.decode(file)
                     line.flush()
                     val toSkip = msToBytes(targetMs, format)
                     skipFully(decoded, toSkip)
@@ -321,37 +335,9 @@ class Mp3PlaybackController(private val repository: TtsRoadRepository) : Playbac
         }
     }
 
-    private fun download(url: String): File {
-        val resolved = repository.resolveUrl(url)
-        val auth = repository.authHeaderValue() ?: throw IOException("Not logged in")
-        val request = Request.Builder().url(resolved).header("Authorization", auth).build()
-        httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Failed to download audio (HTTP ${response.code})")
-            val file = File.createTempFile("ttsroad-", ".mp3")
-            file.deleteOnExit()
-            response.body!!.byteStream().use { input -> file.outputStream().use { input.copyTo(it) } }
-            return file
-        }
-    }
-
     private fun deleteTempFile() {
-        tempFile?.delete()
+        downloads.release(tempFile)
         tempFile = null
-    }
-
-    private fun openDecodedStream(file: File): AudioInputStream {
-        val fileStream = AudioSystem.getAudioInputStream(file)
-        val base = fileStream.format
-        val target = AudioFormat(
-            AudioFormat.Encoding.PCM_SIGNED,
-            base.sampleRate,
-            16,
-            base.channels,
-            base.channels * 2,
-            base.sampleRate,
-            false,
-        )
-        return AudioSystem.getAudioInputStream(target, fileStream)
     }
 
     private fun msToBytes(ms: Long, format: AudioFormat): Long {

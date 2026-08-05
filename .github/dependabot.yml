@@ -1,0 +1,38 @@
+version: 2
+
+updates:
+  # Gradle plugins and libraries, read from gradle/libs.versions.toml.
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Copenhagen
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      # Kotlin and the Compose compiler plugin MUST move together — the compiler plugin version
+      # has to equal the Kotlin plugin version since Kotlin 2.0.
+      kotlin:
+        patterns:
+          - "org.jetbrains.kotlin*"
+      compose:
+        patterns:
+          - "org.jetbrains.compose*"
+      okhttp-retrofit:
+        patterns:
+          - "com.squareup.okhttp3*"
+          - "com.squareup.retrofit2*"
+    ignore:
+      # Permanently frozen upstream; a "newer" version does not exist and never will.
+      - dependency-name: "org.jetbrains.compose.material:material-icons-extended"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies

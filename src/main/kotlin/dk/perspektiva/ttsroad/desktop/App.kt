@@ -42,15 +42,15 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
-import dk.perspektiva.ttsroad.desktop.data.LoginResult
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
-import dk.perspektiva.ttsroad.desktop.player.Mp3PlaybackController
+import dk.perspektiva.ttsroad.desktop.di.AppContainer
 import dk.perspektiva.ttsroad.desktop.ui.AarisCard
 import dk.perspektiva.ttsroad.desktop.ui.AarisColor
 import dk.perspektiva.ttsroad.desktop.ui.ContentMaxWidth
 import dk.perspektiva.ttsroad.desktop.ui.FictionDetailScreen
 import dk.perspektiva.ttsroad.desktop.ui.LibraryScreen
+import dk.perspektiva.ttsroad.desktop.ui.LoginStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.MetaText
 import dk.perspektiva.ttsroad.desktop.ui.NarrowMaxWidth
 import dk.perspektiva.ttsroad.desktop.ui.NowPlayingBar
@@ -58,6 +58,7 @@ import dk.perspektiva.ttsroad.desktop.ui.PageGutter
 import dk.perspektiva.ttsroad.desktop.ui.PageScroll
 import dk.perspektiva.ttsroad.desktop.ui.PlayerScreen
 import dk.perspektiva.ttsroad.desktop.ui.hasSession
+import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
 import kotlinx.coroutines.launch
 
 private sealed interface Screen {
@@ -67,11 +68,16 @@ private sealed interface Screen {
     data object Settings : Screen
 }
 
+/**
+ * Root composable. The object graph is *passed in*, not built here — see [AppContainer]. The
+ * default argument keeps `App()` usable from a preview or a smoke test, but `main()` owns the
+ * real container so it can be closed when the window closes.
+ */
 @Composable
-fun App() {
-    val sessionStore = remember { SessionStore() }
-    val repository = remember { TtsRoadRepository(sessionStore) }
-    val playback = remember { Mp3PlaybackController(repository) }
+fun App(container: AppContainer = remember { AppContainer() }) {
+    val sessionStore = container.sessionStore
+    val repository = container.repository
+    val playback = container.playback
     val session by sessionStore.session.collectAsState()
     var screen by remember { mutableStateOf<Screen>(Screen.Library) }
     // Where the full player collapses back to, so expanding the bar never loses browse context.
@@ -180,14 +186,16 @@ private fun NavItem(label: String, active: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun LoginScreen(repository: TtsRoadRepository) {
-    val scope = rememberCoroutineScope()
+    val holder = rememberStateHolder(repository) { LoginStateHolder(repository) }
+    val ui by holder.state.collectAsState()
+    // Credentials stay in Compose state, deliberately: see LoginStateHolder's doc comment.
     var serverUrl by remember { mutableStateOf("https://") }
     var username by remember { mutableStateOf("admin") }
     var password by remember { mutableStateOf("") }
     var totpCode by remember { mutableStateOf("") }
-    var twoFactor by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    val twoFactor = ui.twoFactor
+    val busy = ui.busy
+    val error = ui.error
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(Modifier.width(380.dp).verticalScroll(rememberScrollState())) {
@@ -212,21 +220,7 @@ private fun LoginScreen(repository: TtsRoadRepository) {
             }
             Spacer(Modifier.height(20.dp))
             Button(
-                onClick = {
-                    scope.launch {
-                        busy = true
-                        error = null
-                        when (val r = repository.login(serverUrl, username, password, if (twoFactor) totpCode else null)) {
-                            LoginResult.Success -> Unit
-                            LoginResult.TotpRequired -> {
-                                error = if (twoFactor && totpCode.isNotBlank()) "Invalid authentication code" else null
-                                twoFactor = true
-                            }
-                            is LoginResult.Failure -> error = r.message
-                        }
-                        busy = false
-                    }
-                },
+                onClick = { holder.submit(serverUrl, username, password, totpCode) },
                 enabled = !busy && serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank() &&
                     (!twoFactor || totpCode.isNotBlank()),
                 shape = RectangleShape,
@@ -265,6 +259,10 @@ private fun SettingsScreen(sessionStore: SessionStore, repository: TtsRoadReposi
                 SettingRow("User", session.username.orEmpty())
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingRow("Role", if (session.isAdmin) "Admin" else "User")
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                // BuildInfo is generated from the single `ttsroad.version` Gradle property, so
+                // this always matches the installer the user actually ran.
+                SettingRow("Version", "${BuildInfo.APP_NAME} ${BuildInfo.VERSION}")
             }
         }
         Button(
