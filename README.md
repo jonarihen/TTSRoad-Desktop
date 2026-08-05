@@ -65,7 +65,9 @@ the packaged app, and `packageMsi`.
 
 Rationale for every version above — including the two Compose artifacts that deliberately do *not*
 track the CMP version, and the ProGuard override needed for Java 25 bytecode — is in
-[`docs/adr/0001-2026-build-baseline.md`](docs/adr/0001-2026-build-baseline.md).
+[`docs/adr/0001-2026-build-baseline.md`](docs/adr/0001-2026-build-baseline.md). Credential storage,
+centralized bearer injection and capability discovery are covered by
+[`docs/adr/0002-credential-storage-and-capability-discovery.md`](docs/adr/0002-credential-storage-and-capability-discovery.md).
 
 ## 🚀 Bootstrap
 
@@ -138,7 +140,16 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── TtsRoadApi.kt             Retrofit interface
 │   ├── Repository.kt             TtsRoadRepository (interface) + RetrofitTtsRoadRepository
 │   ├── SessionStore.kt           SessionStore (interface) + File-/InMemory- implementations
+│   ├── AuthInterceptor.kt        the one place a bearer token is attached (same-origin only)
+│   ├── ServerCapabilities.kt     additive /api/mobile/capabilities model
+│   ├── SessionEnd.kt             structured 401 reasons + 429 Retry-After parsing
+│   ├── Redaction.kt              secret scrubbing for logs and error text
 │   └── ServerUrls.kt             normalizeBaseUrl / resolveAgainstServer
+├── security/
+│   ├── CredentialStore.kt        the keyring seam + session-only fallback + platform selection
+│   ├── WindowsCredentialStore.kt Win32 Credential Manager via java.lang.foreign
+│   ├── CommandCredentialStores.kt Secret Service (secret-tool) and macOS Keychain (security)
+│   └── SecureFiles.kt            atomic, owner-only settings writes
 ├── player/
 │   ├── PlaybackController.kt     PlaybackController (interface) + Mp3PlaybackController
 │   ├── AudioDownloadStore.kt     bearer-authenticated chapter download seam
@@ -156,18 +167,21 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 
 src/test/kotlin/dk/perspektiva/ttsroad/desktop/
 ├── ServerFixtures.kt             real server-1.4.0 payloads, incl. unknown additive fields
-├── Fakes.kt                      FakeRepository, FakePlaybackController
-├── data/                         URL, model-parsing, login, repository, session-store tests
-├── player/                       playback state machine against a fake download store + engine
-└── ui/                           state-holder tests + Compose player smoke tests
+├── Fakes.kt                      FakeRepository, FakePlaybackController, fake keyring/command runner
+├── data/                         URLs, model parsing, login/429, capability discovery, structured
+│                                 401s, redaction, auth-interceptor origin rules, session migration
+├── security/                     credential stores (incl. a real Windows Credential Manager round-trip)
+├── player/                       playback state machine + audio 401 handling
+└── ui/                           state-holder tests + Compose screen smoke tests
 ```
 
 ## 🔊 How audio playback works
 
 Chapter MP3s are **bearer-protected**, so `Mp3PlaybackController`:
 
-1. Downloads the chapter to a temp file through `AudioDownloadStore`, attaching the
-   `Authorization` header from `TtsRoadRepository.authHeaderValue()`.
+1. Downloads the chapter to a temp file through `AudioDownloadStore`, on the app's shared OkHttp
+   client — the same auth interceptor that serves the API attaches the bearer token, and a `401`
+   here ends the session exactly as it would on an API call.
 2. Decodes it to PCM through `AudioEngine` — in production the **mp3spi/JLayer**
    `javax.sound.sampled` SPI.
 3. Streams the PCM to the engine's output line (a `SourceDataLine`) — no external native player
@@ -180,9 +194,22 @@ a brief pause on long seeks.
 Both the download and the audio backend are interfaces, so the whole queue / auto-advance /
 progress-save state machine is unit-tested with no network and no sound card.
 
-## 🔐 Session storage
+## 🔐 Sessions and credentials
 
-The session token is stored per-OS in the user config directory:
+The bearer token is kept in the **OS credential store**, never on disk:
+
+| OS | Credential store | How |
+| --- | --- | --- |
+| Windows | Credential Manager | `CredWriteW`/`CredReadW` in `Advapi32.dll`, via `java.lang.foreign` |
+| macOS | login Keychain | `/usr/bin/security`, secret on **stdin** (never in `argv`) |
+| Linux | freedesktop Secret Service | libsecret's `secret-tool`, secret on **stdin** |
+| none available | *nothing* | session-only, with a visible "sign in again after restart" notice |
+
+There is deliberately no fourth option. Writing the token to a file — or encrypting it with a key
+stored next to the ciphertext — is plaintext with extra steps, so a machine without a keyring gets
+a session that ends with the process.
+
+A small **settings file** holds only non-secret hints plus the identifier of the keyring entry:
 
 | OS | Location |
 | --- | --- |
@@ -190,8 +217,37 @@ The session token is stored per-OS in the user config directory:
 | macOS | `~/Library/Application Support/TTSRoad/session.json` |
 | Linux | `$XDG_CONFIG_HOME/TTSRoad/session.json` (default `~/.config/TTSRoad/session.json`) |
 
-> ⚠️ The bearer token is currently stored **in plaintext** with default file permissions — no OS
-> keychain, no encryption. `SessionStore` is the single seam that change has to go through.
+It is written atomically (temp file + rename) and restricted to the owner (`rw-------`, or a
+single-owner ACL on Windows). A file left by an older build that still contains a plaintext
+`token` is migrated once — into the keyring, then rewritten without it, then re-read to verify the
+plaintext is gone. If any step fails the plaintext is destroyed anyway and the user signs in again.
+
+### Where the token is attached
+
+One OkHttp client, one interceptor, three consumers (API calls, chapter audio, cover images). The
+token is attached only when the request's **scheme, host and port match the signed-in server**, so
+a cover image on a third-party CDN is fetched bare. Server discovery opts out explicitly, so a
+stale session can never be offered to a URL the user is still typing.
+
+### When the session ends
+
+A `401` on any authenticated request — including `/audio/…` — drops the credential, stops
+playback, clears discovered capabilities, and returns to the login screen showing the server's own
+reason (expired / revoked / invalid / unknown). A `500`, a timeout, or a dropped connection does
+none of that: an outage is not a revocation.
+
+## 🧭 Server capability discovery
+
+`GET /api/mobile/capabilities` is unauthenticated and additive. Rules:
+
+- only a literal JSON `true` enables a feature; unknown keys are ignored;
+- `404` means "baseline" and is cached — an old server will not grow the endpoint;
+- a transient failure keeps the last known answer instead of downgrading;
+- results are cached in memory for six hours, and forcibly refreshed after login;
+- `api_version` is never used as a proxy for a feature.
+
+The discovered server name and version appear under the URL field **before** any credential is
+sent, so a typo'd hostname is visible rather than password-shaped.
 
 ---
 

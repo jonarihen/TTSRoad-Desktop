@@ -138,6 +138,15 @@ kotlin.sourceSets.named("main") {
 // `clean check` invocation it can otherwise delete BuildInfo.kt after it was generated.
 generateBuildInfo.configure { mustRunAfter(tasks.named("clean")) }
 
+/**
+ * Two things in this app reach outside the JVM and both are "restricted" on JDK 25: Skiko loads its
+ * rendering library with `System::load`, and the Windows credential store links `Advapi32.dll`
+ * through `java.lang.foreign`. Without this flag each prints a multi-line warning on first use, and
+ * the JVM says such calls will be *blocked* in a future release — so declaring the access now is
+ * both quieter and forward-compatible.
+ */
+val nativeAccessArgs = listOf("--enable-native-access=ALL-UNNAMED")
+
 tasks.test {
     useJUnitPlatform()
     testLogging {
@@ -147,6 +156,7 @@ tasks.test {
     }
     // Compose UI tests need a real (or virtual) display; CI runs them under Xvfb.
     systemProperty("java.awt.headless", "false")
+    jvmArgs(nativeAccessArgs)
 }
 
 // jlink/jpackage default to the JVM that is *running Gradle*, not to the Kotlin toolchain, so
@@ -165,6 +175,7 @@ compose.desktop {
     application {
         mainClass = "dk.perspektiva.ttsroad.desktop.MainKt"
         javaHome = packagingJavaHome
+        jvmArgs += nativeAccessArgs
 
         buildTypes.release.proguard {
             // CMP 1.11.1's bundled ProGuard 7.7.0 cannot read Java 25 bytecode

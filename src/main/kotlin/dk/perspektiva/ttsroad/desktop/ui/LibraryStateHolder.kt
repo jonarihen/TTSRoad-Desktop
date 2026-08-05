@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.desktop.ui
 
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,7 +28,7 @@ class LibraryStateHolder(
     fun refresh() {
         scope.launch {
             _state.value = runCatching { repository.library() }
-                .fold({ Load.Ok(it) }, { Load.Err(it.message ?: "Could not load library") })
+                .fold({ Load.Ok(it) }, { Load.Err(userFacingMessage(it, "Could not load library")) })
         }
     }
 }

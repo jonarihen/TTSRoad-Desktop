@@ -12,10 +12,14 @@ import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
+import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
+import dk.perspektiva.ttsroad.desktop.data.SessionEnd
+import dk.perspektiva.ttsroad.desktop.data.SessionEndReason
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
 
@@ -86,6 +90,79 @@ class ScreensUiTest {
         compose.waitForIdle()
 
         assertEquals(1, repository.loginCalls)
+    }
+
+    @Test
+    fun `the login screen identifies the server before a password is typed`() {
+        val repository = FakeRepository(
+            capabilitiesResult = ServerCapabilities(serverName = "Perspektiva TTSRoad", serverVersion = "1.4.0"),
+        )
+        val app = container(SessionState(serverUrl = "https://ttsroad.example.com/"), repository)
+
+        compose.setContent { TtsRoadTheme { App(app) } }
+        // The probe is debounced, so give the composition time to run it.
+        compose.waitUntil(5_000) { repository.capabilityProbes.isNotEmpty() }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("PERSPEKTIVA TTSROAD 1.4.0").assertIsDisplayed()
+        assertEquals(0, repository.loginCalls, "identification must not need a credential")
+    }
+
+    @Test
+    fun `an expired session explains itself on the login screen`() {
+        val repository = FakeRepository()
+        val app = container(SessionState(serverUrl = "https://x/", username = "admin"), repository)
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+
+        runBlocking {
+            repository.endSession(
+                SessionEnd(SessionEndReason.Revoked, "This device session was revoked. Sign in again."),
+            )
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("This device session was revoked. Sign in again.").assertIsDisplayed()
+    }
+
+    @Test
+    fun `losing the session stops playback instead of leaving audio behind the login screen`() {
+        val repository = FakeRepository(libraryResult = Result.success(ParsedFixtures.library))
+        val playback = FakePlaybackController()
+        val store = InMemorySessionStore(
+            SessionState(serverUrl = "https://x/", token = "t", username = "admin"),
+        )
+        val app = AppContainer(
+            sessionStore = store,
+            repositoryFactory = { _, _, _ -> repository },
+            playbackFactory = { _, _, _, _ -> playback },
+        )
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+        playback.calls.clear()
+
+        // What a 401 on an API or audio call does: the repository drops the token.
+        store.clearToken()
+        compose.waitForIdle()
+
+        assertTrue(playback.calls.contains("stop"), "calls were ${playback.calls}")
+        compose.onNodeWithText("SIGN IN").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a signed-out app prefills the retained server and user hints`() {
+        val repository = FakeRepository()
+        val app = container(
+            // What clearToken() leaves behind after an expiry: hints, no credential.
+            SessionState(serverUrl = "https://ttsroad.example.com/", username = "operator"),
+            repository,
+        )
+
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("https://ttsroad.example.com/").assertIsDisplayed()
+        compose.onNodeWithText("operator").assertIsDisplayed()
     }
 
     // --- LibraryScreen --------------------------------------------------------------------

@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.desktop.ui
 
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,12 +42,12 @@ class FictionDetailStateHolder(
             runCatching {
                 repository.markPlayed(listOf(chapterId), played)
                 load()
-            }.onFailure { _actionError.value = it.message ?: "Could not update chapter" }
+            }.onFailure { _actionError.value = userFacingMessage(it, "Could not update chapter") }
         }
     }
 
     private suspend fun load() {
         _state.value = runCatching { repository.chapters(fictionId) }
-            .fold({ Load.Ok(it) }, { Load.Err(it.message ?: "Could not load chapters") })
+            .fold({ Load.Ok(it) }, { Load.Err(userFacingMessage(it, "Could not load chapters")) })
     }
 }

@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.desktop.data
 
 import dk.perspektiva.ttsroad.desktop.ServerFixtures
+import dk.perspektiva.ttsroad.desktop.authedClient
 import dk.perspektiva.ttsroad.desktop.bodyText
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -12,7 +13,6 @@ import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.Headers
-import okhttp3.OkHttpClient
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -43,7 +43,7 @@ class RepositoryTest {
         )
         repository = RetrofitTtsRoadRepository(
             sessionStore = sessionStore,
-            client = OkHttpClient(),
+            client = authedClient(sessionStore),
             ioDispatcher = UnconfinedTestDispatcher(),
             deviceNameProvider = { "test-host" },
         )
@@ -123,16 +123,61 @@ class RepositoryTest {
     }
 
     @Test
-    fun `a 401 on an authenticated call propagates and does NOT sign the user out on its own`() = runTest {
-        // Phase 0 keeps the existing behaviour: the caller sees the failure. Automatic sign-out on
-        // a rejected token is a later phase; this test pins today's contract so that change is
-        // deliberate rather than accidental.
+    fun `a 401 on an authenticated call signs the user out and explains why`() = runTest {
         enqueue(401, ServerFixtures.UNAUTHORIZED_TOKEN_EXPIRED)
+
+        assertThrows<HttpException> { repository.library() }
+
+        assertEquals(1, sessionStore.clearTokenCalls)
+        assertFalse(sessionStore.current().isLoggedIn)
+        assertEquals(SessionEndReason.Expired, repository.sessionEnd.value?.reason)
+        assertEquals("This device session expired. Sign in again.", repository.sessionEnd.value?.message)
+        // The server hints survive so the login screen can prefill rather than starting blank.
+        assertEquals("admin", sessionStore.current().username)
+        assertTrue(sessionStore.current().serverUrl.isNotBlank())
+    }
+
+    @Test
+    fun `a rejected token is not retried`() = runTest {
+        enqueue(401, ServerFixtures.UNAUTHORIZED_TOKEN_REVOKED)
+
+        assertThrows<HttpException> { repository.library() }
+
+        assertEquals(1, server.requestCount, "a token the server refuses can never work on a retry")
+    }
+
+    @Test
+    fun `a 500 is a server problem, not a credential problem, and does not sign the user out`() = runTest {
+        enqueue(500, """{"detail": "boom"}""")
 
         assertThrows<HttpException> { repository.library() }
 
         assertEquals(0, sessionStore.clearTokenCalls)
         assertTrue(sessionStore.current().isLoggedIn)
+        assertNull(repository.sessionEnd.value)
+    }
+
+    @Test
+    fun `a genuine network outage does not sign the user out`() = runTest {
+        // Nothing is listening any more: this is exactly the case that must NOT be read as
+        // "the server rejected our token".
+        server.close()
+
+        assertThrows<java.io.IOException> { repository.library() }
+
+        assertEquals(0, sessionStore.clearTokenCalls)
+        assertTrue(sessionStore.current().isLoggedIn)
+        assertNull(repository.sessionEnd.value)
+    }
+
+    @Test
+    fun `a 401 on a progress save ends the session too`() = runTest {
+        enqueue(401, ServerFixtures.UNAUTHORIZED_TOKEN_INVALID)
+
+        assertThrows<HttpException> { repository.saveProgress(7, 101, 12.0, isPlayed = false) }
+
+        assertEquals(SessionEndReason.Invalid, repository.sessionEnd.value?.reason)
+        assertFalse(sessionStore.current().isLoggedIn)
     }
 
     @Test

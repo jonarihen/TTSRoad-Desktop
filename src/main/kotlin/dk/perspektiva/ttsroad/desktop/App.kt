@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
@@ -79,6 +81,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     val repository = container.repository
     val playback = container.playback
     val session by sessionStore.session.collectAsState()
+    val sessionEnd by repository.sessionEnd.collectAsState()
     var screen by remember { mutableStateOf<Screen>(Screen.Library) }
     // Where the full player collapses back to, so expanding the bar never loses browse context.
     var playerReturn by remember { mutableStateOf<Screen>(Screen.Library) }
@@ -89,9 +92,30 @@ fun App(container: AppContainer = remember { AppContainer() }) {
         screen = Screen.Player
     }
 
+    // One reaction to "there is no session any more", whether that came from Sign out or from a
+    // 401 on an API or audio request: stop the audio and reset navigation. Without it a revoked
+    // token leaves a chapter playing behind the login screen.
+    LaunchedEffect(session.isLoggedIn) {
+        if (!session.isLoggedIn) {
+            playback.stop()
+            screen = Screen.Library
+            playerReturn = Screen.Library
+        } else {
+            // Cheap, and it is what makes optional UI correct after a restart, where login did
+            // not run but a keyring-backed session was restored.
+            repository.refreshCurrentCapabilities()
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(AarisColor.Bg)) {
         if (!session.isLoggedIn) {
-            LoginScreen(repository)
+            LoginScreen(
+                repository = repository,
+                initialServerUrl = session.serverUrl,
+                initialUsername = session.username,
+                sessionEndedMessage = sessionEnd?.message,
+                persistsCredentials = sessionStore.persistsCredentials,
+            )
         } else {
             Column(Modifier.fillMaxSize()) {
                 HeaderBar(
@@ -185,17 +209,27 @@ private fun NavItem(label: String, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun LoginScreen(repository: TtsRoadRepository) {
+private fun LoginScreen(
+    repository: TtsRoadRepository,
+    initialServerUrl: String,
+    initialUsername: String?,
+    sessionEndedMessage: String?,
+    persistsCredentials: Boolean,
+) {
     val holder = rememberStateHolder(repository) { LoginStateHolder(repository) }
     val ui by holder.state.collectAsState()
     // Credentials stay in Compose state, deliberately: see LoginStateHolder's doc comment.
-    var serverUrl by remember { mutableStateOf("https://") }
-    var username by remember { mutableStateOf("admin") }
+    // The two non-secret fields are prefilled from the retained session hints, so signing back in
+    // after an expiry does not mean retyping the server address.
+    var serverUrl by remember { mutableStateOf(initialServerUrl.ifBlank { "https://" }) }
+    var username by remember { mutableStateOf(initialUsername.orEmpty().ifBlank { "admin" }) }
     var password by remember { mutableStateOf("") }
     var totpCode by remember { mutableStateOf("") }
     val twoFactor = ui.twoFactor
     val busy = ui.busy
     val error = ui.error
+
+    LaunchedEffect(serverUrl) { holder.serverUrlChanged(serverUrl) }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(Modifier.width(380.dp).verticalScroll(rememberScrollState())) {
@@ -204,8 +238,19 @@ private fun LoginScreen(repository: TtsRoadRepository) {
             Text("TTSROAD", style = MaterialTheme.typography.displaySmall, color = AarisColor.Ink)
             Spacer(Modifier.height(6.dp))
             MetaText(text = "Connect to your private server")
+            // Why the login screen is showing itself, in the server's own words.
+            sessionEndedMessage?.let {
+                Spacer(Modifier.height(12.dp))
+                Text(it, color = AarisColor.Warning, style = MaterialTheme.typography.bodyMedium)
+            }
             Spacer(Modifier.height(24.dp))
             Field("SERVER URL", serverUrl) { serverUrl = it }
+            // Unauthenticated discovery: proof the address is a real TTSRoad server, shown before
+            // a password is typed rather than after it has been sent somewhere.
+            ui.discovered?.let {
+                Spacer(Modifier.height(6.dp))
+                MetaText(text = "${it.serverName} ${it.serverVersion}", color = AarisColor.Ok)
+            }
             Spacer(Modifier.height(12.dp))
             Field("USERNAME", username) { username = it }
             Spacer(Modifier.height(12.dp))
@@ -218,10 +263,20 @@ private fun LoginScreen(repository: TtsRoadRepository) {
                 Spacer(Modifier.height(12.dp))
                 Text(it, color = MaterialTheme.colorScheme.error)
             }
+            if (!persistsCredentials) {
+                Spacer(Modifier.height(12.dp))
+                MetaText(
+                    text = "No OS keyring here — you will need to sign in again after a restart",
+                    color = AarisColor.Warning,
+                )
+            }
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = { holder.submit(serverUrl, username, password, totpCode) },
-                enabled = !busy && serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank() &&
+                // A 429 means the server is counting attempts; leaving the button live would let
+                // the user extend their own lockout.
+                enabled = !busy && ui.retryAfterSeconds == null && serverUrl.isNotBlank() &&
+                    username.isNotBlank() && password.isNotBlank() &&
                     (!twoFactor || totpCode.isNotBlank()),
                 shape = RectangleShape,
                 modifier = Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Hand),
@@ -249,6 +304,7 @@ private fun Field(label: String, value: String, password: Boolean = false, onVal
 private fun SettingsScreen(sessionStore: SessionStore, repository: TtsRoadRepository) {
     val scope = rememberCoroutineScope()
     val session by sessionStore.session.collectAsState()
+    val capabilities by repository.currentCapabilities.collectAsState()
     var busy by remember { mutableStateOf(false) }
     PageScroll(maxWidth = NarrowMaxWidth, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         MetaText(text = "// Session", color = AarisColor.Accent)
@@ -260,9 +316,33 @@ private fun SettingsScreen(sessionStore: SessionStore, repository: TtsRoadReposi
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingRow("Role", if (session.isAdmin) "Admin" else "User")
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                // Where the bearer token actually lives. Worth surfacing: it is the difference
+                // between a session that survives a restart and one that deliberately does not.
+                SettingRow(
+                    "Credential storage",
+                    sessionStore.credentialStoreName +
+                        if (sessionStore.persistsCredentials) "" else " (this session only)",
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 // BuildInfo is generated from the single `ttsroad.version` Gradle property, so
                 // this always matches the installer the user actually ran.
                 SettingRow("Version", "${BuildInfo.APP_NAME} ${BuildInfo.VERSION}")
+            }
+        }
+        MetaText(text = "// Server", color = AarisColor.Accent)
+        AarisCard {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                SettingRow(
+                    "Build",
+                    listOfNotNull(
+                        capabilities.serverName.takeIf { capabilities.isDiscovered } ?: session.serverName,
+                        capabilities.serverVersion ?: session.serverVersion,
+                    ).joinToString(" "),
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                // An older server answers 404 to discovery and lands on the baseline, where every
+                // optional feature is off — which is exactly what this row then says.
+                SettingRow("Optional features", describeCapabilities(capabilities))
             }
         }
         Button(
@@ -271,6 +351,24 @@ private fun SettingsScreen(sessionStore: SessionStore, repository: TtsRoadReposi
             shape = RectangleShape,
             modifier = Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Hand),
         ) { Text(if (busy) "SIGNING OUT" else "SIGN OUT") }
+    }
+}
+
+/** One line naming everything the signed-in server advertised, or saying that it advertised none. */
+private fun describeCapabilities(capabilities: ServerCapabilities): String {
+    val enabled = buildList {
+        if (capabilities.readAlong) add("Read-along")
+        if (capabilities.search) add("Server search")
+        if (capabilities.bookmarks) add("Bookmarks")
+        if (capabilities.deltaSync) add("Delta sync")
+        if (capabilities.batchProgress) add("Batch progress")
+        if (capabilities.audioContentHash) add("Audio content hash")
+        if (capabilities.deviceManagement) add("Device management")
+    }
+    return when {
+        enabled.isNotEmpty() -> enabled.joinToString(", ")
+        capabilities.isDiscovered -> "None advertised"
+        else -> "Not advertised by this server"
     }
 }
 

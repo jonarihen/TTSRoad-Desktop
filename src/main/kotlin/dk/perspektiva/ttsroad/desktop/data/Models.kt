@@ -16,6 +16,17 @@ data class LoginResponse(
     @param:Json(name = "token_type") val tokenType: String = "bearer",
     val user: MobileUser,
     val server: ServerInfo? = null,
+    /**
+     * The `MobileApiToken` row id for this sign-in. The device-management API identifies "this
+     * device" by it, and the server does not always set `is_current`, so it is worth keeping.
+     */
+    @param:Json(name = "device_id") val deviceId: Int? = null,
+    /**
+     * ISO-8601 UTC expiry, 90 days out. Informational only: every authenticated request renews it,
+     * so a client that scheduled a refresh off this value would be refreshing a moving target. The
+     * authoritative signal that a token died is a 401.
+     */
+    @param:Json(name = "expires_at") val expiresAt: String? = null,
 )
 
 data class MobileUser(
@@ -26,6 +37,8 @@ data class MobileUser(
 
 data class ServerInfo(
     val name: String = "TTSRoad",
+    /** Server build, e.g. "1.4.0". Absent from the `/library` server object on older builds. */
+    val version: String? = null,
     @param:Json(name = "base_url") val baseUrl: String? = null,
     @param:Json(name = "api_version") val apiVersion: Int = 1,
 )
