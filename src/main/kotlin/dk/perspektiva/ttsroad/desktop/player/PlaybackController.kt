@@ -3,6 +3,8 @@ package dk.perspektiva.ttsroad.desktop.player
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.data.describeNetworkFailure
+import dk.perspektiva.ttsroad.desktop.data.playbackOrder
 import java.io.File
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioInputStream
@@ -24,11 +26,25 @@ import kotlinx.coroutines.launch
 data class QueueItem(
     val chapterId: Int,
     val title: String,
+    /**
+     * The chapter's own number, so the up-next panel can label rows the way the chapter list does
+     * rather than by queue position — the queue holds only playable chapters, so position 4 and
+     * "Chapter 4" are routinely different things.
+     */
+    val displayNumber: Double? = null,
 )
 
 data class PlayerUiState(
     val title: String = "Nothing playing",
     val fictionTitle: String? = null,
+    /**
+     * Which fiction the loaded queue belongs to, or 0 when nothing is loaded.
+     *
+     * The chapter list needs it to answer "is the row I am drawing the one that is playing?" — a
+     * chapter id alone is not enough, because two fictions can be open in the same session and the
+     * user must not see a highlight on a serial that is not playing.
+     */
+    val fictionId: Int = 0,
     val coverImageUrl: String? = null,
     val isPlaying: Boolean = false,
     val hasMedia: Boolean = false,
@@ -41,6 +57,18 @@ data class PlayerUiState(
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
 )
+
+/**
+ * The chapter currently loaded in the queue, but only when that queue belongs to [fictionId].
+ *
+ * Pure and total: an empty queue, an out-of-range index, an id-less payload, and a queue from a
+ * different fiction all answer null, which is exactly the set of cases where a chapter list must
+ * highlight nothing.
+ */
+fun PlayerUiState.playingChapterIdIn(fictionId: Int): Int? {
+    if (fictionId <= 0 || this.fictionId != fictionId) return null
+    return queue.getOrNull(currentIndex)?.chapterId?.takeIf { it > 0 }
+}
 
 /**
  * Playback abstraction for the desktop client — the UI only ever drives playback through this
@@ -115,6 +143,7 @@ class Mp3PlaybackController(
             _state.value = PlayerUiState(
                 title = chapter.resolvedTitle,
                 fictionTitle = fiction?.title ?: chapter.resolvedFictionTitle,
+                fictionId = fictionIdOf(chapter, fiction),
                 coverImageUrl = (fiction?.coverImageUrl ?: chapter.resolvedCoverUrl)?.let(repository::resolveUrl),
                 error = "This chapter has no audio yet",
             )
@@ -126,7 +155,9 @@ class Mp3PlaybackController(
     }
 
     override suspend fun playQueue(chapters: List<ChapterSummary>, startChapterId: Int, fiction: FictionSummary?) {
-        val playable = chapters.filter { it.audio != null }
+        // Canonical reading order, never the order the screen happens to be sorted in: a listener
+        // who flipped the list to newest-first still wants the serial to play forwards.
+        val playable = chapters.playbackOrder().filter { it.hasAudio }
         if (playable.isEmpty()) {
             _state.update { it.copy(error = "No playable chapters yet") }
             return
@@ -222,8 +253,19 @@ class Mp3PlaybackController(
                     runPlaybackLoop(file, positionMs, chapter)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e // a new beginPlayback/stop superseded this job; not an error
+                } catch (e: SessionExpiredException) {
+                    // The server refused the credential mid-playback. This is the same event as a
+                    // 401 on an API call, so it goes through the same door: the repository drops
+                    // the token, the app returns to login, and playback stops here rather than
+                    // retrying a download that can only fail again.
+                    wantsPlaying = false
+                    _state.update { it.copy(error = e.sessionEnd.message, isPlaying = false) }
+                    repository.endSession(e.sessionEnd)
+                    return@launch
                 } catch (e: Exception) {
-                    _state.update { it.copy(error = e.message ?: "Playback failed", isPlaying = false) }
+                    _state.update {
+                        it.copy(error = describeNetworkFailure(e), isPlaying = false)
+                    }
                     return@launch
                 }
                 if (!reachedEnd) return@launch // paused-forever is handled inside; only cancel exits false
@@ -247,16 +289,29 @@ class Mp3PlaybackController(
         _state.value = PlayerUiState(
             title = chapter.resolvedTitle,
             fictionTitle = fiction?.title ?: chapter.resolvedFictionTitle,
+            fictionId = fictionIdOf(chapter, fiction),
             coverImageUrl = (fiction?.coverImageUrl ?: chapter.resolvedCoverUrl)?.let(repository::resolveUrl),
             durationMs = ((chapter.audioDuration ?: 0.0) * 1000).toLong(),
             positionMs = positionMs,
             speed = _state.value.speed,
-            queue = queue.map { QueueItem(it.resolvedChapterId, it.resolvedTitle) },
+            queue = queue.map {
+                QueueItem(it.resolvedChapterId, it.resolvedTitle, it.resolvedDisplayNumber)
+            },
             currentIndex = index,
             hasNext = index < queue.lastIndex,
             hasPrevious = index > 0,
         )
     }
+
+    /**
+     * The fiction a queue belongs to.
+     *
+     * The chapter's own id wins over the passed [fiction] only when the latter is absent: playback
+     * started from a library shelf carries no `FictionSummary` at all, and the flat shelf payload
+     * still names its fiction.
+     */
+    private fun fictionIdOf(chapter: ChapterSummary, fiction: FictionSummary?): Int =
+        fiction?.id?.takeIf { it > 0 } ?: chapter.resolvedFictionId
 
     /** Decodes and plays one chapter; returns true when it reached end-of-stream naturally. */
     private suspend fun CoroutineScope.runPlaybackLoop(file: File, startMs: Long, chapter: ChapterSummary): Boolean {

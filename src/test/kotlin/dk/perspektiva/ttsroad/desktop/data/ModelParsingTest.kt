@@ -116,6 +116,52 @@ class ModelParsingTest {
     }
 
     @Test
+    fun `the chapter payload maps the browsing metadata the list needs`() {
+        // These are the fields the chapter list orders, labels and gates read-along by. Every one
+        // of them is defaulted on the model, so a broken @param:Json name degrades silently to a
+        // plausible-looking wrong value rather than throwing — hence pinning them here.
+        val first = parse<ChaptersResponse>(ServerFixtures.CHAPTERS).chapters.first()
+
+        assertEquals(3, first.chapterNumber)
+        assertEquals(0, first.playerIndex)
+        assertEquals(19_200_000L, first.audioFilesize)
+        assertTrue(first.hasTimings)
+        assertFalse(first.excluded)
+        assertEquals(100, first.ttsProgress)
+        assertNull(first.subStatus)
+        assertNull(first.errorMessage)
+        assertEquals(787.5, first.playback?.remainingSeconds)
+        assertEquals("2026-08-06T08:55:00Z", first.playback?.lastListenedAt)
+        assertEquals(3.0, first.resolvedDisplayNumber)
+        assertTrue(first.hasAudio)
+    }
+
+    @Test
+    fun `a converting chapter reports no player index and no timings`() {
+        val pending = parse<ChaptersResponse>(ServerFixtures.CHAPTERS).chapters[1]
+
+        assertNull(pending.playerIndex, "player_index is null for anything not playable")
+        assertEquals("converting", pending.subStatus)
+        assertEquals(41, pending.ttsProgress)
+        assertEquals(0L, pending.audioFilesize)
+        assertFalse(pending.hasTimings)
+        assertFalse(pending.hasAudio)
+        assertEquals(ChapterAvailability.Converting, pending.availability())
+        assertEquals("Converting 41%", pending.statusLabel())
+    }
+
+    @Test
+    fun `a library shelf row carries the per-fiction listening counters`() {
+        val item = parse<LibraryResponse>(ServerFixtures.LIBRARY).continueListening.single()
+
+        assertEquals(2, item.playedCount)
+        assertEquals(7, item.remainingCount)
+        assertEquals(3, item.chapterNumber)
+        assertEquals(3.0, item.resolvedDisplayNumber, "the flat shape has only chapter_number")
+        assertEquals("Someone", item.resolvedAuthor)
+    }
+
+    @Test
     fun `a not-yet-converted chapter decodes with a null audio object`() {
         val response = parse<ChaptersResponse>(ServerFixtures.CHAPTERS)
         val pending = response.chapters[1]

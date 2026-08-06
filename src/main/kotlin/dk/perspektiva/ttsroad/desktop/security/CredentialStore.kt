@@ -1,0 +1,110 @@
+package dk.perspektiva.ttsroad.desktop.security
+
+import dk.perspektiva.ttsroad.desktop.data.AppLog
+import java.security.MessageDigest
+
+/** Raised when the platform credential store is reachable but refused an operation. */
+class CredentialStoreException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * Where the bearer token lives.
+ *
+ * The contract that matters is [persistsAcrossRestarts]. There are exactly two acceptable answers
+ * for a secret on disk — an OS-managed keystore, or nowhere — so an implementation that cannot
+ * reach a keystore must report `false` and keep the secret in memory. Writing the token to a file,
+ * or encrypting it with a key stored next to the ciphertext, is not an option: both are plaintext
+ * with extra steps, and the second is worse because it looks safe.
+ *
+ * Implementations are expected to be callable from any thread; the platform ones serialise
+ * internally (a subprocess or a single native call per operation).
+ */
+interface CredentialStore {
+    /** Stable identifier for diagnostics — shown in Settings, never in a log line with a secret. */
+    val id: String
+
+    /** Human-readable name for the same thing, e.g. "Windows Credential Manager". */
+    val displayName: String
+
+    /** False means the session ends when the process does, and the UI must say so. */
+    val persistsAcrossRestarts: Boolean
+
+    /** Stores (or replaces) [secret] under [key]. Throws [CredentialStoreException] on failure. */
+    fun store(key: String, secret: String)
+
+    /** Returns the secret stored under [key], or null when there is none. */
+    fun retrieve(key: String): String?
+
+    /** Removes [key]. Removing something that is not there is not an error. */
+    fun delete(key: String)
+}
+
+/**
+ * In-process store. Used by tests, and as the deliberate fallback when no OS keystore is
+ * available: the session works for as long as the app runs and is gone at exit.
+ */
+class InMemoryCredentialStore(
+    override val id: String = "session-only",
+    override val displayName: String = "This session only",
+) : CredentialStore {
+    private val entries = HashMap<String, String>()
+
+    override val persistsAcrossRestarts: Boolean get() = false
+
+    override fun store(key: String, secret: String) {
+        synchronized(entries) { entries[key] = secret }
+    }
+
+    override fun retrieve(key: String): String? = synchronized(entries) { entries[key] }
+
+    override fun delete(key: String) {
+        synchronized(entries) { entries.remove(key) }
+    }
+}
+
+/**
+ * Picks the credential store for the machine the app is running on, and says why when it cannot.
+ *
+ * Selection is by platform and then by an actual probe of the backing service, not by
+ * `os.name` alone: a Linux box with no session keyring daemon looks exactly like one with a
+ * keyring until you ask it for something.
+ */
+object CredentialStores {
+
+    /**
+     * Resolution order per platform, falling back to [InMemoryCredentialStore] — never to a file.
+     *
+     * [osName] and the two runners are parameters so the selection logic itself is testable
+     * without the platform it selects for.
+     */
+    fun forCurrentPlatform(
+        osName: String = System.getProperty("os.name").orEmpty(),
+        commandRunner: CommandRunner = ProcessCommandRunner(),
+        windowsFactory: () -> CredentialStore? = { WindowsCredentialStore.createOrNull() },
+    ): CredentialStore {
+        val os = osName.lowercase()
+        val native: CredentialStore? = when {
+            os.contains("win") -> windowsFactory()
+            os.contains("mac") || os.contains("darwin") -> MacKeychainCredentialStore.createOrNull(commandRunner)
+            else -> SecretServiceCredentialStore.createOrNull(commandRunner)
+        }
+        if (native != null) return native
+
+        AppLog.warn(
+            "No OS credential store is available on this machine; the session will not survive a restart",
+        )
+        return InMemoryCredentialStore()
+    }
+
+    /**
+     * The identifier written into the settings file in place of the token.
+     *
+     * Derived rather than random so a reinstall that keeps the keyring finds its own entry again,
+     * and hashed so the keyring's own UI does not list every server URL and username the user has
+     * ever signed in to. It is not a secret: it identifies an entry, it does not open one.
+     */
+    fun credentialKey(serverUrl: String, username: String?): String {
+        val material = "${serverUrl.trimEnd('/')}\u0000${username.orEmpty()}"
+        val digest = MessageDigest.getInstance("SHA-256").digest(material.toByteArray(Charsets.UTF_8))
+        return "ttsroad/" + digest.joinToString("") { "%02x".format(it) }.take(32)
+    }
+}

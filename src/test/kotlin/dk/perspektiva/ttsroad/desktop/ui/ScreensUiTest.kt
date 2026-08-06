@@ -1,6 +1,9 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
+import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -11,11 +14,16 @@ import dk.perspektiva.ttsroad.desktop.App
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
+import dk.perspektiva.ttsroad.desktop.testLibraryCache
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
+import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
+import dk.perspektiva.ttsroad.desktop.data.SessionEnd
+import dk.perspektiva.ttsroad.desktop.data.SessionEndReason
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
 
@@ -88,6 +96,144 @@ class ScreensUiTest {
         assertEquals(1, repository.loginCalls)
     }
 
+    @Test
+    fun `the login screen identifies the server before a password is typed`() {
+        val repository = FakeRepository(
+            capabilitiesResult = ServerCapabilities(serverName = "Perspektiva TTSRoad", serverVersion = "1.4.0"),
+        )
+        val app = container(SessionState(serverUrl = "https://ttsroad.example.com/"), repository)
+
+        compose.setContent { TtsRoadTheme { App(app) } }
+        // The probe is debounced, so give the composition time to run it.
+        compose.waitUntil(5_000) { repository.capabilityProbes.isNotEmpty() }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("PERSPEKTIVA TTSROAD 1.4.0").assertIsDisplayed()
+        assertEquals(0, repository.loginCalls, "identification must not need a credential")
+    }
+
+    @Test
+    fun `an expired session explains itself on the login screen`() {
+        val repository = FakeRepository()
+        val app = container(SessionState(serverUrl = "https://x/", username = "admin"), repository)
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+
+        runBlocking {
+            repository.endSession(
+                SessionEnd(SessionEndReason.Revoked, "This device session was revoked. Sign in again."),
+            )
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("This device session was revoked. Sign in again.").assertIsDisplayed()
+    }
+
+    @Test
+    fun `losing the session stops playback instead of leaving audio behind the login screen`() {
+        val repository = FakeRepository(libraryResult = Result.success(ParsedFixtures.library))
+        val playback = FakePlaybackController()
+        val store = InMemorySessionStore(
+            SessionState(serverUrl = "https://x/", token = "t", username = "admin"),
+        )
+        val app = AppContainer(
+            sessionStore = store,
+            repositoryFactory = { _, _, _ -> repository },
+            playbackFactory = { _, _, _, _ -> playback },
+        )
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+        playback.calls.clear()
+
+        // What a 401 on an API or audio call does: the repository drops the token.
+        store.clearToken()
+        compose.waitForIdle()
+
+        assertTrue(playback.calls.contains("stop"), "calls were ${playback.calls}")
+        compose.onNodeWithText("SIGN IN").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a signed-out app prefills the retained server and user hints`() {
+        val repository = FakeRepository()
+        val app = container(
+            // What clearToken() leaves behind after an expiry: hints, no credential.
+            SessionState(serverUrl = "https://ttsroad.example.com/", username = "operator"),
+            repository,
+        )
+
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("https://ttsroad.example.com/").assertIsDisplayed()
+        compose.onNodeWithText("operator").assertIsDisplayed()
+    }
+
+    // --- App: settings ----------------------------------------------------------------------
+
+    @Test
+    fun `settings keeps its open pane and loaded devices across a trip to the library`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(ParsedFixtures.library),
+            devicesResult = Result.success(ParsedFixtures.devices),
+        )
+        val app = container(
+            SessionState(serverUrl = "https://x/", token = "t", username = "admin", deviceId = 42),
+            repository,
+        )
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("SETTINGS").performClick()
+        compose.waitForIdle()
+        compose.onNode(hasText("DEVICE SESSIONS") and isSelectable()).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Pixel 9").assertIsDisplayed()
+
+        // Away and back: the holder lives above navigation, so nothing is refetched or reset.
+        compose.onNodeWithText("LIBRARY").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("SETTINGS").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Pixel 9").assertIsDisplayed()
+        assertEquals(1, repository.devicesCalls, "returning to settings must not refetch")
+    }
+
+    @Test
+    fun `signing out from settings drops the device rows of the account that ended`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(ParsedFixtures.library),
+            devicesResult = Result.success(ParsedFixtures.devices),
+        )
+        val store = InMemorySessionStore(
+            SessionState(serverUrl = "https://x/", token = "t", username = "admin", deviceId = 42),
+        )
+        val app = AppContainer(
+            sessionStore = store,
+            repositoryFactory = { _, _, _ -> repository },
+            playbackFactory = { _, _, _, _ -> FakePlaybackController() },
+        )
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+        compose.onNodeWithText("SETTINGS").performClick()
+        compose.waitForIdle()
+        compose.onNode(hasText("DEVICE SESSIONS") and isSelectable()).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Pixel 9").assertIsDisplayed()
+
+        // What logout — or a 401 — does: the token goes.
+        store.clearToken()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("SIGN IN").assertIsDisplayed()
+        assertEquals(
+            0,
+            compose.onAllNodesWithText("Pixel 9").fetchSemanticsNodes().size,
+            "another account's sessions must not survive a sign-out",
+        )
+    }
+
     // --- LibraryScreen --------------------------------------------------------------------
 
     @Test
@@ -96,7 +242,7 @@ class ScreensUiTest {
         val playback = FakePlaybackController()
 
         compose.setContent {
-            TtsRoadTheme { LibraryScreen(repository, playback, onOpenFiction = {}, onOpenPlayer = {}) }
+            TtsRoadTheme { LibraryScreen(remember { testLibraryCache(repository) }, repository, playback, onOpenFiction = {}, onOpenPlayer = {}) }
         }
         compose.waitForIdle()
 
@@ -114,7 +260,13 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                LibraryScreen(repository, playback, onOpenFiction = {}, onOpenPlayer = { openedPlayer = true })
+                LibraryScreen(
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    playback,
+                    onOpenFiction = {},
+                    onOpenPlayer = { openedPlayer = true },
+                )
             }
         }
         compose.waitForIdle()
@@ -132,7 +284,13 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                LibraryScreen(repository, FakePlaybackController(), onOpenFiction = {}, onOpenPlayer = {})
+                LibraryScreen(
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    FakePlaybackController(),
+                    onOpenFiction = {},
+                    onOpenPlayer = {},
+                )
             }
         }
         compose.waitForIdle()
@@ -149,12 +307,21 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                LibraryScreen(repository, FakePlaybackController(), onOpenFiction = {}, onOpenPlayer = {})
+                LibraryScreen(
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    FakePlaybackController(),
+                    onOpenFiction = {},
+                    onOpenPlayer = {},
+                )
             }
         }
         compose.waitForIdle()
 
-        compose.onNodeWithText("no route to host").assertIsDisplayed()
+        // The one failure that earns the whole screen — nothing was cached to show behind it —
+        // and it always comes with a way to act on it.
+        compose.onNodeWithText("no route to host", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("RETRY").assertIsDisplayed()
     }
 
     // --- FictionDetailScreen ---------------------------------------------------------------
@@ -166,7 +333,13 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                FictionDetailScreen(response.fiction, repository, FakePlaybackController(), onBack = {})
+                FictionDetailScreen(
+                    response.fiction,
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    FakePlaybackController(),
+                    onBack = {},
+                )
             }
         }
         compose.waitForIdle()
@@ -185,7 +358,15 @@ class ScreensUiTest {
         val playback = FakePlaybackController()
 
         compose.setContent {
-            TtsRoadTheme { FictionDetailScreen(response.fiction, repository, playback, onBack = {}) }
+            TtsRoadTheme {
+                FictionDetailScreen(
+                    response.fiction,
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    playback,
+                    onBack = {},
+                )
+            }
         }
         compose.waitForIdle()
 
@@ -203,12 +384,18 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                FictionDetailScreen(response.fiction, repository, FakePlaybackController()) { backPressed = true }
+                FictionDetailScreen(
+                    response.fiction,
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    FakePlaybackController(),
+                    onBack = { backPressed = true },
+                )
             }
         }
         compose.waitForIdle()
 
-        compose.onNodeWithText("← LIBRARY").performClick()
+        compose.onNodeWithText("← BACK").performClick()
         compose.waitForIdle()
 
         assertTrue(backPressed)

@@ -51,6 +51,62 @@ object ServerFixtures {
         {"detail": {"message": "This device session expired. Sign in again.", "reason": "token_expired"}}
     """.trimIndent()
 
+    /** 401 after the session was revoked from the web console or another device. */
+    val UNAUTHORIZED_TOKEN_REVOKED = """
+        {"detail": {"message": "This device session was revoked. Sign in again.", "reason": "token_revoked"}}
+    """.trimIndent()
+
+    /** 401 for a token the server has never heard of (reset database, mangled value). */
+    val UNAUTHORIZED_TOKEN_INVALID = """
+        {"detail": {"message": "The bearer token is invalid.", "reason": "invalid_token"}}
+    """.trimIndent()
+
+    /** 401 from the auth middleware when no credential was supplied at all — a bare STRING detail. */
+    val UNAUTHORIZED_NOT_AUTHENTICATED = """{"detail": "Not authenticated"}"""
+
+    /**
+     * GET /api/mobile/capabilities on server 1.4.0 (`app/routers/platform.py`).
+     *
+     * Only `readalong` and `device_management` are true there: the rest map to FastAPI route names
+     * that do not exist yet. `batch_progress` being false while bulk marking works is the reason
+     * capability flags are never inferred from behaviour.
+     */
+    val CAPABILITIES_1_4_0 = """
+        {
+          "api_version": 1,
+          "server": {"name": "Perspektiva TTSRoad", "version": "1.4.0", "base_url": "https://ttsroad.example.com"},
+          "capabilities": {
+            "readalong": true,
+            "search": false,
+            "bookmarks": false,
+            "delta_sync": false,
+            "batch_progress": false,
+            "audio_content_hash": false,
+            "device_management": true
+          },
+          "limits": {"max_chapters_per_page": 200}
+        }
+    """.trimIndent()
+
+    /**
+     * A hypothetical future server: a capability this build has never heard of, a flag sent as a
+     * string rather than a boolean, and a limit that is not a number.
+     */
+    val CAPABILITIES_WITH_UNKNOWN_KEYS = """
+        {
+          "api_version": 9,
+          "server": {"name": "Future TTSRoad", "version": "2.9.0"},
+          "capabilities": {
+            "readalong": true,
+            "search": "partial",
+            "bookmarks": 1,
+            "time_travel": true,
+            "device_management": null
+          },
+          "limits": {"max_chapters_per_page": "lots", "max_bookmarks": 50}
+        }
+    """.trimIndent()
+
     /**
      * GET /api/mobile/library — 200.
      *
@@ -279,6 +335,103 @@ object ServerFixtures {
         }
     """.trimIndent()
 
+    /** GET /api/mobile/me — 200. */
+    val ME = """{"user": {"id": 1, "username": "admin", "is_admin": true}}"""
+
+    /**
+     * GET /api/mobile/devices — 200 (`mobile_token_payload`, app/services/mobile_auth.py).
+     *
+     * Three rows on purpose: the current desktop session, a still-active phone, and a revoked one
+     * the server keeps for 30 days after revocation. Note the timestamps are *second* precision
+     * with a `Z` here, while login's `expires_at` carries microseconds — the same client has to
+     * read both. The revoked row also carries `user_id`, which the client does not model.
+     */
+    val DEVICES = """
+        {
+          "api_version": 1,
+          "devices": [
+            {
+              "id": 42,
+              "user_id": 1,
+              "device_name": "workstation · Windows 11",
+              "created_at": "2026-08-01T09:00:00Z",
+              "last_used_at": "2026-08-06T09:10:00Z",
+              "expires_at": "2026-10-30T09:00:00Z",
+              "last_ip": "192.168.1.20",
+              "status": "active",
+              "is_current": true
+            },
+            {
+              "id": 43,
+              "user_id": 1,
+              "device_name": "Pixel 9",
+              "created_at": "2026-07-02T18:30:00Z",
+              "last_used_at": "2026-08-05T21:04:00Z",
+              "expires_at": "2026-09-30T18:30:00Z",
+              "last_ip": "10.0.0.5",
+              "status": "active",
+              "is_current": false
+            },
+            {
+              "id": 44,
+              "user_id": 1,
+              "device_name": null,
+              "created_at": "2026-06-01T10:00:00Z",
+              "last_used_at": null,
+              "expires_at": "2026-08-30T10:00:00Z",
+              "last_ip": null,
+              "status": "revoked",
+              "is_current": false
+            }
+          ]
+        }
+    """.trimIndent()
+
+    /** An account whose only session is this one. */
+    val DEVICES_ONLY_CURRENT = """
+        {
+          "api_version": 1,
+          "devices": [
+            {
+              "id": 42,
+              "device_name": "workstation · Windows 11",
+              "created_at": "2026-08-01T09:00:00Z",
+              "last_used_at": "2026-08-06T09:10:00Z",
+              "expires_at": "2026-10-30T09:00:00Z",
+              "last_ip": "192.168.1.20",
+              "status": "active",
+              "is_current": true
+            }
+          ]
+        }
+    """.trimIndent()
+
+    /**
+     * A row from a server that fills in almost nothing, plus one unparseable date.
+     *
+     * The point of the fixture is that a malformed optional field costs that field and nothing
+     * else: the row still lists, with dashes where the data is missing.
+     */
+    val DEVICES_MALFORMED_ROW = """
+        {
+          "devices": [
+            {"id": 51, "last_used_at": "yesterday", "expires_at": "", "future_field": {"x": 1}}
+          ]
+        }
+    """.trimIndent()
+
+    /** DELETE /api/mobile/devices/{id} — 200. */
+    val DEVICE_REVOKED = """{"status": "ok", "revoked": true, "token_id": 43}"""
+
+    /** POST /api/mobile/devices/revoke-others — 200. */
+    val DEVICES_REVOKED_OTHERS = """{"status": "ok", "revoked_count": 2}"""
+
+    /** What a server without the device API answers on any of the three device routes. */
+    val NOT_FOUND = """{"detail": "Not Found"}"""
+
+    /** DELETE on a token that is already gone — the same 404 an old server sends. */
+    val DEVICE_NOT_FOUND = """{"detail": "Active device session not found"}"""
+
     /** POST /api/mobile/playback/progress — 200. */
     val PROGRESS_SAVED = """{"status": "saved", "chapter_id": 101}"""
 
@@ -306,4 +459,12 @@ object ParsedFixtures {
             moshi.adapter(dk.perspektiva.ttsroad.desktop.data.ChaptersResponse::class.java)
                 .fromJson(ServerFixtures.CHAPTERS),
         )
+
+    val devices: List<dk.perspektiva.ttsroad.desktop.data.DeviceSession>
+        get() = devicesFrom(ServerFixtures.DEVICES)
+
+    fun devicesFrom(json: String): List<dk.perspektiva.ttsroad.desktop.data.DeviceSession> =
+        requireNotNull(
+            moshi.adapter(dk.perspektiva.ttsroad.desktop.data.DevicesResponse::class.java).fromJson(json),
+        ).devices
 }

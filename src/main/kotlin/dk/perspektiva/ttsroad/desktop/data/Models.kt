@@ -16,6 +16,17 @@ data class LoginResponse(
     @param:Json(name = "token_type") val tokenType: String = "bearer",
     val user: MobileUser,
     val server: ServerInfo? = null,
+    /**
+     * The `MobileApiToken` row id for this sign-in. The device-management API identifies "this
+     * device" by it, and the server does not always set `is_current`, so it is worth keeping.
+     */
+    @param:Json(name = "device_id") val deviceId: Int? = null,
+    /**
+     * ISO-8601 UTC expiry, 90 days out. Informational only: every authenticated request renews it,
+     * so a client that scheduled a refresh off this value would be refreshing a moving target. The
+     * authoritative signal that a token died is a 401.
+     */
+    @param:Json(name = "expires_at") val expiresAt: String? = null,
 )
 
 data class MobileUser(
@@ -26,6 +37,8 @@ data class MobileUser(
 
 data class ServerInfo(
     val name: String = "TTSRoad",
+    /** Server build, e.g. "1.4.0". Absent from the `/library` server object on older builds. */
+    val version: String? = null,
     @param:Json(name = "base_url") val baseUrl: String? = null,
     @param:Json(name = "api_version") val apiVersion: Int = 1,
 )
@@ -71,24 +84,77 @@ data class ChapterSummary(
     val title: String = "Untitled chapter",
     @param:Json(name = "chapter_title") val chapterTitle: String? = null,
     @param:Json(name = "display_number") val displayNumber: Double? = null,
+    /**
+     * The raw source chapter number. Nullable and gap-prone by design (`app/routers/mobile.py`) —
+     * `display_number` is the 1-based ordinal among non-excluded chapters and is what a reader
+     * expects to see, so this is only ever a fallback for ordering.
+     */
+    @param:Json(name = "chapter_number") val chapterNumber: Int? = null,
+    /**
+     * 0-based index into the server's *playable* queue, or null when this chapter is not playable.
+     *
+     * It is the server's own answer to "where would this sit in a playlist", so it is the ordering
+     * the player queue follows; the desktop client cross-checks its own ordering against it rather
+     * than inventing a second notion of chapter order.
+     */
+    @param:Json(name = "player_index") val playerIndex: Int? = null,
     val status: String? = null,
+    /** Finer-grained conversion phase ("fetching_html"/"preprocessing"/"converting"). */
+    @param:Json(name = "sub_status") val subStatus: String? = null,
+    /** 0-100 while a chapter is converting. */
+    @param:Json(name = "tts_progress") val ttsProgress: Int? = null,
+    /**
+     * The server's own failure text. Modelled so the client can tell "failed" from "queued", and
+     * deliberately never rendered: it is backend detail (paths, stack fragments) that a listener
+     * cannot act on. The UI shows a short status instead.
+     */
+    @param:Json(name = "error_message") val errorMessage: String? = null,
+    /** Excluded from the fiction by an admin — visible only with `include_excluded=true`. */
+    val excluded: Boolean = false,
     val playable: Boolean = false,
     @param:Json(name = "audio_duration") val audioDuration: Double? = null,
     @param:Json(name = "audio_duration_label") val audioDurationLabel: String? = null,
+    /** Size of the MP3 in bytes, 0 when unknown. Used by the download-state slot. */
+    @param:Json(name = "audio_filesize") val audioFilesize: Long = 0L,
+    /** Whether the server holds read-along timings for this chapter. */
+    @param:Json(name = "has_timings") val hasTimings: Boolean = false,
     val audio: AudioInfo? = null,
     val playback: PlaybackInfo? = null,
     val fiction: FictionSummary? = null,
     @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+    @param:Json(name = "fiction_author") val fictionAuthor: String? = null,
     @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
     @param:Json(name = "resume_seconds") val resumeSeconds: Double? = null,
     @param:Json(name = "resume_time_label") val resumeTimeLabel: String? = null,
+    /** Library-shelf aggregates for the *fiction* this row belongs to, not for the chapter. */
+    @param:Json(name = "played_count") val playedCount: Int? = null,
+    @param:Json(name = "remaining_count") val remainingCount: Int? = null,
 ) {
     val resolvedChapterId: Int get() = id.takeIf { it > 0 } ?: apiChapterId ?: 0
     val resolvedFictionId: Int get() = fictionId.takeIf { it > 0 } ?: fiction?.id ?: 0
     val resolvedTitle: String get() = chapterTitle ?: title
     val resolvedFictionTitle: String? get() = fiction?.title ?: fictionTitle
+    val resolvedAuthor: String? get() = fiction?.author ?: fictionAuthor
     val resolvedCoverUrl: String? get() = fiction?.coverImageUrl ?: coverImageUrl
     val resolvedPositionSeconds: Double get() = playback?.positionSeconds ?: resumeSeconds ?: 0.0
+
+    /**
+     * The number to sort and label by.
+     *
+     * `display_number` first because that is what the reader sees; `chapter_number` is the fallback
+     * for the library's flat shelf shape, which carries only the raw number.
+     */
+    val resolvedDisplayNumber: Double? get() = displayNumber ?: chapterNumber?.toDouble()
+
+    /**
+     * Whether the player can actually open something for this chapter.
+     *
+     * Deliberately not `playable` and not `status == "done"`: only the presence of an `audio`
+     * object proves there is a URL to fetch, and a row without one must never be queued.
+     */
+    val hasAudio: Boolean get() = audio != null
+
+    val isPlayed: Boolean get() = playback?.isPlayed == true
 }
 
 data class AudioInfo(
@@ -102,6 +168,10 @@ data class PlaybackInfo(
     @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
     @param:Json(name = "is_played") val isPlayed: Boolean = false,
     @param:Json(name = "remaining_label") val remainingLabel: String? = null,
+    /** Seconds left, server-computed as `max(0, duration - position)`. */
+    @param:Json(name = "remaining_seconds") val remainingSeconds: Double? = null,
+    /** ISO-8601 UTC; null until the chapter has actually been listened to. */
+    @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
 )
 
 data class PlaybackProgressRequest(
