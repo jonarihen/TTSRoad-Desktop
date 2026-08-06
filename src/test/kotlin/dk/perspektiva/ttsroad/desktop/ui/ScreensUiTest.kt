@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
+import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isSelectable
@@ -13,6 +14,7 @@ import dk.perspektiva.ttsroad.desktop.App
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
+import dk.perspektiva.ttsroad.desktop.testLibraryCache
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionEnd
@@ -240,7 +242,7 @@ class ScreensUiTest {
         val playback = FakePlaybackController()
 
         compose.setContent {
-            TtsRoadTheme { LibraryScreen(repository, playback, onOpenFiction = {}, onOpenPlayer = {}) }
+            TtsRoadTheme { LibraryScreen(remember { testLibraryCache(repository) }, repository, playback, onOpenFiction = {}, onOpenPlayer = {}) }
         }
         compose.waitForIdle()
 
@@ -258,7 +260,13 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                LibraryScreen(repository, playback, onOpenFiction = {}, onOpenPlayer = { openedPlayer = true })
+                LibraryScreen(
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    playback,
+                    onOpenFiction = {},
+                    onOpenPlayer = { openedPlayer = true },
+                )
             }
         }
         compose.waitForIdle()
@@ -276,7 +284,13 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                LibraryScreen(repository, FakePlaybackController(), onOpenFiction = {}, onOpenPlayer = {})
+                LibraryScreen(
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    FakePlaybackController(),
+                    onOpenFiction = {},
+                    onOpenPlayer = {},
+                )
             }
         }
         compose.waitForIdle()
@@ -293,12 +307,21 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                LibraryScreen(repository, FakePlaybackController(), onOpenFiction = {}, onOpenPlayer = {})
+                LibraryScreen(
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    FakePlaybackController(),
+                    onOpenFiction = {},
+                    onOpenPlayer = {},
+                )
             }
         }
         compose.waitForIdle()
 
-        compose.onNodeWithText("no route to host").assertIsDisplayed()
+        // The one failure that earns the whole screen — nothing was cached to show behind it —
+        // and it always comes with a way to act on it.
+        compose.onNodeWithText("no route to host", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("RETRY").assertIsDisplayed()
     }
 
     // --- FictionDetailScreen ---------------------------------------------------------------
@@ -310,7 +333,13 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                FictionDetailScreen(response.fiction, repository, FakePlaybackController(), onBack = {})
+                FictionDetailScreen(
+                    response.fiction,
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    FakePlaybackController(),
+                    onBack = {},
+                )
             }
         }
         compose.waitForIdle()
@@ -329,7 +358,15 @@ class ScreensUiTest {
         val playback = FakePlaybackController()
 
         compose.setContent {
-            TtsRoadTheme { FictionDetailScreen(response.fiction, repository, playback, onBack = {}) }
+            TtsRoadTheme {
+                FictionDetailScreen(
+                    response.fiction,
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    playback,
+                    onBack = {},
+                )
+            }
         }
         compose.waitForIdle()
 
@@ -347,12 +384,18 @@ class ScreensUiTest {
 
         compose.setContent {
             TtsRoadTheme {
-                FictionDetailScreen(response.fiction, repository, FakePlaybackController()) { backPressed = true }
+                FictionDetailScreen(
+                    response.fiction,
+                    remember { testLibraryCache(repository) },
+                    repository,
+                    FakePlaybackController(),
+                    onBack = { backPressed = true },
+                )
             }
         }
         compose.waitForIdle()
 
-        compose.onNodeWithText("← LIBRARY").performClick()
+        compose.onNodeWithText("← BACK").performClick()
         compose.waitForIdle()
 
         assertTrue(backPressed)

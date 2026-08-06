@@ -5,26 +5,32 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImagePainter
@@ -37,33 +43,6 @@ import coil3.compose.SubcomposeAsyncImageContent
 val ContentMaxWidth = 1200.dp
 val NarrowMaxWidth = 560.dp
 val PageGutter = 28.dp
-
-/** Async load state for screen-level fetches. */
-sealed interface Load<out T> {
-    data object Loading : Load<Nothing>
-    data class Ok<T>(val value: T) : Load<T>
-    data class Err(val message: String) : Load<Nothing>
-}
-
-/** Vertically scrolling page whose content is capped at [maxWidth] and centered, with page gutters. */
-@Composable
-fun PageScroll(
-    maxWidth: Dp = ContentMaxWidth,
-    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Column(
-            Modifier
-                .align(Alignment.CenterHorizontally)
-                .widthIn(max = maxWidth)
-                .fillMaxWidth()
-                .padding(horizontal = PageGutter, vertical = PageGutter),
-            verticalArrangement = verticalArrangement,
-            content = content,
-        )
-    }
-}
 
 @Composable
 fun SectionTitle(kicker: String, title: String) {
@@ -134,10 +113,109 @@ fun CenterProgress() = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.
     CircularProgressIndicator(color = AarisColor.Accent)
 }
 
+/**
+ * The one failure that earns the whole screen: there is nothing cached to show behind it.
+ *
+ * Always paired with a retry, because an error with no way to act on it is a dead end.
+ */
 @Composable
-fun CenterError(message: String) = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-    Text(message, color = MaterialTheme.colorScheme.error)
+fun InitialErrorState(message: String, onRetry: () -> Unit) {
+    Box(Modifier.fillMaxSize().padding(PageGutter), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            MetaText(text = "// Could not load", color = AarisColor.Accent)
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center,
+            )
+            OutlinedButton(
+                onClick = onRetry,
+                shape = RectangleShape,
+                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+            ) { Text("RETRY") }
+        }
+    }
 }
+
+/** Nothing is wrong, there is simply nothing here. */
+@Composable
+fun EmptyState(title: String, detail: String) {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(title.uppercase(), style = MaterialTheme.typography.titleLarge, color = AarisColor.Muted)
+        MetaText(detail, color = AarisColor.Dim)
+    }
+}
+
+/**
+ * The non-destructive refresh report.
+ *
+ * A refresh that fails while content is on screen gets this strip, never a full-page error — and
+ * it says *when* what you are looking at was actually fetched. Labelling stale content as current
+ * is the specific dishonesty this exists to prevent.
+ */
+@Composable
+fun StaleContentBanner(message: String, lastSuccessMillis: Long?, nowMillis: Long, onRetry: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(AarisColor.BgRaise)
+            .border(1.dp, AarisColor.Warning)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "$message. Showing content from ${formatLastUpdated(lastSuccessMillis, nowMillis)}."
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = AarisColor.Warning)
+            MetaText(
+                "Showing content from ${formatLastUpdated(lastSuccessMillis, nowMillis)}",
+                color = AarisColor.Dim,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        OutlinedButton(
+            onClick = onRetry,
+            shape = RectangleShape,
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+        ) { Text("RETRY") }
+    }
+}
+
+/** Hairline "a refresh is running" strip, shown above content rather than instead of it. */
+@Composable
+fun RefreshingStrip(visible: Boolean) {
+    if (visible) ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+}
+
+/**
+ * How old the content on screen is, in words.
+ *
+ * Pure and coarse: minute granularity is all a human needs to decide whether to press Refresh, and
+ * a pure function over an injected `now` is what makes it assertable without freezing the clock.
+ */
+fun formatLastUpdated(lastSuccessMillis: Long?, nowMillis: Long): String {
+    if (lastSuccessMillis == null) return "an earlier session"
+    val elapsed = nowMillis - lastSuccessMillis
+    // Clock skew or a value from the future: "just now" is the honest reading, not a negative age.
+    if (elapsed < 60_000L) return "just now"
+    val minutes = elapsed / 60_000L
+    if (minutes < 60L) return "$minutes ${plural(minutes, "minute")} ago"
+    val hours = minutes / 60L
+    if (hours < 24L) return "$hours ${plural(hours, "hour")} ago"
+    val days = hours / 24L
+    return "$days ${plural(days, "day")} ago"
+}
+
+private fun plural(count: Long, noun: String): String = if (count == 1L) noun else "${noun}s"
 
 fun formatDuration(ms: Long): String {
     val total = (ms / 1000).coerceAtLeast(0)

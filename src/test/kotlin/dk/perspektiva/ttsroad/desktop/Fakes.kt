@@ -208,6 +208,25 @@ class FakePlaybackController(initial: PlayerUiState = PlayerUiState()) : Playbac
     }
 }
 
+/**
+ * A [dk.perspektiva.ttsroad.desktop.data.LibraryCache] for a Compose UI test.
+ *
+ * `Dispatchers.Main.immediate` rather than plain `Dispatchers.Main`, deliberately: a plain main
+ * dispatch is an `invokeLater` on the Swing queue, which `waitForIdle` does not track — the test
+ * would then assert against whatever happened to have run, and pass or fail depending on machine
+ * load. Immediate dispatch runs the load inline against the fake repository, so the UI the test
+ * inspects is the UI that load produced.
+ */
+fun testLibraryCache(
+    repository: TtsRoadRepository,
+    clock: () -> Long = System::currentTimeMillis,
+): dk.perspektiva.ttsroad.desktop.data.LibraryCache =
+    dk.perspektiva.ttsroad.desktop.data.LibraryCache(
+        repository,
+        kotlinx.coroutines.Dispatchers.Main.immediate,
+        clock,
+    )
+
 /** `RecordedRequest.body` is nullable in mockwebserver3; tests always want the text. */
 fun mockwebserver3.RecordedRequest.bodyText(): String = body?.utf8().orEmpty()
 

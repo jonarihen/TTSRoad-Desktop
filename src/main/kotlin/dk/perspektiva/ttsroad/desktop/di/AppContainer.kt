@@ -1,10 +1,13 @@
 package dk.perspektiva.ttsroad.desktop.di
 
 import dk.perspektiva.ttsroad.desktop.data.FileSessionStore
+import dk.perspektiva.ttsroad.desktop.data.FileWindowPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadAuthInterceptor
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.data.WindowPreferencesStore
 import dk.perspektiva.ttsroad.desktop.player.AudioDownloadStore
 import dk.perspektiva.ttsroad.desktop.player.AudioEngine
 import dk.perspektiva.ttsroad.desktop.player.HttpAudioDownloadStore
@@ -60,15 +63,32 @@ class AppContainer(
     audioEngine: AudioEngine = JavaSoundAudioEngine(),
     playbackFactory: (TtsRoadRepository, AudioDownloadStore, AudioEngine, AppDispatchers) -> PlaybackController =
         { repo, downloads, engine, d -> Mp3PlaybackController(repo, downloads, engine, d.io) },
+    libraryCacheFactory: (TtsRoadRepository, AppDispatchers, () -> Long) -> LibraryCache =
+        { repo, d, now -> LibraryCache(repo, d.main, now) },
+    // A store rather than a file path, so a test never writes into the user's config directory.
+    windowPreferencesStore: WindowPreferencesStore = FileWindowPreferencesStore(),
 ) : AutoCloseable {
     val httpClient: OkHttpClient = httpClientFactory(sessionStore)
     val repository: TtsRoadRepository = repositoryFactory(sessionStore, httpClient, dispatchers)
     val downloadStore: AudioDownloadStore = downloadStoreFactory(httpClient, repository)
     val playback: PlaybackController = playbackFactory(repository, downloadStore, audioEngine, dispatchers)
 
+    /**
+     * Library and chapter data, held here rather than inside a screen.
+     *
+     * That placement is the whole point: its lifetime is the signed-in session, so navigating away
+     * from the library and back shows what was already loaded instead of re-fetching it. It is
+     * emptied by `App` when the session ends.
+     */
+    val libraryCache: LibraryCache = libraryCacheFactory(repository, dispatchers, clock)
+
+    /** Remembered window size/position/maximised state. Never holds anything transient or secret. */
+    val windowPreferences: WindowPreferencesStore = windowPreferencesStore
+
     /** Called when the main window closes; without it the playback job and temp file outlive it. */
     override fun close() {
         playback.release()
+        libraryCache.close()
         httpClient.dispatcher.executorService.shutdown()
         httpClient.connectionPool.evictAll()
         runCatching { httpClient.cache?.close() }

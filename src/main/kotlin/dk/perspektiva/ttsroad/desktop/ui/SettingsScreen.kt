@@ -60,8 +60,6 @@ import dk.perspektiva.ttsroad.desktop.data.formatExpiresIn
 import dk.perspektiva.ttsroad.desktop.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.desktop.data.redactSecrets
 
-/** Below this the two panes stack, so the settings list stays usable in a narrow window. */
-private val TwoPaneMinWidth = 780.dp
 private val NavPaneWidth = 220.dp
 
 /**
@@ -78,6 +76,11 @@ fun SettingsScreen(
     holder: SettingsStateHolder = rememberStateHolder(repository, sessionStore) {
         SettingsStateHolder(repository, sessionStore)
     },
+    /**
+     * Reported whenever the open pane changes, so the caller can keep its own idea of "where am I"
+     * in step — the app uses it to swap the top back-stack entry between Settings and Devices.
+     */
+    onSectionSelected: (SettingsSection) -> Unit = {},
     // Injected so "expires in 42 days" can be asserted without the test depending on wall time.
     nowMs: () -> Long = System::currentTimeMillis,
 ) {
@@ -93,8 +96,14 @@ fun SettingsScreen(
         }
     }
 
+    val selectSection: (SettingsSection) -> Unit = { section ->
+        holder.openSection(section)
+        onSectionSelected(section)
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val stacked = maxWidth < TwoPaneMinWidth
+        // One shared definition of "narrow" across Settings, the player and the library.
+        val stacked = windowSizeClassFor(maxWidth).isCompact
         val pane: @Composable () -> Unit = {
             Column(
                 Modifier
@@ -107,7 +116,7 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     when (ui.section) {
-                        SettingsSection.Account -> AccountPane(ui, session, capabilities, sessionStore, holder, nowMs)
+                        SettingsSection.Account -> AccountPane(ui, session, capabilities, sessionStore, holder, selectSection, nowMs)
                         SettingsSection.Devices -> DevicesPane(ui, session, holder, nowMs)
                         SettingsSection.Playback -> PlaybackPane()
                         SettingsSection.Offline -> OfflinePane()
@@ -119,13 +128,13 @@ fun SettingsScreen(
 
         if (stacked) {
             Column(Modifier.fillMaxSize()) {
-                SettingsNav(current = ui.section, stacked = true, onSelect = holder::openSection)
+                SettingsNav(current = ui.section, stacked = true, onSelect = selectSection)
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 Box(Modifier.weight(1f).fillMaxWidth()) { pane() }
             }
         } else {
             Row(Modifier.fillMaxSize()) {
-                SettingsNav(current = ui.section, stacked = false, onSelect = holder::openSection)
+                SettingsNav(current = ui.section, stacked = false, onSelect = selectSection)
                 VerticalDivider(thickness = 1.dp, color = AarisColor.Line)
                 Box(Modifier.weight(1f).fillMaxHeight()) { pane() }
             }
@@ -241,6 +250,7 @@ private fun AccountPane(
     capabilities: ServerCapabilities,
     sessionStore: SessionStore,
     holder: SettingsStateHolder,
+    onSelectSection: (SettingsSection) -> Unit,
     nowMs: () -> Long,
 ) {
     PaneTitle("Account", "Server, sign-in and this device")
@@ -285,7 +295,7 @@ private fun AccountPane(
 
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         OutlinedButton(
-            onClick = { holder.openSection(SettingsSection.Devices) },
+            onClick = { onSelectSection(SettingsSection.Devices) },
             shape = RectangleShape,
             modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
         ) { Text("MANAGE DEVICE SESSIONS") }

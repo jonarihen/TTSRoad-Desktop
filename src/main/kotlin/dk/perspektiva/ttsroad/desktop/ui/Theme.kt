@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -141,8 +142,17 @@ fun AarisCard(
     }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val container by animateColorAsState(if (hovered) AarisColor.BgHover else AarisColor.BgRaise)
-    val borderColor by animateColorAsState(if (hovered) AarisColor.Dim else AarisColor.Line)
+    // Keyboard focus gets its own, stronger treatment: hover is discoverable with a mouse, but a
+    // keyboard-only user has nothing at all to go on unless focus is drawn.
+    val focused by interaction.collectIsFocusedAsState()
+    val container by animateColorAsState(if (hovered || focused) AarisColor.BgHover else AarisColor.BgRaise)
+    val borderColor by animateColorAsState(
+        when {
+            focused -> AarisColor.Accent
+            hovered -> AarisColor.Dim
+            else -> AarisColor.Line
+        },
+    )
     OutlinedCard(
         onClick = onClick,
         modifier = modifier.pointerHoverIcon(PointerIcon.Hand),

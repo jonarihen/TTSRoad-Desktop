@@ -1,21 +1,30 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
@@ -25,10 +34,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,72 +49,195 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dk.perspektiva.ttsroad.desktop.data.ChapterFilter
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.data.chapterKeys
+import dk.perspektiva.ttsroad.desktop.data.chapterView
+import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import kotlinx.coroutines.launch
 
+/** Test handle for "how many chapter rows did the lazy list actually compose". */
+const val ChapterRowTestTag: String = "chapterRow"
+
+/**
+ * One fiction and its chapters.
+ *
+ * The list is a [LazyColumn] with the header as its first item, rather than a header plus an eager
+ * `forEach` inside one `verticalScroll`. A serial with several hundred chapters used to compose
+ * every row before the first frame; now the scroll position is also a real, retained
+ * `LazyListState`, which is what makes Back from the player land where the user was.
+ */
 @Composable
 fun FictionDetailScreen(
     fiction: FictionSummary,
+    cache: LibraryCache,
     repository: TtsRoadRepository,
     playback: PlaybackController,
     onBack: () -> Unit,
+    nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     val scope = rememberCoroutineScope()
-    val holder = rememberStateHolder(repository, fiction.id) {
-        FictionDetailStateHolder(repository, fiction.id)
-    }
-    val state by holder.state.collectAsState()
-    val actionError by holder.actionError.collectAsState()
+    val state by cache.chapters(fiction.id).collectAsState()
+    LaunchedEffect(fiction.id) { cache.ensureChapters(fiction.id) }
 
-    PageScroll {
-        BackLink("Library", onBack)
-        Spacer(Modifier.height(20.dp))
-        when (val s = state) {
-            Load.Loading -> {
-                FictionHeader(fiction, repository, chapters = emptyList(), onResume = null)
-                Spacer(Modifier.height(80.dp))
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { CenterProgress() }
-            }
-            is Load.Err -> {
-                FictionHeader(fiction, repository, chapters = emptyList(), onResume = null)
-                Spacer(Modifier.height(32.dp))
-                Text(s.message, color = MaterialTheme.colorScheme.error)
-            }
-            is Load.Ok -> {
-                val chapters = s.value.chapters
-                // The chapters endpoint returns fresher counts than the library summary.
-                FictionHeader(
-                    s.value.fiction,
-                    repository,
-                    chapters = chapters,
-                    onResume = { target ->
-                        scope.launch { playback.playQueue(chapters, target.resolvedChapterId, s.value.fiction) }
-                    },
-                )
-                actionError?.let {
-                    Spacer(Modifier.height(12.dp))
-                    Text(it, color = MaterialTheme.colorScheme.error)
+    // Saved as a name rather than as the enum itself: Compose Desktop's saveable registry only
+    // accepts a small set of primitive types, so storing the constant keeps the filter across
+    // navigation instead of silently throwing at the first save.
+    var filterName by rememberSaveable { mutableStateOf(ChapterFilter.All.name) }
+    val filter = ChapterFilter.entries.firstOrNull { it.name == filterName } ?: ChapterFilter.All
+    var actionError by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
+
+    val loaded = state.value
+    val error = state.error
+    val header = loaded?.fiction ?: fiction
+    val chapters = loaded?.chapters.orEmpty()
+    val visible = remember(chapters, filter) { chapters.chapterView(filter) }
+    val keys = remember(visible) { chapterKeys(visible) }
+
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .widthIn(max = ContentMaxWidth)
+                .fillMaxSize(),
+            contentPadding = PaddingValues(PageGutter),
+        ) {
+            item(key = "back", contentType = "header") {
+                Column {
+                    BackLink("Back", onBack)
+                    Spacer(Modifier.height(20.dp))
                 }
-                Spacer(Modifier.height(36.dp))
-                SectionTitle("01", "Chapters — ${chapters.size}")
-                Spacer(Modifier.height(8.dp))
-                chapters.forEach { chapter ->
-                    ChapterListRow(
-                        chapter = chapter,
-                        onPlay = {
-                            scope.launch { playback.playQueue(chapters, chapter.resolvedChapterId, s.value.fiction) }
-                        },
-                        onMarkPlayed = { played ->
-                            holder.setPlayed(chapter.resolvedChapterId, played)
-                        },
-                    )
-                    HorizontalDivider(thickness = 1.dp, color = AarisColor.LineSoft)
+            }
+
+            if (state.isStale) {
+                item(key = "stale", contentType = "header") {
+                    Column {
+                        StaleContentBanner(
+                            message = error.orEmpty(),
+                            lastSuccessMillis = state.lastSuccessMillis,
+                            nowMillis = nowMillis(),
+                            onRetry = { cache.refreshChapters(fiction.id) },
+                        )
+                        Spacer(Modifier.height(20.dp))
+                    }
                 }
+            }
+
+            item(key = "header", contentType = "header") {
+                // `resumeTarget` is null until chapters load, so the button appears with the list.
+                FictionHeader(header, repository, chapters = chapters) { target ->
+                    scope.launch { playback.playQueue(chapters, target.resolvedChapterId, header) }
+                }
+            }
+
+            actionError?.let { message ->
+                item(key = "action-error", contentType = "header") {
+                    Column {
+                        Spacer(Modifier.height(12.dp))
+                        Text(message, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            when {
+                loaded == null && error != null -> item(key = "error", contentType = "header") {
+                    Column {
+                        Spacer(Modifier.height(32.dp))
+                        InitialErrorState(error) { cache.refreshChapters(fiction.id) }
+                    }
+                }
+
+                loaded == null -> item(key = "loading", contentType = "header") {
+                    Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+                        CenterProgress()
+                    }
+                }
+
+                else -> {
+                    item(key = "chapters-header", contentType = "header") {
+                        Column {
+                            Spacer(Modifier.height(36.dp))
+                            SectionTitle("01", "Chapters — ${visible.size}")
+                            Spacer(Modifier.height(12.dp))
+                            ChapterFilterRow(filter) { filterName = it.name }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
+                    if (visible.isEmpty()) {
+                        item(key = "empty", contentType = "header") {
+                            EmptyState(
+                                if (chapters.isEmpty()) "No chapters yet" else "Nothing matches ${filter.label}",
+                                if (chapters.isEmpty()) {
+                                    "The server has not published any chapters for this fiction."
+                                } else {
+                                    "Switch the filter back to All to see every chapter."
+                                },
+                            )
+                        }
+                    } else {
+                        itemsIndexed(
+                            visible,
+                            key = { index, _ -> keys[index] },
+                            contentType = { _, _ -> "chapter" },
+                        ) { _, chapter ->
+                            Column(Modifier.testTag(ChapterRowTestTag)) {
+                                ChapterListRow(
+                                    chapter = chapter,
+                                    onPlay = {
+                                        scope.launch {
+                                            playback.playQueue(chapters, chapter.resolvedChapterId, header)
+                                        }
+                                    },
+                                    onMarkPlayed = { played ->
+                                        actionError = null
+                                        scope.launch {
+                                            runCatching {
+                                                cache.setPlayed(
+                                                    fiction.id,
+                                                    listOf(chapter.resolvedChapterId),
+                                                    played,
+                                                )
+                                            }.onFailure {
+                                                actionError = userFacingMessage(it, "Could not update chapter")
+                                            }
+                                        }
+                                    },
+                                )
+                                HorizontalDivider(thickness = 1.dp, color = AarisColor.LineSoft)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        RefreshingStrip(state.isRefreshing && !state.isStale)
+    }
+}
+
+/** All / Unplayed / Ready. Selection is retained per destination, like the library's search text. */
+@Composable
+private fun ChapterFilterRow(current: ChapterFilter, onSelect: (ChapterFilter) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ChapterFilter.entries.forEach { entry ->
+            val selected = entry == current
+            Box(
+                Modifier
+                    .selectable(selected = selected, role = Role.Tab, onClick = { onSelect(entry) })
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .background(if (selected) AarisColor.BgHover else Color.Transparent)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                MetaText(entry.label, color = if (selected) AarisColor.Accent else AarisColor.Muted)
             }
         }
     }
@@ -111,15 +247,17 @@ fun FictionDetailScreen(
 fun BackLink(label: String, onBack: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     Row(
         Modifier
             .hoverable(interaction)
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(interactionSource = interaction, indication = null, onClick = onBack)
-            .padding(vertical = 4.dp),
+            .border(1.dp, if (focused) AarisColor.Accent else Color.Transparent)
+            .padding(vertical = 4.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        MetaText("← $label", color = if (hovered) AarisColor.Ink else AarisColor.Muted)
+        MetaText("← $label", color = if (hovered || focused) AarisColor.Ink else AarisColor.Muted)
     }
 }
 
@@ -135,7 +273,7 @@ private fun FictionHeader(
     fiction: FictionSummary,
     repository: TtsRoadRepository,
     chapters: List<ChapterSummary>,
-    onResume: ((ChapterSummary) -> Unit)?,
+    onResume: (ChapterSummary) -> Unit,
 ) {
     Row(Modifier.fillMaxWidth()) {
         CoverImage(
@@ -197,7 +335,7 @@ private fun FictionHeader(
                 color = AarisColor.Dim,
             )
             val target = remember(chapters) { resumeTarget(chapters) }
-            if (onResume != null && target != null) {
+            if (target != null) {
                 Spacer(Modifier.height(16.dp))
                 Button(
                     onClick = { onResume(target) },
@@ -222,7 +360,11 @@ private fun ChapterListRow(
     val playable = chapter.audio != null
     val isPlayed = chapter.playback?.isPlayed == true
     val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
+    val pointerOver by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    // Focus reveals the same row actions hover does, so play and mark-played are reachable
+    // without a mouse rather than merely present in the semantics tree.
+    val hovered = pointerOver || focused
 
     Row(
         Modifier
@@ -231,6 +373,7 @@ private fun ChapterListRow(
             .let { if (playable) it.pointerHoverIcon(PointerIcon.Hand) else it }
             .clickable(interactionSource = interaction, indication = null, enabled = playable, onClick = onPlay)
             .background(if (hovered && playable) AarisColor.BgRaise else Color.Transparent)
+            .border(1.dp, if (focused && playable) AarisColor.Accent else Color.Transparent)
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -284,11 +427,14 @@ private fun RowIconAction(
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
+    val pointerOver by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    val hovered = pointerOver || focused
     Box(
         Modifier
             .size(30.dp)
             .background(if (hovered) AarisColor.BgHover else Color.Transparent)
+            .border(1.dp, if (focused) AarisColor.Accent else Color.Transparent)
             .hoverable(interaction)
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),

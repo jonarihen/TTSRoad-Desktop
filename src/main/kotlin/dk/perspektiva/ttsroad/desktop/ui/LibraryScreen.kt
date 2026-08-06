@@ -6,11 +6,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -21,8 +22,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.itemsIndexed as itemsIndexedInRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
@@ -31,11 +39,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,82 +56,182 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.data.chapterKeys
+import dk.perspektiva.ttsroad.desktop.data.fictionKeys
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import kotlinx.coroutines.launch
 
+/** Test handle for "how many fiction cards did the lazy grid actually compose". */
+const val FictionCardTestTag: String = "fictionCard"
+
+/** Minimum card width; the grid fits as many columns as that allows, like `auto-fill minmax()`. */
+private val MinCardWidth = 200.dp
+private val GridGap = 18.dp
+
+/**
+ * The library.
+ *
+ * Everything on this screen is one [LazyVerticalGrid]: the hero, the shelves and the section
+ * headers are full-width spans, the fiction cards are grid cells. That is deliberate rather than
+ * cosmetic — the previous version chunked every fiction into rows inside a `verticalScroll`
+ * column, which composes all of them, so a thousand-fiction library built a thousand cards (and
+ * decoded a thousand covers) before the first frame.
+ *
+ * Data comes from [cache], not from a holder created here, so leaving and returning shows what was
+ * already loaded instead of a spinner.
+ */
 @Composable
 fun LibraryScreen(
+    cache: LibraryCache,
     repository: TtsRoadRepository,
     playback: PlaybackController,
     onOpenFiction: (FictionSummary) -> Unit,
     onOpenPlayer: () -> Unit,
+    nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     val scope = rememberCoroutineScope()
-    val holder = rememberStateHolder(repository) { LibraryStateHolder(repository) }
-    val state by holder.state.collectAsState()
+    val state by cache.library.collectAsState()
+    // Keyless on purpose: fires once per screen *appearance*, not per recomposition. Reuses cached
+    // content and coalesces with a load already in flight, so Back into the library costs nothing.
+    LaunchedEffect(Unit) { cache.ensureLibrary() }
 
-    when (val s = state) {
-        Load.Loading -> CenterProgress()
-        is Load.Err -> CenterError(s.message)
-        is Load.Ok -> {
-            val library = s.value
-            PageScroll {
-                val continueList = library.continueListening
-                if (continueList.isNotEmpty()) {
-                    ContinueHero(continueList.first(), repository) {
-                        scope.launch { playback.play(continueList.first(), continueList.first().fiction) }
-                        onOpenPlayer()
-                    }
-                    if (continueList.size > 1) {
-                        Spacer(Modifier.height(28.dp))
-                        SectionTitle("01", "Continue listening")
-                        Spacer(Modifier.height(16.dp))
-                        ContinueShelf(continueList.drop(1), repository) { chapter ->
-                            scope.launch { playback.play(chapter, chapter.fiction) }
+    // Hoisted out of the lazy content on purpose: an item that scrolls off is disposed, and the
+    // search text must not be one of the things that disposal takes with it. `rememberSaveable`
+    // then hands it to the per-destination state holder, so Back from a fiction restores it.
+    var query by rememberSaveable { mutableStateOf("") }
+    val gridState = rememberLazyGridState()
+
+    val library = state.value
+    val error = state.error
+    when {
+        library == null && error != null -> InitialErrorState(error) { cache.refreshLibrary() }
+        library == null -> CenterProgress()
+        else -> {
+            val filtered = remember(library.fictions, query) { filterFictions(library.fictions, query) }
+            val keys = remember(filtered) { fictionKeys(filtered) }
+            Box(Modifier.fillMaxSize()) {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(MinCardWidth),
+                    state = gridState,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .widthIn(max = ContentMaxWidth)
+                        .fillMaxSize()
+                        .testTag(LibraryGridTestTag),
+                    contentPadding = PaddingValues(PageGutter),
+                    horizontalArrangement = Arrangement.spacedBy(GridGap),
+                    verticalArrangement = Arrangement.spacedBy(GridGap),
+                ) {
+                    // A refresh that failed reports itself here, above content it did not replace.
+                    if (state.isStale) {
+                        fullWidthItem("stale") {
+                            StaleContentBanner(
+                                message = error.orEmpty(),
+                                lastSuccessMillis = state.lastSuccessMillis,
+                                nowMillis = nowMillis(),
+                                onRetry = { cache.refreshLibrary() },
+                            )
                         }
                     }
-                    Spacer(Modifier.height(36.dp))
-                }
-                SectionTitle("02", "Fictions")
-                Spacer(Modifier.height(16.dp))
-                if (library.fictions.isEmpty()) {
-                    MetaText("Nothing here yet — add fictions on the server")
-                } else {
-                    var query by remember { mutableStateOf("") }
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    val filtered = remember(library.fictions, query) { filterFictions(library.fictions, query) }
-                    if (filtered.isEmpty()) {
-                        MetaText("No matches for \"$query\"")
-                    } else {
-                        FictionGrid(filtered, repository, onOpenFiction)
+
+                    val continueList = library.continueListening
+                    if (continueList.isNotEmpty()) {
+                        val hero = continueList.first()
+                        fullWidthItem("hero") {
+                            ContinueHero(hero, repository) {
+                                scope.launch { playback.play(hero, hero.fiction) }
+                                onOpenPlayer()
+                            }
+                        }
+                        if (continueList.size > 1) {
+                            fullWidthItem("continue") {
+                                Column {
+                                    SectionTitle("01", "Continue listening")
+                                    Spacer(Modifier.height(16.dp))
+                                    ContinueShelf(continueList.drop(1), repository) { chapter ->
+                                        scope.launch { playback.play(chapter, chapter.fiction) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    fullWidthItem("fictions-header") {
+                        Column {
+                            SectionTitle("02", "Fictions")
+                            Spacer(Modifier.height(16.dp))
+                            if (library.fictions.isNotEmpty()) {
+                                OutlinedTextField(
+                                    value = query,
+                                    onValueChange = { query = it },
+                                    label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+                    }
+
+                    when {
+                        library.fictions.isEmpty() -> fullWidthItem("no-fictions") {
+                            EmptyState(
+                                "Nothing here yet",
+                                "Add a fiction on the server and it will show up here.",
+                            )
+                        }
+
+                        filtered.isEmpty() -> fullWidthItem("no-matches") {
+                            EmptyState("No matches for \"$query\"", "Try a different title, author or tag.")
+                        }
+
+                        else -> itemsIndexed(
+                            filtered,
+                            key = { index, _ -> keys[index] },
+                            contentType = { _, _ -> "fiction" },
+                        ) { _, fiction ->
+                            FictionCard(fiction, repository, Modifier.testTag(FictionCardTestTag)) {
+                                onOpenFiction(fiction)
+                            }
+                        }
+                    }
+
+                    if (library.recentChapters.isNotEmpty()) {
+                        fullWidthItem("recent") {
+                            Column {
+                                Spacer(Modifier.height(20.dp))
+                                SectionTitle("03", "Recent")
+                                Spacer(Modifier.height(16.dp))
+                                ContinueShelf(library.recentChapters, repository) { chapter ->
+                                    scope.launch { playback.play(chapter, chapter.fiction) }
+                                }
+                            }
+                        }
                     }
                 }
-                if (library.recentChapters.isNotEmpty()) {
-                    Spacer(Modifier.height(36.dp))
-                    SectionTitle("03", "Recent")
-                    Spacer(Modifier.height(16.dp))
-                    ContinueShelf(library.recentChapters, repository) { chapter ->
-                        scope.launch { playback.play(chapter, chapter.fiction) }
-                    }
-                }
+                RefreshingStrip(state.isRefreshing && !state.isStale)
             }
         }
     }
 }
 
-private fun filterFictions(fictions: List<FictionSummary>, query: String): List<FictionSummary> {
+/** Test handle for the library's scroll container. */
+const val LibraryGridTestTag: String = "libraryGrid"
+
+/** Full-width row inside the grid, for heroes, shelves and section headers. */
+private fun LazyGridScope.fullWidthItem(
+    key: String,
+    content: @Composable () -> Unit,
+) = item(key = key, span = { GridItemSpan(maxLineSpan) }, contentType = "span") { content() }
+
+/** Case-insensitive across title, author and tags — the same three fields as the mobile client. */
+internal fun filterFictions(fictions: List<FictionSummary>, query: String): List<FictionSummary> {
     val q = query.trim().lowercase()
     if (q.isBlank()) return fictions
     return fictions.filter { fiction ->
@@ -193,15 +303,21 @@ private fun ContinueHero(chapter: ChapterSummary, repository: TtsRoadRepository,
     }
 }
 
-/** Horizontal shelf of in-progress chapters — hover shows a play overlay, progress sits on the art. */
+/**
+ * Horizontal shelf of chapters — hover shows a play overlay, progress sits on the art.
+ *
+ * Keys come from [chapterKeys] rather than `resolvedChapterId`: the two shelves are two different
+ * server payloads whose ids can repeat, and a duplicate key crashes a lazy list outright.
+ */
 @Composable
 private fun ContinueShelf(
     chapters: List<ChapterSummary>,
     repository: TtsRoadRepository,
     onPlay: (ChapterSummary) -> Unit,
 ) {
+    val keys = remember(chapters) { chapterKeys(chapters) }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-        items(chapters, key = { it.resolvedChapterId }) { chapter ->
+        itemsIndexedInRow(chapters, key = { index, _ -> keys[index] }) { _, chapter ->
             ShelfCard(chapter, repository) { onPlay(chapter) }
         }
     }
@@ -210,7 +326,9 @@ private fun ContinueShelf(
 @Composable
 private fun ShelfCard(chapter: ChapterSummary, repository: TtsRoadRepository, onPlay: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
+    val pointerOver by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    val hovered = pointerOver || focused
     val coverScale by animateFloatAsState(if (hovered) 1.05f else 1f)
 
     Column(
@@ -220,7 +338,12 @@ private fun ShelfCard(chapter: ChapterSummary, repository: TtsRoadRepository, on
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(interactionSource = interaction, indication = null, enabled = chapter.audio != null, onClick = onPlay),
     ) {
-        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).border(1.dp, if (hovered) AarisColor.Dim else AarisColor.Line)) {
+        val edge = when {
+            focused -> AarisColor.Accent
+            hovered -> AarisColor.Dim
+            else -> AarisColor.Line
+        }
+        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).border(1.dp, edge)) {
             Box(Modifier.fillMaxSize().clipToBounds()) {
                 CoverImage(
                     chapter.resolvedFictionTitle ?: chapter.resolvedTitle,
@@ -252,35 +375,6 @@ private fun ShelfCard(chapter: ChapterSummary, repository: TtsRoadRepository, on
         chapter.resolvedFictionTitle?.let {
             Spacer(Modifier.height(2.dp))
             MetaText(it, color = AarisColor.Dim)
-        }
-    }
-}
-
-/**
- * Even-column grid that fills the available width, matching the web app's
- * `repeat(auto-fill, minmax(200px, 1fr))`: cards are at least ~200dp wide and stretch to fill,
- * so there is never a ragged right edge regardless of window width.
- */
-@Composable
-private fun FictionGrid(
-    fictions: List<FictionSummary>,
-    repository: TtsRoadRepository,
-    onOpen: (FictionSummary) -> Unit,
-) {
-    val gap = 18.dp
-    val minCard = 200.dp
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val columns = maxOf(1, ((maxWidth + gap).value / (minCard + gap).value).toInt())
-        Column(verticalArrangement = Arrangement.spacedBy(gap)) {
-            fictions.chunked(columns).forEach { rowItems ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
-                    rowItems.forEach { fiction ->
-                        FictionCard(fiction, repository, Modifier.weight(1f)) { onOpen(fiction) }
-                    }
-                    // Keep cards in a short final row at their natural width instead of stretching.
-                    repeat(columns - rowItems.size) { Spacer(Modifier.weight(1f)) }
-                }
-            }
         }
     }
 }
