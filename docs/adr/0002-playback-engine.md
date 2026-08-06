@@ -1,6 +1,6 @@
 # ADR 0002 — The production playback engine
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-06
 - **Context issue:** [#4 — Phase 5: Replace the prototype MP3 path with a production playback engine](https://github.com/jonarihen/TTSRoad-Desktop/issues/4) (part of #1)
 
