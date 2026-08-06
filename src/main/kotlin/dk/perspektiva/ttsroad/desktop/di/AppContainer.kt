@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.desktop.di
 import dk.perspektiva.ttsroad.desktop.data.FileSessionStore
 import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
+import dk.perspektiva.ttsroad.desktop.data.TtsRoadAuthInterceptor
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.player.AudioDownloadStore
 import dk.perspektiva.ttsroad.desktop.player.AudioEngine
@@ -10,6 +11,8 @@ import dk.perspektiva.ttsroad.desktop.player.HttpAudioDownloadStore
 import dk.perspektiva.ttsroad.desktop.player.JavaSoundAudioEngine
 import dk.perspektiva.ttsroad.desktop.player.Mp3PlaybackController
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
+import dk.perspektiva.ttsroad.desktop.security.CredentialStore
+import dk.perspektiva.ttsroad.desktop.security.CredentialStores
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -35,26 +38,30 @@ data class AppDispatchers(
 
 /**
  * The single composition root. Nothing else in the app constructs a repository, a session store,
- * an HTTP client, or a playback controller.
+ * a credential store, an HTTP client, or a playback controller.
  *
  * Everything is a constructor parameter with a production default, so a test builds a fully
- * substituted container in one expression. `clock` is here rather than being read from
- * `System.currentTimeMillis()` at call sites so time-dependent behaviour stays testable as this
- * grows (capability TTLs, token expiry).
+ * substituted container in one expression. Note the ordering: the credential store feeds the
+ * session store, and the session store feeds the HTTP client's auth interceptor — that is the
+ * dependency chain that makes "one place attaches the bearer token" true.
  */
 class AppContainer(
     val dispatchers: AppDispatchers = AppDispatchers.Default,
     val clock: () -> Long = System::currentTimeMillis,
-    val httpClient: OkHttpClient = defaultHttpClient(),
-    val sessionStore: SessionStore = FileSessionStore(),
+    // A factory rather than a value so a test that supplies its own session store never probes the
+    // machine's real keyring (and never writes to the user's real config directory).
+    credentialStore: () -> CredentialStore = { CredentialStores.forCurrentPlatform() },
+    val sessionStore: SessionStore = FileSessionStore(credentials = credentialStore()),
+    httpClientFactory: (SessionStore) -> OkHttpClient = ::defaultHttpClient,
     repositoryFactory: (SessionStore, OkHttpClient, AppDispatchers) -> TtsRoadRepository =
-        { store, client, d -> RetrofitTtsRoadRepository(store, client, d.io) },
+        { store, client, d -> RetrofitTtsRoadRepository(store, client, d.io, clock) },
     downloadStoreFactory: (OkHttpClient, TtsRoadRepository) -> AudioDownloadStore =
         { client, repo -> HttpAudioDownloadStore(client, repo) },
     audioEngine: AudioEngine = JavaSoundAudioEngine(),
     playbackFactory: (TtsRoadRepository, AudioDownloadStore, AudioEngine, AppDispatchers) -> PlaybackController =
         { repo, downloads, engine, d -> Mp3PlaybackController(repo, downloads, engine, d.io) },
 ) : AutoCloseable {
+    val httpClient: OkHttpClient = httpClientFactory(sessionStore)
     val repository: TtsRoadRepository = repositoryFactory(sessionStore, httpClient, dispatchers)
     val downloadStore: AudioDownloadStore = downloadStoreFactory(httpClient, repository)
     val playback: PlaybackController = playbackFactory(repository, downloadStore, audioEngine, dispatchers)
@@ -71,15 +78,17 @@ class AppContainer(
         /**
          * ONE OkHttp instance for the whole app: JSON API calls, chapter audio downloads, and
          * Coil's cover-image fetches. Previously each of those built its own client with its own
-         * connection pool, thread pool and (differing) timeouts.
+         * connection pool, thread pool and (differing) timeouts — and only two of the three knew
+         * how to authenticate, which is exactly the seam this interceptor closes.
          *
          * No call timeout is set on purpose — a chapter MP3 can legitimately take minutes on a
          * slow link, and the read timeout already bounds a stalled connection.
          */
-        fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
+        fun defaultHttpClient(sessionStore: SessionStore): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
+            .addInterceptor(TtsRoadAuthInterceptor { sessionStore.current().bearerCredentials })
             .build()
     }
 }

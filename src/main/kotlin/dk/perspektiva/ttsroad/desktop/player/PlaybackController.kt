@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.desktop.player
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.data.describeNetworkFailure
 import java.io.File
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioInputStream
@@ -222,8 +223,19 @@ class Mp3PlaybackController(
                     runPlaybackLoop(file, positionMs, chapter)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e // a new beginPlayback/stop superseded this job; not an error
+                } catch (e: SessionExpiredException) {
+                    // The server refused the credential mid-playback. This is the same event as a
+                    // 401 on an API call, so it goes through the same door: the repository drops
+                    // the token, the app returns to login, and playback stops here rather than
+                    // retrying a download that can only fail again.
+                    wantsPlaying = false
+                    _state.update { it.copy(error = e.sessionEnd.message, isPlaying = false) }
+                    repository.endSession(e.sessionEnd)
+                    return@launch
                 } catch (e: Exception) {
-                    _state.update { it.copy(error = e.message ?: "Playback failed", isPlaying = false) }
+                    _state.update {
+                        it.copy(error = describeNetworkFailure(e), isPlaying = false)
+                    }
                     return@launch
                 }
                 if (!reachedEnd) return@launch // paused-forever is handled inside; only cancel exits false

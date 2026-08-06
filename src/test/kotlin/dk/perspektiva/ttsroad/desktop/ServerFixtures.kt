@@ -51,6 +51,62 @@ object ServerFixtures {
         {"detail": {"message": "This device session expired. Sign in again.", "reason": "token_expired"}}
     """.trimIndent()
 
+    /** 401 after the session was revoked from the web console or another device. */
+    val UNAUTHORIZED_TOKEN_REVOKED = """
+        {"detail": {"message": "This device session was revoked. Sign in again.", "reason": "token_revoked"}}
+    """.trimIndent()
+
+    /** 401 for a token the server has never heard of (reset database, mangled value). */
+    val UNAUTHORIZED_TOKEN_INVALID = """
+        {"detail": {"message": "The bearer token is invalid.", "reason": "invalid_token"}}
+    """.trimIndent()
+
+    /** 401 from the auth middleware when no credential was supplied at all — a bare STRING detail. */
+    val UNAUTHORIZED_NOT_AUTHENTICATED = """{"detail": "Not authenticated"}"""
+
+    /**
+     * GET /api/mobile/capabilities on server 1.4.0 (`app/routers/platform.py`).
+     *
+     * Only `readalong` and `device_management` are true there: the rest map to FastAPI route names
+     * that do not exist yet. `batch_progress` being false while bulk marking works is the reason
+     * capability flags are never inferred from behaviour.
+     */
+    val CAPABILITIES_1_4_0 = """
+        {
+          "api_version": 1,
+          "server": {"name": "Perspektiva TTSRoad", "version": "1.4.0", "base_url": "https://ttsroad.example.com"},
+          "capabilities": {
+            "readalong": true,
+            "search": false,
+            "bookmarks": false,
+            "delta_sync": false,
+            "batch_progress": false,
+            "audio_content_hash": false,
+            "device_management": true
+          },
+          "limits": {"max_chapters_per_page": 200}
+        }
+    """.trimIndent()
+
+    /**
+     * A hypothetical future server: a capability this build has never heard of, a flag sent as a
+     * string rather than a boolean, and a limit that is not a number.
+     */
+    val CAPABILITIES_WITH_UNKNOWN_KEYS = """
+        {
+          "api_version": 9,
+          "server": {"name": "Future TTSRoad", "version": "2.9.0"},
+          "capabilities": {
+            "readalong": true,
+            "search": "partial",
+            "bookmarks": 1,
+            "time_travel": true,
+            "device_management": null
+          },
+          "limits": {"max_chapters_per_page": "lots", "max_bookmarks": 50}
+        }
+    """.trimIndent()
+
     /**
      * GET /api/mobile/library — 200.
      *

@@ -1,10 +1,12 @@
 package dk.perspektiva.ttsroad.desktop.data
 
 import dk.perspektiva.ttsroad.desktop.ServerFixtures
+import dk.perspektiva.ttsroad.desktop.authedClient
 import dk.perspektiva.ttsroad.desktop.bodyText
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -12,7 +14,6 @@ import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.Headers
-import okhttp3.OkHttpClient
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -36,7 +37,7 @@ class LoginTest {
         sessionStore = InMemorySessionStore()
         repository = RetrofitTtsRoadRepository(
             sessionStore = sessionStore,
-            client = OkHttpClient(),
+            client = authedClient(sessionStore),
             ioDispatcher = UnconfinedTestDispatcher(),
             deviceNameProvider = { "test-host · Test OS" },
         )
@@ -53,9 +54,18 @@ class LoginTest {
         server.enqueue(MockResponse(code = code, headers = jsonHeaders, body = body))
     }
 
+    /**
+     * A successful login is now two requests: the login itself, then the forced capability
+     * refresh. Both have to be queued or MockWebServer blocks the second one.
+     */
+    private fun enqueueSuccessfulLogin() {
+        enqueue(200, ServerFixtures.LOGIN_SUCCESS)
+        enqueue(200, ServerFixtures.CAPABILITIES_1_4_0)
+    }
+
     @Test
     fun `a successful login stores the session and posts the expected body`() = runTest {
-        enqueue(200, ServerFixtures.LOGIN_SUCCESS)
+        enqueueSuccessfulLogin()
 
         val result = repository.login(baseUrl(), "  admin  ", "hunter2")
 
@@ -107,7 +117,7 @@ class LoginTest {
 
     @Test
     fun `a blank 2FA code is not sent to the server`() = runTest {
-        enqueue(200, ServerFixtures.LOGIN_SUCCESS)
+        enqueueSuccessfulLogin()
 
         repository.login(baseUrl(), "admin", "hunter2", totpCode = "   ")
 
@@ -136,7 +146,7 @@ class LoginTest {
     }
 
     @Test
-    fun `a 429 throttle surfaces the server's throttle message`() = runTest {
+    fun `a 429 is a rate limit, not a credential failure, and carries the wait`() = runTest {
         server.enqueue(
             MockResponse(
                 code = 429,
@@ -147,9 +157,97 @@ class LoginTest {
 
         val result = repository.login(baseUrl(), "admin", "hunter2")
 
-        assertIs<LoginResult.Failure>(result)
-        assertEquals("Too many failed attempts", result.message)
+        val limited = assertIs<LoginResult.RateLimited>(result)
+        assertEquals(900, limited.retryAfterSeconds)
+        assertEquals("Too many failed attempts — try again in 15 minutes", limited.message)
         assertFalse(sessionStore.current().isLoggedIn)
+    }
+
+    @Test
+    fun `a 429 without a Retry-After header falls back to the body's retry_after`() = runTest {
+        enqueue(429, ServerFixtures.LOGIN_429_THROTTLED)
+
+        val limited = assertIs<LoginResult.RateLimited>(repository.login(baseUrl(), "admin", "hunter2"))
+
+        assertEquals(900, limited.retryAfterSeconds)
+    }
+
+    @Test
+    fun `a 429 with neither a header nor a body still reports a rate limit`() = runTest {
+        enqueue(429, "")
+
+        val limited = assertIs<LoginResult.RateLimited>(repository.login(baseUrl(), "admin", "hunter2"))
+
+        assertEquals(null, limited.retryAfterSeconds)
+        assertEquals("Too many failed attempts", limited.message)
+    }
+
+    @Test
+    fun `a successful login records the device id, expiry and server version`() = runTest {
+        enqueueSuccessfulLogin()
+
+        repository.login(baseUrl(), "admin", "hunter2")
+
+        val session = sessionStore.current()
+        assertEquals(42, session.deviceId)
+        assertEquals("2026-11-04T09:12:33.123456Z", session.expiresAt)
+        assertEquals("1.4.0", session.serverVersion)
+    }
+
+    @Test
+    fun `a successful login forces a capability refresh before anything is rendered`() = runTest {
+        enqueueSuccessfulLogin()
+
+        repository.login(baseUrl(), "admin", "hunter2")
+
+        assertTrue(repository.currentCapabilities.value.readAlong)
+        assertTrue(repository.currentCapabilities.value.deviceManagement)
+        assertEquals(2, server.requestCount)
+        server.takeRequest()
+        assertEquals("/api/mobile/capabilities", server.takeRequest().url.encodedPath)
+    }
+
+    @Test
+    fun `a server too old for discovery still signs in, with every optional feature off`() = runTest {
+        enqueue(200, ServerFixtures.LOGIN_SUCCESS)
+        enqueue(404, """{"detail": "Not Found"}""")
+
+        val result = repository.login(baseUrl(), "admin", "hunter2")
+
+        assertEquals(LoginResult.Success, result)
+        assertTrue(sessionStore.current().isLoggedIn, "discovery is a convenience, never a gate on signing in")
+        assertEquals(ServerCapabilities.Baseline, repository.currentCapabilities.value)
+    }
+
+    @Test
+    fun `a discovery outage during login does not fail the login`() = runTest {
+        enqueue(200, ServerFixtures.LOGIN_SUCCESS)
+        enqueue(500, "boom")
+
+        assertEquals(LoginResult.Success, repository.login(baseUrl(), "admin", "hunter2"))
+        assertTrue(sessionStore.current().isLoggedIn)
+    }
+
+    @Test
+    fun `the login request never carries a stale bearer token`() = runTest {
+        // A previous session for the same origin is exactly the case where an interceptor keyed
+        // only on "do we have a token" would attach one.
+        sessionStore.save(SessionState(serverUrl = baseUrl(), token = "ttsr_stale", username = "old"))
+        enqueueSuccessfulLogin()
+
+        repository.login(baseUrl(), "admin", "hunter2")
+
+        val request = server.takeRequest()
+        assertNull(request.headers["Authorization"])
+        assertNull(request.headers["X-TtsRoad-No-Auth"], "the marker header must not reach the wire")
+    }
+
+    @Test
+    fun `an unreachable host produces a readable message with no stack trace`() = runTest {
+        val result = repository.login("https://no-such-host.invalid", "admin", "hunter2")
+
+        val failure = assertIs<LoginResult.Failure>(result)
+        assertEquals("Cannot reach that server — its address did not resolve", failure.message)
     }
 
     @Test
