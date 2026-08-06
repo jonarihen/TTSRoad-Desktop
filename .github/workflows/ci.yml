@@ -37,7 +37,7 @@ jobs:
 
       # Verifies gradle-wrapper.jar against the checksums Gradle publishes, before it is executed.
       - name: Validate the Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v4
+        uses: gradle/actions/wrapper-validation@v6
 
       # The build targets a JDK 25 toolchain. Installing it here means the toolchain resolves
       # locally; the foojay resolver in settings.gradle.kts remains the fallback for developers
@@ -49,7 +49,7 @@ jobs:
           java-version: '25'
 
       - name: Set up Gradle (with dependency + build caching)
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Install Xvfb
         run: sudo apt-get update && sudo apt-get install -y xvfb
