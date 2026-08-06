@@ -9,6 +9,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -230,6 +231,198 @@ class LibraryCacheTest {
         assertEquals(600.0, after[0].playback?.positionSeconds)
         // Untouched rows keep their identity so Compose can skip them.
         assertSame(before[1], after[1])
+        cache.close()
+    }
+
+    @Test
+    fun `one bulk mark is one request, not one per chapter`() = runTest {
+        val repository = FakeRepository(
+            chaptersResult = Result.success(
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = (1..40).map { ChapterSummary(id = 100 + it, fictionId = 7, displayNumber = it.toDouble()) },
+                ),
+            ),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureChapters(7)
+        runCurrent()
+        val ids = cache.chapters(7).value.value!!.chapters.markableIds(played = true)
+
+        cache.setPlayed(7, ids, played = true)
+        runCurrent()
+
+        assertEquals(1, repository.markedPlayed.size, "40 chapters must cost one request")
+        assertEquals(40, repository.markedPlayed.single().first.size)
+        assertTrue(cache.chapters(7).value.value!!.chapters.all { it.isPlayed })
+        cache.close()
+    }
+
+    @Test
+    fun `the patch lands before the server answers, and survives the answer`() = runTest {
+        // Optimism is the point: the checkmark moves in the frame the user clicked it, not one
+        // round trip later.
+        val gate = CompletableDeferred<PlaybackMarkResponse>()
+        val repository = object : FakeRepository(
+            chaptersResult = Result.success(
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(ChapterSummary(id = 101, fictionId = 7, audioDuration = 600.0)),
+                ),
+            ),
+        ) {
+            override suspend fun markPlayed(chapterIds: List<Int>, played: Boolean) = gate.await()
+        }
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureChapters(7)
+        runCurrent()
+
+        val marking = launch { cache.setPlayed(7, listOf(101), played = true) }
+        runCurrent()
+        assertTrue(
+            cache.chapters(7).value.value!!.chapters.first().isPlayed,
+            "the row must be patched while the request is still in flight",
+        )
+
+        gate.complete(PlaybackMarkResponse(status = "ok", played = true, chapterIds = listOf(101), count = 1))
+        marking.join()
+        assertTrue(cache.chapters(7).value.value!!.chapters.first().isPlayed)
+        cache.close()
+    }
+
+    @Test
+    fun `an id the server silently dropped is rolled back on its own`() = runTest {
+        // `playback/mark` echoes only the ids it actually touched: excluded or unknown chapters are
+        // dropped. Optimistically ticking one of those and leaving it ticked would be a lie that
+        // survives until the next refresh.
+        val repository = object : FakeRepository(
+            chaptersResult = Result.success(
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(
+                        ChapterSummary(id = 101, fictionId = 7, audioDuration = 600.0),
+                        ChapterSummary(id = 102, fictionId = 7, excluded = true),
+                    ),
+                ),
+            ),
+        ) {
+            override suspend fun markPlayed(chapterIds: List<Int>, played: Boolean) =
+                PlaybackMarkResponse(status = "ok", played = played, chapterIds = listOf(101), count = 1)
+        }
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureChapters(7)
+        runCurrent()
+
+        cache.setPlayed(7, listOf(101, 102), played = true)
+        runCurrent()
+
+        val after = cache.chapters(7).value.value!!.chapters
+        assertTrue(after[0].isPlayed, "the confirmed id stays marked")
+        assertFalse(after[1].isPlayed, "the dropped id goes back to what it was")
+        cache.close()
+    }
+
+    @Test
+    fun `a rollback restores real progress instead of zeroing it`() = runTest {
+        val repository = object : FakeRepository(
+            chaptersResult = Result.success(
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(
+                        ChapterSummary(
+                            id = 101,
+                            fictionId = 7,
+                            audioDuration = 1200.0,
+                            playback = PlaybackInfo(positionSeconds = 412.5),
+                        ),
+                    ),
+                ),
+            ),
+        ) {
+            override suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
+                throw IllegalStateException("connection reset")
+        }
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureChapters(7)
+        runCurrent()
+
+        val failure = runCatching { cache.setPlayed(7, listOf(101), played = true) }
+        runCurrent()
+
+        assertEquals("connection reset", failure.exceptionOrNull()?.message)
+        val row = cache.chapters(7).value.value!!.chapters.single()
+        assertFalse(row.isPlayed)
+        assertEquals(412.5, row.playback?.positionSeconds, "6:52 in must still be 6:52 in")
+        cache.close()
+    }
+
+    @Test
+    fun `marking from the detail screen also updates the library shelves`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(
+                LibraryResponse(
+                    fictions = listOf(FictionSummary(id = 7)),
+                    continueListening = listOf(
+                        ChapterSummary(
+                            apiChapterId = 101,
+                            fictionId = 7,
+                            resumeSeconds = 412.5,
+                            playedCount = 0,
+                            remainingCount = 2,
+                        ),
+                    ),
+                ),
+            ),
+            chaptersResult = Result.success(
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(
+                        ChapterSummary(id = 101, fictionId = 7, audioDuration = 600.0, audio = AudioInfo(url = "/a.mp3")),
+                        ChapterSummary(id = 102, fictionId = 7, audioDuration = 600.0, audio = AudioInfo(url = "/b.mp3")),
+                    ),
+                ),
+            ),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureLibrary()
+        cache.ensureChapters(7)
+        runCurrent()
+
+        cache.setPlayed(7, listOf(101), played = true)
+        runCurrent()
+
+        val shelfRow = cache.library.value.value!!.continueListening.single()
+        assertTrue(shelfRow.isPlayed, "the same chapter on the shelf must stop offering a resume")
+        // Counted from this client's own chapter list rather than guessed from a delta.
+        assertEquals(1, shelfRow.playedCount)
+        assertEquals(1, shelfRow.remainingCount)
+        assertEquals(1, repository.libraryCalls, "patching the shelf must not refetch the library")
+        cache.close()
+    }
+
+    // --- Per-fiction browsing options -----------------------------------------------------------
+
+    @Test
+    fun `filter and sort are remembered per fiction for the whole session`() = runTest {
+        val cache = LibraryCache(FakeRepository(), UnconfinedTestDispatcher(testScheduler))
+
+        cache.setChapterOptions(7, ChapterListOptions(ChapterFilter.Unplayed, ChapterSort.Newest))
+
+        assertEquals(ChapterFilter.Unplayed, cache.chapterOptions(7).value.filter)
+        assertEquals(ChapterSort.Newest, cache.chapterOptions(7).value.sort)
+        // A different serial is a different choice, and a fresh one starts at the defaults.
+        assertEquals(ChapterListOptions(), cache.chapterOptions(8).value)
+        cache.close()
+    }
+
+    @Test
+    fun `browsing options do not outlive the session that made them`() = runTest {
+        val cache = LibraryCache(FakeRepository(), UnconfinedTestDispatcher(testScheduler))
+        cache.setChapterOptions(7, ChapterListOptions(ChapterFilter.Ready, ChapterSort.Newest))
+
+        cache.clear()
+
+        assertEquals(ChapterListOptions(), cache.chapterOptions(7).value)
         cache.close()
     }
 

@@ -237,4 +237,37 @@ class SessionStoreTest {
         // It identifies an entry; it must not be derived from anything secret.
         assertTrue(key.startsWith("ttsroad/"))
     }
+
+    /**
+     * The separator between the URL and the username is a NUL, which cannot occur in either
+     * half — so no pair of (server, user) can collide by straddling it.
+     *
+     * Pinned as a test because the separator was originally a *raw* NUL byte in the source file,
+     * which made git classify `CredentialStore.kt` as binary and show no diff for it. Rewriting it
+     * as an escape is only safe if the derived key is unchanged, and this is what proves it: these
+     * digests are of `"https://x" + NUL + "admin"`, computed independently of the implementation.
+     */
+    @Test
+    fun `the credential key separator keeps neighbouring pairs apart`() {
+        assertEquals(
+            "ttsroad/" + sha256Hex("https://x\u0000admin").take(32),
+            CredentialStores.credentialKey("https://x/", "admin"),
+        )
+        // Without a separator both of these would hash "https://xadmin".
+        assertFalse(
+            CredentialStores.credentialKey("https://x", "admin") ==
+                CredentialStores.credentialKey("https://xadmin", ""),
+        )
+        // A missing username is not the same as an empty one only if it hashes the same — it does,
+        // deliberately, because `orEmpty()` is the documented behaviour.
+        assertEquals(
+            CredentialStores.credentialKey("https://x", null),
+            CredentialStores.credentialKey("https://x", ""),
+        )
+    }
+
+    private fun sha256Hex(text: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 }
