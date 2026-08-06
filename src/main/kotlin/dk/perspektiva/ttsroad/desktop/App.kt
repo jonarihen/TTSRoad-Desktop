@@ -122,11 +122,19 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     // Escape closes the top dialog or sheet *before* it navigates; only when nothing was open does
     // it mean "go back". Without that ordering, dismissing a confirmation would also leave the
     // screen the confirmation belonged to.
-    fun dismissOrGoBack() {
-        when (escapeAction(settings.hasOpenOverlay, nav.canGoBack)) {
+    //
+    // An overlay only counts while the screen that owns it is actually on top. The settings holder
+    // is hoisted above navigation, so a confirmation left open on Settings is still "open" once the
+    // user has walked off to a fiction — and without this check the first Escape there would
+    // silently dismiss an invisible dialog instead of going back.
+    //
+    // Returns whether the key did anything, so an Escape that means nothing is not swallowed here.
+    fun dismissOrGoBack(): Boolean {
+        val ownsOverlay = nav.current == Destination.Settings || nav.current == Destination.Devices
+        return when (escapeAction(settings.hasOpenOverlay && ownsOverlay, nav.canGoBack)) {
             EscapeAction.CloseOverlay -> settings.dismissTopOverlay()
             EscapeAction.GoBack -> nav.back()
-            EscapeAction.None -> Unit
+            EscapeAction.None -> false
         }
     }
 
@@ -158,21 +166,17 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             // A *preview* handler, so the window shortcuts work even while a text field has focus:
             // F5 in the library's search box still refreshes.
             .onPreviewKeyEvent { event ->
+                // Each branch reports whether it actually did something: a Back or an Escape that
+                // has nothing to act on must fall through rather than be swallowed at the root.
                 when (shortcutFor(event)) {
-                    AppShortcut.Back -> {
-                        nav.back()
-                        true
-                    }
+                    AppShortcut.Back -> nav.back()
 
                     AppShortcut.Refresh -> {
                         refreshCurrentScreen()
                         true
                     }
 
-                    AppShortcut.Dismiss -> {
-                        dismissOrGoBack()
-                        true
-                    }
+                    AppShortcut.Dismiss -> dismissOrGoBack()
 
                     null -> false
                 }

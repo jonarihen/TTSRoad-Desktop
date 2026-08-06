@@ -242,7 +242,9 @@ than stacking a second copy, so Fiction ↔ Player loops stay bounded.
   settings file, clamped on startup to the displays attached *now*. A position saved against a
   monitor that has since been unplugged is discarded rather than restored off-screen. Nothing
   transient and nothing secret is persisted. The supported minimum window size is **720×560**;
-  below 900 dp wide the player's up-next panel stacks and the header scrolls rather than clipping.
+  below 900 dp wide the player's up-next panel stacks and the header drops the server-name label
+  rather than clipping the navigation entries. (Settings' own pane strip does scroll horizontally;
+  the window header does not.)
 
 ## 📖 Browsing a long serial
 
