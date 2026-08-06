@@ -2,9 +2,11 @@ package dk.perspektiva.ttsroad.desktop
 
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
+import dk.perspektiva.ttsroad.desktop.data.DeviceSession
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.LoginResult
+import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.PlaybackMarkResponse
 import dk.perspektiva.ttsroad.desktop.data.PlaybackProgressResponse
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
@@ -28,6 +30,10 @@ open class FakeRepository(
     var chaptersResult: Result<ChaptersResponse> = Result.success(ChaptersResponse(fiction = FictionSummary())),
     var serverUrl: String = "https://ttsroad.example.com/",
     var capabilitiesResult: ServerCapabilities = ServerCapabilities.Baseline,
+    /** `success(null)` is the server saying it has no device API — not "no devices". */
+    var devicesResult: Result<List<DeviceSession>?> = Result.success(emptyList()),
+    var revokeResult: Result<Boolean> = Result.success(true),
+    var currentUserResult: Result<MobileUser?> = Result.success(null),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -39,6 +45,13 @@ open class FakeRepository(
         private set
     var chaptersCalls: Int = 0
         private set
+    var devicesCalls: Int = 0
+        private set
+    var revokeOtherDevicesCalls: Int = 0
+        private set
+
+    /** Token ids passed to [revokeDevice], in order — "the current session was never revoked". */
+    val revokedDevices: MutableList<Int> = mutableListOf()
 
     /** Base URLs discovery was asked about, in order — capability probing is observable. */
     val capabilityProbes: MutableList<String> = mutableListOf()
@@ -85,6 +98,23 @@ open class FakeRepository(
     override suspend fun library(): LibraryResponse {
         libraryCalls++
         return libraryResult.getOrThrow()
+    }
+
+    override suspend fun currentUser(): MobileUser? = currentUserResult.getOrThrow()
+
+    override suspend fun devices(): List<DeviceSession>? {
+        devicesCalls++
+        return devicesResult.getOrThrow()
+    }
+
+    override suspend fun revokeDevice(tokenId: Int): Boolean {
+        revokedDevices += tokenId
+        return revokeResult.getOrThrow()
+    }
+
+    override suspend fun revokeOtherDevices(): Boolean {
+        revokeOtherDevicesCalls++
+        return revokeResult.getOrThrow()
     }
 
     override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {

@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.desktop.data
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
@@ -34,6 +35,28 @@ interface TtsRoadApi {
 
     @POST("api/mobile/logout")
     suspend fun logout()
+
+    /** The signed-in account as the server sees it — the authoritative `is_admin`. */
+    @GET("api/mobile/me")
+    suspend fun me(): CurrentUserResponse
+
+    /** Every mobile/desktop sign-in on this account. 404 on a server older than the endpoint. */
+    @GET("api/mobile/devices")
+    suspend fun devices(): DevicesResponse
+
+    // Both revoke calls answer with a small status object (`{"status": "ok", ...}`) whose shape is
+    // not worth modelling: the client re-reads the list afterwards rather than trusting an echo,
+    // because a 404 on the DELETE is ambiguous between "already gone" and "no such endpoint".
+    @DELETE("api/mobile/devices/{token_id}")
+    suspend fun revokeDevice(@Path("token_id") tokenId: Int)
+
+    /**
+     * Revokes every *other* session. One server-side call rather than a loop of deletes, precisely
+     * so the client cannot get the "which one am I" question wrong: the token making the request is
+     * the one the server keeps.
+     */
+    @POST("api/mobile/devices/revoke-others")
+    suspend fun revokeOtherDevices()
 
     @GET("api/mobile/library")
     suspend fun library(): LibraryResponse
