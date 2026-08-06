@@ -84,6 +84,37 @@ interface TtsRoadRepository {
 
     suspend fun library(): LibraryResponse
 
+    /**
+     * The signed-in account as the server sees it now, or null when the server has no `/me`.
+     *
+     * Worth asking even though login already returned a user: `is_admin` can be changed from the
+     * web console while a desktop session is open, and this is the cheapest way to notice.
+     */
+    suspend fun currentUser(): MobileUser?
+
+    /**
+     * Every session on this account, or **null when the server has no device-management API**.
+     *
+     * Null rather than an empty list because the two mean opposite things to the UI: "nothing else
+     * is signed in" is a normal, correct answer, while "this server cannot answer" has to become a
+     * concise unsupported state instead of an HTTP error the user cannot act on.
+     */
+    suspend fun devices(): List<DeviceSession>?
+
+    /**
+     * Revokes one session.
+     *
+     * False means the server answered 404, which is ambiguous by design: the endpoint may be
+     * missing, or that session may already be gone (`app/routers/mobile.py` returns the same 404
+     * for an unknown, an already-revoked, and another user's token). Callers disambiguate with what
+     * they already know — a caller holding a successfully loaded list is clearly talking to a
+     * server that has the endpoint.
+     */
+    suspend fun revokeDevice(tokenId: Int): Boolean
+
+    /** Revokes every session except this one. False means 404, as in [revokeDevice]. */
+    suspend fun revokeOtherDevices(): Boolean
+
     suspend fun chapters(fictionId: Int, playableOnly: Boolean = false): ChaptersResponse
 
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse
@@ -260,6 +291,16 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun library(): LibraryResponse = withAuthorizedApi { it.library() }
 
+    override suspend fun currentUser(): MobileUser? = ifEndpointExists { it.me() }?.user
+
+    override suspend fun devices(): List<DeviceSession>? = ifEndpointExists { it.devices() }?.devices
+
+    override suspend fun revokeDevice(tokenId: Int): Boolean =
+        ifEndpointExists { it.revokeDevice(tokenId) } != null
+
+    override suspend fun revokeOtherDevices(): Boolean =
+        ifEndpointExists { it.revokeOtherDevices() } != null
+
     override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse =
         withAuthorizedApi { it.chapters(fictionId = fictionId, playableOnly = playableOnly) }
 
@@ -293,6 +334,20 @@ class RetrofitTtsRoadRepository(
     private fun forgetSessionScopedState(serverUrl: String) {
         forgetCapabilities(serverUrl)
         _currentCapabilities.value = ServerCapabilities.Baseline
+    }
+
+    /**
+     * Runs an authenticated call, answering null when the server has never heard of the endpoint.
+     *
+     * The device-management API is *additive* and `api_version` did not change with it, so there is
+     * no version to test against and a 404 is the only available signal that the backend predates
+     * it. Everything else keeps its normal meaning — in particular a 401 still ends the session,
+     * because "this server is old" and "this token is dead" must not be confused.
+     */
+    private suspend fun <T> ifEndpointExists(block: suspend (TtsRoadApi) -> T): T? = try {
+        withAuthorizedApi(block)
+    } catch (e: HttpException) {
+        if (e.code() == 404) null else throw e
     }
 
     private suspend fun <T> withAuthorizedApi(block: suspend (TtsRoadApi) -> T): T =

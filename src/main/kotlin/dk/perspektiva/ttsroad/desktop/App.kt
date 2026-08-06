@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,7 +29,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,25 +41,21 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
-import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
-import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
-import dk.perspektiva.ttsroad.desktop.ui.AarisCard
 import dk.perspektiva.ttsroad.desktop.ui.AarisColor
 import dk.perspektiva.ttsroad.desktop.ui.ContentMaxWidth
 import dk.perspektiva.ttsroad.desktop.ui.FictionDetailScreen
 import dk.perspektiva.ttsroad.desktop.ui.LibraryScreen
 import dk.perspektiva.ttsroad.desktop.ui.LoginStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.MetaText
-import dk.perspektiva.ttsroad.desktop.ui.NarrowMaxWidth
 import dk.perspektiva.ttsroad.desktop.ui.NowPlayingBar
 import dk.perspektiva.ttsroad.desktop.ui.PageGutter
-import dk.perspektiva.ttsroad.desktop.ui.PageScroll
 import dk.perspektiva.ttsroad.desktop.ui.PlayerScreen
+import dk.perspektiva.ttsroad.desktop.ui.SettingsScreen
+import dk.perspektiva.ttsroad.desktop.ui.SettingsStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.hasSession
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
-import kotlinx.coroutines.launch
 
 private sealed interface Screen {
     data object Library : Screen
@@ -82,6 +76,12 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     val playback = container.playback
     val session by sessionStore.session.collectAsState()
     val sessionEnd by repository.sessionEnd.collectAsState()
+    // Hoisted above navigation on purpose: `when (screen)` disposes the screen it leaves, so a
+    // holder created inside SettingsScreen would drop the selected pane and the loaded device list
+    // every time the user glanced at the library.
+    val settings = rememberStateHolder(repository, sessionStore) {
+        SettingsStateHolder(repository, sessionStore)
+    }
     var screen by remember { mutableStateOf<Screen>(Screen.Library) }
     // Where the full player collapses back to, so expanding the bar never loses browse context.
     var playerReturn by remember { mutableStateOf<Screen>(Screen.Library) }
@@ -100,6 +100,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             playback.stop()
             screen = Screen.Library
             playerReturn = Screen.Library
+            // Device rows name other machines on the account that just ended; keeping them on
+            // screen for whoever signs in next would be both wrong and a small privacy leak.
+            settings.sessionEnded()
         } else {
             // Cheap, and it is what makes optional UI correct after a restart, where login did
             // not run but a keyring-backed session was restored.
@@ -139,7 +142,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                             onBack = { screen = Screen.Library },
                         )
                         Screen.Player -> PlayerScreen(playback, onBack = { screen = playerReturn })
-                        Screen.Settings -> SettingsScreen(sessionStore, repository)
+                        Screen.Settings -> SettingsScreen(sessionStore, repository, settings)
                     }
                 }
                 if (playerState.hasSession && screen != Screen.Player) {
@@ -300,82 +303,3 @@ private fun Field(label: String, value: String, password: Boolean = false, onVal
     )
 }
 
-@Composable
-private fun SettingsScreen(sessionStore: SessionStore, repository: TtsRoadRepository) {
-    val scope = rememberCoroutineScope()
-    val session by sessionStore.session.collectAsState()
-    val capabilities by repository.currentCapabilities.collectAsState()
-    var busy by remember { mutableStateOf(false) }
-    PageScroll(maxWidth = NarrowMaxWidth, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        MetaText(text = "// Session", color = AarisColor.Accent)
-        AarisCard {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                SettingRow("Server", session.serverUrl)
-                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                SettingRow("User", session.username.orEmpty())
-                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                SettingRow("Role", if (session.isAdmin) "Admin" else "User")
-                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                // Where the bearer token actually lives. Worth surfacing: it is the difference
-                // between a session that survives a restart and one that deliberately does not.
-                SettingRow(
-                    "Credential storage",
-                    sessionStore.credentialStoreName +
-                        if (sessionStore.persistsCredentials) "" else " (this session only)",
-                )
-                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                // BuildInfo is generated from the single `ttsroad.version` Gradle property, so
-                // this always matches the installer the user actually ran.
-                SettingRow("Version", "${BuildInfo.APP_NAME} ${BuildInfo.VERSION}")
-            }
-        }
-        MetaText(text = "// Server", color = AarisColor.Accent)
-        AarisCard {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                SettingRow(
-                    "Build",
-                    listOfNotNull(
-                        capabilities.serverName.takeIf { capabilities.isDiscovered } ?: session.serverName,
-                        capabilities.serverVersion ?: session.serverVersion,
-                    ).joinToString(" "),
-                )
-                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                // An older server answers 404 to discovery and lands on the baseline, where every
-                // optional feature is off — which is exactly what this row then says.
-                SettingRow("Optional features", describeCapabilities(capabilities))
-            }
-        }
-        Button(
-            onClick = { scope.launch { busy = true; repository.logout(); busy = false } },
-            enabled = !busy,
-            shape = RectangleShape,
-            modifier = Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Hand),
-        ) { Text(if (busy) "SIGNING OUT" else "SIGN OUT") }
-    }
-}
-
-/** One line naming everything the signed-in server advertised, or saying that it advertised none. */
-private fun describeCapabilities(capabilities: ServerCapabilities): String {
-    val enabled = buildList {
-        if (capabilities.readAlong) add("Read-along")
-        if (capabilities.search) add("Server search")
-        if (capabilities.bookmarks) add("Bookmarks")
-        if (capabilities.deltaSync) add("Delta sync")
-        if (capabilities.batchProgress) add("Batch progress")
-        if (capabilities.audioContentHash) add("Audio content hash")
-        if (capabilities.deviceManagement) add("Device management")
-    }
-    return when {
-        enabled.isNotEmpty() -> enabled.joinToString(", ")
-        capabilities.isDiscovered -> "None advertised"
-        else -> "Not advertised by this server"
-    }
-}
-
-@Composable
-private fun SettingRow(label: String, value: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        MetaText(label)
-        Text(value.ifBlank { "-" }, style = MaterialTheme.typography.titleMedium, color = AarisColor.Ink)
-    }
-}

@@ -36,7 +36,9 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Dedicated fiction-detail screen | ✅ |
 | Player UI (play/pause, seek, ±30 s, next/previous, up-next queue) | ✅ |
 | **MP3 audio playback** | ✅ |
-| Settings / logout / version | ✅ |
+| Settings — two-pane control centre (account, devices, about) | ✅ |
+| Device sessions — list, mark current, revoke one / revoke all others | ✅ |
+| Playback preferences / offline downloads | ❌ |
 | Variable-rate playback ("speed") | ❌ |
 
 > The `SourceDataLine` backend cannot resample, so `PlaybackController.setSpeed` only records a
@@ -68,6 +70,8 @@ track the CMP version, and the ProGuard override needed for Java 25 bytecode —
 [`docs/adr/0001-2026-build-baseline.md`](docs/adr/0001-2026-build-baseline.md). Credential storage,
 centralized bearer injection and capability discovery are covered by
 [`docs/adr/0002-credential-storage-and-capability-discovery.md`](docs/adr/0002-credential-storage-and-capability-discovery.md).
+Device-session management, the two-pane Settings screen and how an older server is detected are in
+[`docs/adr/0003-device-sessions-and-settings.md`](docs/adr/0003-device-sessions-and-settings.md).
 
 ## 🚀 Bootstrap
 

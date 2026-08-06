@@ -1,6 +1,8 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -163,6 +165,71 @@ class ScreensUiTest {
 
         compose.onNodeWithText("https://ttsroad.example.com/").assertIsDisplayed()
         compose.onNodeWithText("operator").assertIsDisplayed()
+    }
+
+    // --- App: settings ----------------------------------------------------------------------
+
+    @Test
+    fun `settings keeps its open pane and loaded devices across a trip to the library`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(ParsedFixtures.library),
+            devicesResult = Result.success(ParsedFixtures.devices),
+        )
+        val app = container(
+            SessionState(serverUrl = "https://x/", token = "t", username = "admin", deviceId = 42),
+            repository,
+        )
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("SETTINGS").performClick()
+        compose.waitForIdle()
+        compose.onNode(hasText("DEVICE SESSIONS") and isSelectable()).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Pixel 9").assertIsDisplayed()
+
+        // Away and back: the holder lives above navigation, so nothing is refetched or reset.
+        compose.onNodeWithText("LIBRARY").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("SETTINGS").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Pixel 9").assertIsDisplayed()
+        assertEquals(1, repository.devicesCalls, "returning to settings must not refetch")
+    }
+
+    @Test
+    fun `signing out from settings drops the device rows of the account that ended`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(ParsedFixtures.library),
+            devicesResult = Result.success(ParsedFixtures.devices),
+        )
+        val store = InMemorySessionStore(
+            SessionState(serverUrl = "https://x/", token = "t", username = "admin", deviceId = 42),
+        )
+        val app = AppContainer(
+            sessionStore = store,
+            repositoryFactory = { _, _, _ -> repository },
+            playbackFactory = { _, _, _, _ -> FakePlaybackController() },
+        )
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+        compose.onNodeWithText("SETTINGS").performClick()
+        compose.waitForIdle()
+        compose.onNode(hasText("DEVICE SESSIONS") and isSelectable()).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Pixel 9").assertIsDisplayed()
+
+        // What logout — or a 401 — does: the token goes.
+        store.clearToken()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("SIGN IN").assertIsDisplayed()
+        assertEquals(
+            0,
+            compose.onAllNodesWithText("Pixel 9").fetchSemanticsNodes().size,
+            "another account's sessions must not survive a sign-out",
+        )
     }
 
     // --- LibraryScreen --------------------------------------------------------------------
