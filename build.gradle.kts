@@ -1,74 +1,195 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "2.1.0"
-    id("org.jetbrains.kotlin.plugin.compose") version "2.1.0"
-    id("org.jetbrains.compose") version "1.8.2"
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.composeCompiler)
+    alias(libs.plugins.jetbrains.compose)
 }
 
 group = "dk.perspektiva.ttsroad.desktop"
-version = "0.1.0"
 
-repositories {
-    google()
-    mavenCentral()
-    maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
-}
+// Single version source (gradle.properties -> ttsroad.version). Used for the Gradle/Maven
+// coordinate, the jpackage packageVersion, installer filenames, the generated BuildInfo the
+// About text reads, and CI release artifacts. There is deliberately no second number.
+val appVersionValue: String = providers.gradleProperty("ttsroad.version").get()
+val appNameValue = "TTSRoad"
+version = appVersionValue
+
+val jdkVersion: Int = libs.versions.jdk.get().toInt()
+
+// CI sets -Pttsroad.warningsAsErrors=true so a new Kotlin warning fails the build there
+// without making local iteration painful.
+val warningsAsErrors: Boolean =
+    providers.gradleProperty("ttsroad.warningsAsErrors").orNull?.toBoolean() ?: false
 
 dependencies {
     // Compose Multiplatform desktop (Skia-rendered native UI) + Material 3.
+    // `compose.material3` / `compose.materialIconsExtended` are error-level deprecations in
+    // CMP 1.11.1, so the artifacts are named explicitly via the version catalog instead.
     implementation(compose.desktop.currentOs)
-    implementation(compose.material3)
-    implementation(compose.materialIconsExtended)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.materialIconsExtended)
 
     // Coroutines with the Swing/AWT main dispatcher used by Compose Desktop.
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.9.0")
+    implementation(libs.kotlinx.coroutines.swing)
 
     // Networking — same stack as the Android client so models/api port over.
-    implementation("com.squareup.retrofit2:retrofit:2.11.0")
-    implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.moshi:moshi:1.15.1")
-    implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
+    implementation(platform(libs.okhttp.bom))
+    implementation(libs.okhttp)
+    implementation(libs.retrofit)
+    implementation(libs.retrofit.converter.moshi)
+    implementation(libs.moshi)
+    implementation(libs.moshi.kotlin)
 
     // Pure-JVM MP3 decoding, registered as a javax.sound.sampled SPI so chapter audio
     // (downloaded with the bearer auth header attached) can be played via SourceDataLine
     // without an external native player like VLC.
-    implementation("com.googlecode.soundlibs:mp3spi:1.9.5.4")
-    implementation("com.googlecode.soundlibs:jlayer:1.0.1.4")
-    implementation("com.googlecode.soundlibs:tritonus-share:0.3.7.4")
+    implementation(libs.soundlibs.mp3spi)
+    implementation(libs.soundlibs.jlayer)
+    implementation(libs.soundlibs.tritonusShare)
 
     // Async cover-image loading + in-memory/disk caching (covers are served unauthenticated).
-    // Pinned to 3.2.0 (not the latest 3.5.0): newer releases bump their kotlin-stdlib dependency
-    // past what our Kotlin 2.1.0 compiler's metadata reader accepts.
-    implementation("io.coil-kt.coil3:coil-compose:3.2.0")
-    implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
-}
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(platform(libs.okhttp.bom))
+    testImplementation(libs.junit.jupiter)
+    // kotlin("test") resolves to kotlin-test-junit5 automatically because `test` uses the JUnit
+    // Platform; its version is the Kotlin plugin's, so it is not a separate catalog entry.
+    testImplementation(kotlin("test"))
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
+    // Compose UI tests use the JUnit 4 `createComposeRule()` API.
+    testImplementation(libs.compose.uiTestJunit4)
+    testRuntimeOnly(libs.junit.platform.launcher)
+    testRuntimeOnly(libs.junit.vintage.engine)
 }
 
 kotlin {
+    // Toolchain, not sourceCompatibility/targetCompatibility: Gradle provisions a real JDK 25
+    // (via the foojay resolver in settings.gradle.kts) and uses it for javac, kotlinc, jlink and
+    // jpackage. Setting a *mismatched* jvmTarget on top of a toolchain is what caused the earlier
+    // "JVM target alignment" breakage, so both are derived from the same catalog entry.
+    jvmToolchain(jdkVersion)
+
     compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // Explicit bytecode release level, tied to the same single source as the toolchain.
+        jvmTarget.set(JvmTarget.fromTarget(jdkVersion.toString()))
+        allWarningsAsErrors.set(warningsAsErrors)
     }
 }
+
+tasks.withType<JavaCompile>().configureEach {
+    // `--release` rather than -source/-target, so linking against newer JDK APIs is a compile error.
+    options.release.set(jdkVersion)
+}
+
+/**
+ * Emits `BuildInfo.kt` so the running app shows the same version the installer was stamped with,
+ * instead of a second hand-maintained constant.
+ *
+ * Written as a real task class rather than a `Sync` of `resources.text.fromString(...)`: that
+ * helper stages its content under `build/tmp`, which `clean` wipes, so a single `clean check`
+ * invocation would see the generator as NO-SOURCE and fail to compile.
+ */
+abstract class GenerateBuildInfo : DefaultTask() {
+    @get:Input
+    abstract val appVersion: Property<String>
+
+    @get:Input
+    abstract val appName: Property<String>
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        val dir = outputDir.get().asFile
+        dir.mkdirs()
+        dir.resolve("BuildInfo.kt").writeText(
+            """
+            |// GENERATED by the `generateBuildInfo` Gradle task. Do not edit.
+            |package dk.perspektiva.ttsroad.desktop
+            |
+            |/** Build-time constants injected from the single `ttsroad.version` Gradle property. */
+            |object BuildInfo {
+            |    const val VERSION: String = "${appVersion.get()}"
+            |    const val APP_NAME: String = "${appName.get()}"
+            |}
+            |
+            """.trimMargin(),
+        )
+    }
+}
+
+val generateBuildInfo = tasks.register<GenerateBuildInfo>("generateBuildInfo") {
+    appVersion.set(appVersionValue)
+    appName.set(appNameValue)
+    outputDir.set(layout.buildDirectory.dir("generated/buildinfo/kotlin"))
+}
+
+kotlin.sourceSets.named("main") {
+    kotlin.srcDir(generateBuildInfo)
+}
+
+// `clean` has no ordering relation to a generator that writes into build/, so in a single
+// `clean check` invocation it can otherwise delete BuildInfo.kt after it was generated.
+generateBuildInfo.configure { mustRunAfter(tasks.named("clean")) }
+
+tasks.test {
+    useJUnitPlatform()
+    testLogging {
+        events("failed", "skipped")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStackTraces = true
+    }
+    // Compose UI tests need a real (or virtual) display; CI runs them under Xvfb.
+    systemProperty("java.awt.headless", "false")
+}
+
+// jlink/jpackage default to the JVM that is *running Gradle*, not to the Kotlin toolchain, so
+// without this the bundled runtime image is a JDK 21 that cannot load our class-file-69 output
+// ("UnsupportedClassVersionError ... class file version 69.0"). Resolving the launcher here also
+// forces the toolchain to be provisioned before packaging.
+val packagingJavaHome: String = javaToolchains
+    .launcherFor { languageVersion.set(JavaLanguageVersion.of(jdkVersion)) }
+    .get()
+    .metadata
+    .installationPath
+    .asFile
+    .absolutePath
 
 compose.desktop {
     application {
         mainClass = "dk.perspektiva.ttsroad.desktop.MainKt"
+        javaHome = packagingJavaHome
+
+        buildTypes.release.proguard {
+            // CMP 1.11.1's bundled ProGuard 7.7.0 cannot read Java 25 bytecode
+            // ("Unsupported version number [69.0]"). 7.8.0 was the first release that can.
+            version.set(libs.versions.proguard)
+        }
 
         nativeDistributions {
             // Real OS installers via jpackage; the JRE is bundled, so end users
             // don't need Java installed.
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
-            // jpackage requires MAJOR > 0 (esp. for the macOS .dmg).
-            packageName = "TTSRoad"
-            packageVersion = "1.0.1"
+            packageName = appNameValue
+            // Same single source as `version` above — installer filenames and the About text
+            // can no longer drift apart. jpackage requires MAJOR > 0 (esp. for the macOS .dmg).
+            packageVersion = appVersionValue
             description = "TTSRoad desktop client"
             vendor = "Perspektiva"
+
+            // The jlink image is minimised by module inference; these are the modules the app
+            // needs reflectively/at runtime and which inference does not always find:
+            //   java.desktop  — AWT/Swing + the javax.sound.sampled MP3 SPI
+            //   java.naming   — OkHttp's DNS/JNDI usage
+            //   jdk.crypto.ec — TLS elliptic-curve suites (https:// servers fail without it)
+            //   java.management / jdk.unsupported — Kotlin + Skiko runtime bits
+            modules("java.desktop", "java.naming", "java.management", "jdk.crypto.ec", "jdk.unsupported")
 
             windows {
                 // Without these the MSI installs with no Start menu / desktop entry at all.
@@ -78,6 +199,13 @@ compose.desktop {
                 // Stable across releases so newer MSIs upgrade in place instead of
                 // installing side by side.
                 upgradeUuid = "9c3f5a1e-7d42-4b8a-b6f0-2f1a44e6d9c3"
+            }
+            linux {
+                shortcut = true
+                menuGroup = "TTSRoad"
+            }
+            macOS {
+                bundleID = "dk.perspektiva.ttsroad.desktop"
             }
         }
     }

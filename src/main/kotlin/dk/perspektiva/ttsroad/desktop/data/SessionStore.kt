@@ -19,20 +19,64 @@ data class SessionState(
 }
 
 /**
- * File-backed session persistence (no Android DataStore on desktop). Stored as JSON in a
- * per-user config directory: %APPDATA%/TTSRoad on Windows, ~/.config/ttsroad elsewhere.
+ * Seam for session/credential storage. The app runs on [FileSessionStore]; tests substitute
+ * [InMemorySessionStore] so nothing touches the real user config directory.
+ *
+ * Deliberately non-suspending: [current] is called from non-suspend code on the audio download
+ * path, so swapping in an OS keychain later means either caching in memory behind this same
+ * interface or changing those call sites too.
  */
-class SessionStore {
+interface SessionStore {
+    val session: StateFlow<SessionState>
+    fun current(): SessionState
+    fun save(state: SessionState)
+
+    /**
+     * Signs the user out locally. `serverUrl` and `serverName` are deliberately retained so the
+     * settings screen can still show which server this install talks to.
+     */
+    fun clearToken()
+}
+
+/** In-memory [SessionStore] with no persistence — used by tests and by UI previews. */
+class InMemorySessionStore(initial: SessionState = SessionState()) : SessionStore {
+    private val _session = MutableStateFlow(initial)
+    override val session: StateFlow<SessionState> = _session.asStateFlow()
+
+    /** Number of [clearToken] calls, so tests can assert "this did / did not sign the user out". */
+    var clearTokenCalls: Int = 0
+        private set
+
+    override fun current(): SessionState = _session.value
+
+    override fun save(state: SessionState) {
+        _session.value = state
+    }
+
+    override fun clearToken() {
+        clearTokenCalls++
+        _session.value = _session.value.copy(token = null, username = null, isAdmin = false)
+    }
+}
+
+/**
+ * File-backed session persistence (no Android DataStore on desktop). Stored as JSON in a
+ * per-user config directory: %APPDATA%/TTSRoad on Windows, ~/Library/Application Support/TTSRoad
+ * on macOS, $XDG_CONFIG_HOME/TTSRoad (or ~/.config/TTSRoad) elsewhere.
+ *
+ * NOTE: the bearer token is stored in plaintext with default file permissions. Moving it into an
+ * OS keychain is tracked separately; this class is the single seam that change has to go through.
+ */
+class FileSessionStore(private val file: File = defaultFile()) : SessionStore {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val adapter = moshi.adapter(SessionState::class.java)
-    private val file: File = configDir().resolve("session.json")
 
     private val _session = MutableStateFlow(load())
-    val session: StateFlow<SessionState> = _session.asStateFlow()
+    override val session: StateFlow<SessionState> = _session.asStateFlow()
 
-    fun current(): SessionState = _session.value
+    override fun current(): SessionState = _session.value
 
-    fun save(state: SessionState) {
+    override fun save(state: SessionState) {
         _session.value = state
         runCatching {
             file.parentFile?.mkdirs()
@@ -40,7 +84,7 @@ class SessionStore {
         }
     }
 
-    fun clearToken() {
+    override fun clearToken() {
         save(current().copy(token = null, username = null, isAdmin = false))
     }
 
@@ -48,22 +92,18 @@ class SessionStore {
         runCatching { if (file.isFile) adapter.fromJson(file.readText()) else null }
             .getOrNull() ?: SessionState()
 
-    private fun configDir(): File {
-        val home = System.getProperty("user.home")
-        val os = System.getProperty("os.name").lowercase()
-        val base = when {
-            os.contains("win") -> System.getenv("APPDATA")?.let { File(it) } ?: File(home, "AppData/Roaming")
-            os.contains("mac") -> File(home, "Library/Application Support")
-            else -> System.getenv("XDG_CONFIG_HOME")?.let { File(it) } ?: File(home, ".config")
-        }
-        return File(base, "TTSRoad")
-    }
-}
+    companion object {
+        fun defaultFile(): File = configDir().resolve("session.json")
 
-fun normalizeBaseUrl(input: String): String {
-    val trimmed = input.trim().trimEnd('/')
-    require(trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-        "Server URL must start with http:// or https://"
+        fun configDir(): File {
+            val home = System.getProperty("user.home")
+            val os = System.getProperty("os.name").lowercase()
+            val base = when {
+                os.contains("win") -> System.getenv("APPDATA")?.let { File(it) } ?: File(home, "AppData/Roaming")
+                os.contains("mac") -> File(home, "Library/Application Support")
+                else -> System.getenv("XDG_CONFIG_HOME")?.let { File(it) } ?: File(home, ".config")
+            }
+            return File(base, "TTSRoad")
+        }
     }
-    return "$trimmed/"
 }

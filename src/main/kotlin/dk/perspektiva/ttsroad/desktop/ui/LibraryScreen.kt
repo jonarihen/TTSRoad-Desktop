@@ -31,7 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,7 +50,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
-import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import kotlinx.coroutines.launch
@@ -63,12 +62,8 @@ fun LibraryScreen(
     onOpenPlayer: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var state by remember { mutableStateOf<Load<LibraryResponse>>(Load.Loading) }
-
-    LaunchedEffect(Unit) {
-        state = runCatching { repository.library() }
-            .fold({ Load.Ok(it) }, { Load.Err(it.message ?: "Could not load library") })
-    }
+    val holder = rememberStateHolder(repository) { LibraryStateHolder(repository) }
+    val state by holder.state.collectAsState()
 
     when (val s = state) {
         Load.Loading -> CenterProgress()

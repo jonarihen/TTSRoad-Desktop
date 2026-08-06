@@ -1,0 +1,81 @@
+#
+# Single source of truth for every plugin and library version used by TTSRoad-Desktop.
+#
+# The matrix below was verified end-to-end (compile + test + createDistributable + packageMsi)
+# against JDK 25 / Gradle 9.6.1. See docs/adr/0001-2026-build-baseline.md for the reasoning and
+# for the two versions that are deliberately NOT aligned with the Compose Multiplatform version
+# (material3 and material-icons-extended).
+#
+[versions]
+# --- Toolchain -----------------------------------------------------------------------------
+# Also referenced from settings.gradle.kts (foojay) and build.gradle.kts (jvmToolchain).
+jdk = "25"
+kotlin = "2.4.10"
+composeMultiplatform = "1.11.1"
+foojayResolver = "1.0.0"
+# Compose Multiplatform 1.11.1 ships ProGuard 7.7.0 by default, which cannot parse Java 25
+# class files (major 69). 7.8.0 is the first release that can; 7.9.1 is the current stable.
+proguard = "7.9.1"
+
+# --- Compose artifacts that are NOT versioned with the CMP plugin ---------------------------
+# `compose.material3` and `compose.materialIconsExtended` became error-level deprecations in
+# CMP 1.11.1 ("Specify dependency directly"), so the coordinates are spelled out here.
+# material3 is independently versioned: 1.9.0 is the newest STABLE (1.10+/1.11+ are alpha only).
+composeMaterial3 = "1.9.0"
+# material-icons-extended is permanently frozen at 1.7.3 and will not receive updates.
+composeMaterialIcons = "1.7.3"
+
+# --- Libraries -----------------------------------------------------------------------------
+coroutines = "1.11.0"
+okhttp = "5.4.0"
+retrofit = "3.0.0"
+moshi = "1.15.2"
+coil = "3.5.0"
+mp3spi = "1.9.5.4"
+jlayer = "1.0.1.4"
+tritonus = "0.3.7.4"
+
+# --- Test ----------------------------------------------------------------------------------
+junit = "6.1.2"
+
+[libraries]
+# Compose (the plugin's `compose.desktop.currentOs` accessor is still supported and used directly)
+compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "composeMaterial3" }
+compose-materialIconsExtended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "composeMaterialIcons" }
+compose-uiTestJunit4 = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "composeMultiplatform" }
+
+# Coroutines — the Swing dispatcher is what Compose Desktop uses for Dispatchers.Main.
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+
+# Networking — same stack as the Android client so models/api port over.
+okhttp-bom = { module = "com.squareup.okhttp3:okhttp-bom", version.ref = "okhttp" }
+okhttp = { module = "com.squareup.okhttp3:okhttp" }
+# OkHttp 5 renamed the package: mockwebserver3, not okhttp3.mockwebserver.
+okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver3-junit5" }
+retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
+retrofit-converter-moshi = { module = "com.squareup.retrofit2:converter-moshi", version.ref = "retrofit" }
+moshi = { module = "com.squareup.moshi:moshi", version.ref = "moshi" }
+moshi-kotlin = { module = "com.squareup.moshi:moshi-kotlin", version.ref = "moshi" }
+
+# Pure-JVM MP3 decoding registered as a javax.sound.sampled SPI.
+soundlibs-mp3spi = { module = "com.googlecode.soundlibs:mp3spi", version.ref = "mp3spi" }
+soundlibs-jlayer = { module = "com.googlecode.soundlibs:jlayer", version.ref = "jlayer" }
+soundlibs-tritonusShare = { module = "com.googlecode.soundlibs:tritonus-share", version.ref = "tritonus" }
+
+# Cover images.
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
+
+# Test
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+# ui-test-junit4 is a JUnit 4 API; running it on the JUnit Platform needs the vintage engine.
+junit-vintage-engine = { module = "org.junit.vintage:junit-vintage-engine" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+jetbrains-compose = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
+foojay-resolver = { id = "org.gradle.toolchains.foojay-resolver-convention", version.ref = "foojayResolver" }
