@@ -42,9 +42,15 @@ dependencies {
     implementation(libs.moshi)
     implementation(libs.moshi.kotlin)
 
-    // Pure-JVM MP3 decoding, registered as a javax.sound.sampled SPI so chapter audio
-    // (downloaded with the bearer auth header attached) can be played via SourceDataLine
-    // without an external native player like VLC.
+    // The production playback backend (docs/adr/0002-playback-engine.md). GStreamer itself is a
+    // system package, not a bundled one — these are only the bindings, and JNA is pinned here
+    // because gst1-java-core's POM asks for the open range [5.2.0,6.0).
+    implementation(libs.gst1.java.core)
+    implementation(libs.jna)
+
+    // Pure-JVM MP3 decoding, registered as a javax.sound.sampled SPI. Retained as the fallback
+    // engine on machines without GStreamer — Windows and macOS by default — where it keeps the
+    // behaviour it has always had, speed control included (i.e. none).
     implementation(libs.soundlibs.mp3spi)
     implementation(libs.soundlibs.jlayer)
     implementation(libs.soundlibs.tritonusShare)

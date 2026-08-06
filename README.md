@@ -47,11 +47,19 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Settings — two-pane control centre (account, devices, about) | ✅ |
 | Device sessions — list, mark current, revoke one / revoke all others | ✅ |
 | Playback preferences / offline downloads | ❌ |
-| Variable-rate playback ("speed") | ❌ |
+| Streaming playback — audio starts before the chapter has downloaded | ✅ Linux |
+| Seeking without decoding from the start of the chapter | ✅ Linux |
+| Variable-rate playback ("speed"), pitch-preserving 0.5×–3.0× | ✅ Linux |
 
-> The `SourceDataLine` backend cannot resample, so `PlaybackController.setSpeed` only records a
-> value — there is no speed control in the UI and no effect on audio. Changing that means a new
-> `AudioEngine` implementation.
+> **The last three are Linux-only, and the app says so rather than pretending otherwise.** The
+> production backend is GStreamer, with `scaletempo` for pitch-preserving rate. Where GStreamer is
+> absent — Windows and macOS by default — the app falls back to the original `javax.sound.sampled`
+> engine, which cannot resample and has no random-access index. Each engine reports its own
+> `EngineCapabilities`, and the UI draws the speed control only when the backend can honour it, so
+> there is no longer a control that accepts a number and changes nothing.
+>
+> The choice, the rejected alternatives and the measurements behind them are in
+> [`docs/adr/0002-playback-engine.md`](docs/adr/0002-playback-engine.md).
 
 ## 🛠️ Supported build matrix
 
@@ -174,9 +182,13 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── CommandCredentialStores.kt Secret Service (secret-tool) and macOS Keychain (security)
 │   └── SecureFiles.kt            atomic, owner-only settings writes
 ├── player/
-│   ├── PlaybackController.kt     PlaybackController (interface) + Mp3PlaybackController
-│   ├── AudioDownloadStore.kt     bearer-authenticated chapter download seam
-│   └── AudioEngine.kt            javax.sound.sampled seam (decode + output line)
+│   ├── PlaybackController.kt     the UI-facing interface + PlayerUiState
+│   ├── QueuePlaybackController.kt queue, auto-advance, progress, retry ladder, session expiry
+│   ├── PlaybackEngine.kt         backend seam: transport, capabilities, typed failures
+│   ├── GstPlaybackEngine.kt      production backend — GStreamer via gst1-java-core
+│   ├── JavaSoundPlaybackEngine.kt fallback where GStreamer is absent (no speed control)
+│   ├── MediaSource.kt            bearer-authenticated range-request byte source
+│   └── AudioEngine.kt            javax.sound.sampled seam used by the fallback engine
 └── ui/
     ├── Theme.kt                  AARIS theme tokens
     ├── Components.kt             CoverImage, stale/empty/initial-error states, "how old is this"
@@ -203,22 +215,30 @@ src/test/kotlin/dk/perspektiva/ttsroad/desktop/
 
 ## 🔊 How audio playback works
 
-Chapter MP3s are **bearer-protected**, so `Mp3PlaybackController`:
+Two layers, split so the interesting half needs no sound card:
 
-1. Downloads the chapter to a temp file through `AudioDownloadStore`, on the app's shared OkHttp
-   client — the same auth interceptor that serves the API attaches the bearer token, and a `401`
-   here ends the session exactly as it would on an API call.
-2. Decodes it to PCM through `AudioEngine` — in production the **mp3spi/JLayer**
-   `javax.sound.sampled` SPI.
-3. Streams the PCM to the engine's output line (a `SourceDataLine`) — no external native player
-   (e.g. VLC) required.
+- **`PlaybackEngine`** owns one chapter — decoding, the clock, the output device. `GstPlaybackEngine`
+  (GStreamer) in production, `JavaSoundPlaybackEngine` where GStreamer is missing.
+- **`QueuePlaybackController`** owns everything above it: the queue, auto-advance, progress saving,
+  the retry ladder and session expiry. All of that is unit-tested against a fake engine.
 
-Seeking re-decodes from the start of the (already-local) temp file and discards up to the target
-offset, since a streamed MP3 decoder has no random-access index — simple and exact, at the cost of
-a brief pause on long seeks.
+Chapter MP3s are **bearer-protected**, and the bytes are pushed *into* GStreamer rather than fetched
+by it. `HttpMediaSource` reads them from the app's shared OkHttp client, so the auth interceptor
+that serves the API attaches the token — under the same origin rule, which is what stops an absolute
+audio URL pointing elsewhere from leaking the credential — and a `401` arrives as a typed
+`SessionExpiredException` that ends the session exactly as it would on an API call.
 
-Both the download and the audio backend are interfaces, so the whole queue / auto-advance /
-progress-save state machine is unit-tested with no network and no sound card.
+```
+appsrc → decodebin → audioconvert → scaletempo → audioconvert → audioresample → autoaudiosink
+```
+
+`scaletempo` scales tempo without shifting pitch. Because the source is a range-request stream,
+audio starts after a few kilobytes instead of a whole chapter, and seeking moves the HTTP read head
+instead of re-decoding from byte zero. Measured on a 32.5 s fixture: first audio in **11 ms** after
+2.7% of the bytes, and a 1 s → 30 s seek in **26 ms**.
+
+The fallback engine keeps the old behaviour — materialise the chapter, decode with **mp3spi/JLayer**,
+write PCM to a `SourceDataLine`, re-decode from the start to seek, and no speed control.
 
 ## 🧭 Navigation, state and window behaviour
 

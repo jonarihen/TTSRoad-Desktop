@@ -8,12 +8,13 @@ import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadAuthInterceptor
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.WindowPreferencesStore
-import dk.perspektiva.ttsroad.desktop.player.AudioDownloadStore
-import dk.perspektiva.ttsroad.desktop.player.AudioEngine
-import dk.perspektiva.ttsroad.desktop.player.HttpAudioDownloadStore
-import dk.perspektiva.ttsroad.desktop.player.JavaSoundAudioEngine
-import dk.perspektiva.ttsroad.desktop.player.Mp3PlaybackController
+import dk.perspektiva.ttsroad.desktop.player.GstPlaybackEngine
+import dk.perspektiva.ttsroad.desktop.player.HttpMediaSource
+import dk.perspektiva.ttsroad.desktop.player.JavaSoundPlaybackEngine
+import dk.perspektiva.ttsroad.desktop.player.MediaSourceFactory
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
+import dk.perspektiva.ttsroad.desktop.player.PlaybackEngine
+import dk.perspektiva.ttsroad.desktop.player.QueuePlaybackController
 import dk.perspektiva.ttsroad.desktop.security.CredentialStore
 import dk.perspektiva.ttsroad.desktop.security.CredentialStores
 import java.util.concurrent.TimeUnit
@@ -58,11 +59,15 @@ class AppContainer(
     httpClientFactory: (SessionStore) -> OkHttpClient = ::defaultHttpClient,
     repositoryFactory: (SessionStore, OkHttpClient, AppDispatchers) -> TtsRoadRepository =
         { store, client, d -> RetrofitTtsRoadRepository(store, client, d.io, clock) },
-    downloadStoreFactory: (OkHttpClient, TtsRoadRepository) -> AudioDownloadStore =
-        { client, repo -> HttpAudioDownloadStore(client, repo) },
-    audioEngine: AudioEngine = JavaSoundAudioEngine(),
-    playbackFactory: (TtsRoadRepository, AudioDownloadStore, AudioEngine, AppDispatchers) -> PlaybackController =
-        { repo, downloads, engine, d -> Mp3PlaybackController(repo, downloads, engine, d.io) },
+    mediaSourceFactory: (OkHttpClient, TtsRoadRepository) -> MediaSourceFactory =
+        { client, repo -> MediaSourceFactory { url -> HttpMediaSource(client, repo, url) } },
+    // GStreamer where it exists, Java Sound where it does not. Resolved once, here, so nothing
+    // downstream has to know which backend it got — only what that backend reports it can do.
+    // A machine with no GStreamer must still get a working app, just without speed control.
+    audioEngineFactory: () -> PlaybackEngine =
+        { GstPlaybackEngine.createOrNull() ?: JavaSoundPlaybackEngine() },
+    playbackFactory: (TtsRoadRepository, MediaSourceFactory, PlaybackEngine, AppDispatchers) -> PlaybackController =
+        { repo, mediaSources, engine, d -> QueuePlaybackController(repo, mediaSources, engine, d.io) },
     libraryCacheFactory: (TtsRoadRepository, AppDispatchers, () -> Long) -> LibraryCache =
         { repo, d, now -> LibraryCache(repo, d.main, now) },
     // A store rather than a file path, so a test never writes into the user's config directory.
@@ -70,8 +75,9 @@ class AppContainer(
 ) : AutoCloseable {
     val httpClient: OkHttpClient = httpClientFactory(sessionStore)
     val repository: TtsRoadRepository = repositoryFactory(sessionStore, httpClient, dispatchers)
-    val downloadStore: AudioDownloadStore = downloadStoreFactory(httpClient, repository)
-    val playback: PlaybackController = playbackFactory(repository, downloadStore, audioEngine, dispatchers)
+    val mediaSources: MediaSourceFactory = mediaSourceFactory(httpClient, repository)
+    val audioEngine: PlaybackEngine = audioEngineFactory()
+    val playback: PlaybackController = playbackFactory(repository, mediaSources, audioEngine, dispatchers)
 
     /**
      * Library and chapter data, held here rather than inside a screen.
