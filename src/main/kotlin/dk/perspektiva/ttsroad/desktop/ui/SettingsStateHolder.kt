@@ -124,6 +124,24 @@ class SettingsStateHolder(
         refreshDevices()
     }
 
+    /**
+     * What the window-level Refresh action means on this screen.
+     *
+     * Pane-specific on purpose: pressing F5 while reading the Account pane must not fire a
+     * device-listing request the user cannot see the result of.
+     */
+    fun refreshCurrentSection() {
+        when (_state.value.section) {
+            SettingsSection.Devices -> refreshDevices()
+            SettingsSection.Account -> {
+                _state.update { it.copy(verifiedUser = null) }
+                verifyAccount()
+            }
+
+            else -> Unit
+        }
+    }
+
     fun refreshDevices() {
         loadJob?.cancel()
         // The notice belongs to the last action, not to this list; re-reading on demand is exactly
@@ -150,6 +168,23 @@ class SettingsStateHolder(
 
     fun dismissConfirmation() {
         _state.update { it.copy(confirmation = null) }
+    }
+
+    /** Whether a dialog or sheet is open — the input to Escape's precedence rule. */
+    val hasOpenOverlay: Boolean get() = _state.value.confirmation != null
+
+    /**
+     * Closes the topmost dialog or sheet this holder owns, reporting whether there was one.
+     *
+     * The boolean is the contract Escape needs: the key must close an open confirmation *instead*
+     * of navigating, and only mean "go back" when nothing was open. Modelling it here rather than
+     * as a `when` over dialog state inside the key handler keeps the ordering testable and keeps
+     * `App` from having to know what kinds of dialog exist.
+     */
+    fun dismissTopOverlay(): Boolean {
+        if (_state.value.confirmation == null) return false
+        dismissConfirmation()
+        return true
     }
 
     /** Carries out whatever is pending. A no-op when nothing is, so a stray Enter cannot fire it. */

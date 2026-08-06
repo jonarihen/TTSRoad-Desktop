@@ -31,7 +31,10 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Feature | Status |
 | --- | :---: |
 | Login (incl. 2FA) | ✅ |
-| Library — continue-listening + fictions grid | ✅ |
+| Library — continue-listening hero, shelves, lazy fictions grid | ✅ |
+| Back stack with retained search / filters / scroll | ✅ |
+| Refresh action (button, F5, Ctrl/Cmd+R) with non-destructive failure | ✅ |
+| Remembered window size, position and maximised state | ✅ |
 | Async cover images (cached) | ✅ |
 | Dedicated fiction-detail screen | ✅ |
 | Player UI (play/pause, seek, ±30 s, next/previous, up-next queue) | ✅ |
@@ -72,6 +75,8 @@ centralized bearer injection and capability discovery are covered by
 [`docs/adr/0002-credential-storage-and-capability-discovery.md`](docs/adr/0002-credential-storage-and-capability-discovery.md).
 Device-session management, the two-pane Settings screen and how an older server is detected are in
 [`docs/adr/0003-device-sessions-and-settings.md`](docs/adr/0003-device-sessions-and-settings.md).
+The back stack, the repository-backed cache, lazy lists and the adaptive breakpoints are in
+[`docs/adr/0004-stateful-adaptive-navigation.md`](docs/adr/0004-stateful-adaptive-navigation.md).
 
 ## 🚀 Bootstrap
 
@@ -136,11 +141,18 @@ Dependency updates arrive as weekly grouped Dependabot PRs
 
 ```
 src/main/kotlin/dk/perspektiva/ttsroad/desktop/
-├── Main.kt                       entry point, window, Coil loader, --smoke-test
-├── App.kt                        root UI: navigation, login, settings
+├── Main.kt                       entry point, window placement, Coil loader, --smoke-test
+├── App.kt                        root UI: back stack, shortcuts, header, login
 ├── di/AppContainer.kt            the single composition root + AppDispatchers
+├── nav/
+│   ├── AppNavigation.kt          Destination + stable keys + the back-stack rules
+│   └── Shortcuts.kt              the keyboard table and Escape's precedence, as pure functions
 ├── data/
 │   ├── Models.kt                 mobile API models (Moshi)
+│   ├── Cached.kt                 value + error + isRefreshing + last success, independently
+│   ├── LibraryCache.kt           library/chapter state held above the screens
+│   ├── ChapterLists.kt           filters, identity-preserving played patch, lazy keys
+│   ├── WindowPreferences.kt      persisted placement + clamping to attached displays
 │   ├── TtsRoadApi.kt             Retrofit interface
 │   ├── Repository.kt             TtsRoadRepository (interface) + RetrofitTtsRoadRepository
 │   ├── SessionStore.kt           SessionStore (interface) + File-/InMemory- implementations
@@ -160,14 +172,15 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   └── AudioEngine.kt            javax.sound.sampled seam (decode + output line)
 └── ui/
     ├── Theme.kt                  AARIS theme tokens
-    ├── Components.kt             PageScroll, Load<T>, CoverImage, ...
+    ├── Components.kt             CoverImage, stale/empty/initial-error states, "how old is this"
     ├── StateHolder.kt            lifecycle-aware state-holder base + rememberStateHolder
-    ├── LibraryStateHolder.kt     library load
-    ├── FictionDetailStateHolder.kt   chapter list + mark-played
+    ├── WindowLayout.kt           supported minimum size + the three width classes
     ├── LoginStateHolder.kt       login submit + result mapping
-    ├── LibraryScreen.kt
-    ├── FictionDetailScreen.kt
-    └── PlayerScreen.kt           full player + NowPlayingBar
+    ├── SettingsStateHolder.kt    settings panes, device sessions, confirmations
+    ├── LibraryScreen.kt          LazyVerticalGrid: hero, shelves, search, fictions
+    ├── FictionDetailScreen.kt    LazyColumn: header, filter, chapters
+    ├── SettingsScreen.kt         two-pane control centre
+    └── PlayerScreen.kt           full player + NowPlayingBar (stacked when narrow)
 
 src/test/kotlin/dk/perspektiva/ttsroad/desktop/
 ├── ServerFixtures.kt             real server-1.4.0 payloads, incl. unknown additive fields
@@ -176,7 +189,9 @@ src/test/kotlin/dk/perspektiva/ttsroad/desktop/
 │                                 401s, redaction, auth-interceptor origin rules, session migration
 ├── security/                     credential stores (incl. a real Windows Credential Manager round-trip)
 ├── player/                       playback state machine + audio 401 handling
-└── ui/                           state-holder tests + Compose screen smoke tests
+├── nav/                          back-stack rules, destination keys, shortcut table
+└── ui/                           state holders, adaptive breakpoints, Compose screen and
+                                  navigation tests (retained state, refresh errors, lazy bounds)
 ```
 
 ## 🔊 How audio playback works
@@ -197,6 +212,29 @@ a brief pause on long seeks.
 
 Both the download and the audio backend are interfaces, so the whole queue / auto-advance /
 progress-save state machine is unit-tested with no network and no sound card.
+
+## 🧭 Navigation, state and window behaviour
+
+Browsing is a real back stack over destinations (Library, Fiction, Player, Reader, Settings,
+Devices) with stable keys. Re-opening a destination that is already open **pops back to it** rather
+than stacking a second copy, so Fiction ↔ Player loops stay bounded.
+
+- **Nothing is rebuilt on the way back.** Search text, the chapter filter and scroll offsets are
+  filed under the destination's key and handed back on the next visit; library and chapter data live
+  in a `LibraryCache` above the screens, so Library → Fiction → Back costs zero requests.
+- **Refresh is explicit**: a header button, `F5`, and `Ctrl+R` (`Cmd+R` on macOS). Duplicate
+  requests are coalesced and a superseded load is cancelled before it can publish a stale answer.
+- **A failed refresh never blanks the screen.** Content stays, a banner reports the failure and says
+  *when* what you are looking at was actually fetched. The only full-screen error is the one with
+  nothing cached behind it, and it always carries a Retry.
+- **Keyboard**: `Alt+Left` goes back, `Escape` closes an open dialog *before* it navigates, and Tab
+  reaches every primary action with a visible focus treatment (the AARIS look has no ripple, so
+  focus is drawn explicitly).
+- **The window remembers itself** — size, position, maximised state — in `window.json` beside the
+  settings file, clamped on startup to the displays attached *now*. A position saved against a
+  monitor that has since been unplugged is discarded rather than restored off-screen. Nothing
+  transient and nothing secret is persisted. The supported minimum window size is **720×560**;
+  below 900 dp wide the player's up-next panel stacks and the header scrolls rather than clipping.
 
 ## 🔐 Sessions and credentials
 

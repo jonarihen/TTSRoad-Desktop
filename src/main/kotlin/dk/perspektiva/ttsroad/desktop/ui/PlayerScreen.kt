@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,8 +21,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Pause
@@ -59,93 +62,139 @@ val PlayerUiState.hasSession: Boolean
     get() = hasMedia || durationMs > 0 || error != null
 
 @Composable
-fun PlayerScreen(playback: PlaybackController, onBack: () -> Unit) {
+fun PlayerScreen(
+    playback: PlaybackController,
+    sizeClass: WindowSizeClass = WindowSizeClass.Expanded,
+    onBack: () -> Unit,
+) {
     val s: PlayerUiState by playback.state.collectAsState()
+    val compact = sizeClass.isCompact
+    val hasQueue = s.queue.size > 1
+
+    Box(Modifier.fillMaxSize().padding(horizontal = PageGutter, vertical = 20.dp)) {
+        BackLink("Back", onBack)
+        if (compact) {
+            // Narrow: the up-next panel stops being a side panel and becomes a section under the
+            // transport, inside one scroll container. The transport itself never shrinks — clipped
+            // play/skip buttons are the one thing a player must not do.
+            Column(
+                Modifier.fillMaxSize().padding(top = 28.dp).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                PlayerMain(s, playback, compact = true, modifier = Modifier.fillMaxWidth())
+                if (hasQueue) {
+                    Spacer(Modifier.height(20.dp))
+                    QueuePanel(s, playback, Modifier.fillMaxWidth().height(260.dp))
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxSize().padding(top = 28.dp)) {
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    PlayerMain(
+                        s,
+                        playback,
+                        compact = false,
+                        modifier = Modifier.align(Alignment.TopCenter).widthIn(max = NarrowMaxWidth)
+                            .fillMaxWidth().fillMaxHeight(),
+                    )
+                }
+                if (hasQueue) {
+                    Spacer(Modifier.width(24.dp))
+                    QueuePanel(s, playback, Modifier.width(300.dp).fillMaxHeight())
+                }
+            }
+        }
+    }
+}
+
+/** Cover, title, scrubber and transport. Identical controls at every width — only the sizing moves. */
+@Composable
+private fun PlayerMain(
+    s: PlayerUiState,
+    playback: PlaybackController,
+    compact: Boolean,
+    modifier: Modifier,
+) {
     // Track the drag locally and only seek on release — the MP3 backend re-decodes from the
     // start of the file per seek, so seeking on every drag tick would stutter badly.
     var dragMs by remember { mutableStateOf<Float?>(null) }
 
-    Box(Modifier.fillMaxSize().padding(horizontal = PageGutter, vertical = 20.dp)) {
-        BackLink("Back", onBack)
-        Row(Modifier.fillMaxSize().padding(top = 28.dp)) {
-            Box(Modifier.weight(1f).fillMaxHeight()) {
-                Column(
-                    Modifier.align(Alignment.TopCenter).widthIn(max = NarrowMaxWidth).fillMaxWidth().fillMaxHeight(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    MetaText(text = "// Now Playing", color = AarisColor.Accent)
-                    Box(Modifier.weight(1f).padding(vertical = 20.dp), contentAlignment = Alignment.Center) {
-                        CoverImage(s.fictionTitle ?: s.title, s.coverImageUrl, Modifier.height(320.dp).aspectRatio(2f / 3f))
-                    }
-                    Text(
-                        s.title,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = AarisColor.Ink,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    s.fictionTitle?.let {
-                        Spacer(Modifier.height(8.dp))
-                        MetaText(it)
-                    }
-                    Spacer(Modifier.height(20.dp))
-                    Slider(
-                        value = dragMs ?: s.positionMs.coerceAtMost(s.durationMs).toFloat(),
-                        onValueChange = { dragMs = it },
-                        onValueChangeFinished = {
-                            dragMs?.let { playback.seekTo(it.toLong()) }
-                            dragMs = null
-                        },
-                        valueRange = 0f..s.durationMs.coerceAtLeast(1L).toFloat(),
-                        enabled = s.durationMs > 0L,
-                        colors = SliderDefaults.colors(
-                            thumbColor = AarisColor.Accent,
-                            activeTrackColor = AarisColor.Accent,
-                            inactiveTrackColor = AarisColor.Line,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        MetaText(formatDuration(dragMs?.toLong() ?: s.positionMs))
-                        MetaText(formatDuration(s.durationMs))
-                    }
-                    Spacer(Modifier.height(24.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TransportButton(Icons.Default.SkipPrevious, "Previous chapter", enabled = s.hasMedia, size = 48.dp) {
-                            playback.skipToPreviousChapter()
-                        }
-                        TransportButton(Icons.Default.Replay30, "Back 30 seconds", enabled = s.hasMedia, size = 48.dp) {
-                            playback.skipBy(-30_000)
-                        }
-                        TransportButton(
-                            if (s.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            if (s.isPlaying) "Pause" else "Play",
-                            enabled = s.hasMedia,
-                            size = 64.dp,
-                            filled = true,
-                        ) { playback.togglePlayPause() }
-                        TransportButton(Icons.Default.Forward30, "Forward 30 seconds", enabled = s.hasMedia, size = 48.dp) {
-                            playback.skipBy(30_000)
-                        }
-                        TransportButton(Icons.Default.SkipNext, "Next chapter", enabled = s.hasNext, size = 48.dp) {
-                            playback.skipToNextChapter()
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    val error = s.error
-                    when {
-                        error != null -> Text(error, color = MaterialTheme.colorScheme.error)
-                        !s.hasMedia && s.hasSession -> MetaText(text = "Buffering…", color = AarisColor.Dim)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        MetaText(text = "// Now Playing", color = AarisColor.Accent)
+        val cover: @Composable () -> Unit = {
+            CoverImage(
+                s.fictionTitle ?: s.title,
+                s.coverImageUrl,
+                Modifier.height(if (compact) 200.dp else 320.dp).aspectRatio(2f / 3f),
+            )
+        }
+        if (compact) {
+            Box(Modifier.padding(vertical = 20.dp)) { cover() }
+        } else {
+            Box(Modifier.weight(1f).padding(vertical = 20.dp), contentAlignment = Alignment.Center) { cover() }
+        }
+        Text(
+            s.title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = AarisColor.Ink,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        s.fictionTitle?.let {
+            Spacer(Modifier.height(8.dp))
+            MetaText(it)
+        }
+        Spacer(Modifier.height(20.dp))
+        Slider(
+            value = dragMs ?: s.positionMs.coerceAtMost(s.durationMs).toFloat(),
+            onValueChange = { dragMs = it },
+            onValueChangeFinished = {
+                dragMs?.let { playback.seekTo(it.toLong()) }
+                dragMs = null
+            },
+            valueRange = 0f..s.durationMs.coerceAtLeast(1L).toFloat(),
+            enabled = s.durationMs > 0L,
+            colors = SliderDefaults.colors(
+                thumbColor = AarisColor.Accent,
+                activeTrackColor = AarisColor.Accent,
+                inactiveTrackColor = AarisColor.Line,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            MetaText(formatDuration(dragMs?.toLong() ?: s.positionMs))
+            MetaText(formatDuration(s.durationMs))
+        }
+        Spacer(Modifier.height(24.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            TransportButton(Icons.Default.SkipPrevious, "Previous chapter", enabled = s.hasMedia, size = 48.dp) {
+                playback.skipToPreviousChapter()
             }
-            if (s.queue.size > 1) {
-                Spacer(Modifier.width(24.dp))
-                QueuePanel(s, playback, Modifier.width(300.dp).fillMaxHeight())
+            TransportButton(Icons.Default.Replay30, "Back 30 seconds", enabled = s.hasMedia, size = 48.dp) {
+                playback.skipBy(-30_000)
+            }
+            TransportButton(
+                if (s.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                if (s.isPlaying) "Pause" else "Play",
+                enabled = s.hasMedia,
+                size = 64.dp,
+                filled = true,
+            ) { playback.togglePlayPause() }
+            TransportButton(Icons.Default.Forward30, "Forward 30 seconds", enabled = s.hasMedia, size = 48.dp) {
+                playback.skipBy(30_000)
+            }
+            TransportButton(Icons.Default.SkipNext, "Next chapter", enabled = s.hasNext, size = 48.dp) {
+                playback.skipToNextChapter()
             }
         }
+        Spacer(Modifier.height(12.dp))
+        val error = s.error
+        when {
+            error != null -> Text(error, color = MaterialTheme.colorScheme.error)
+            !s.hasMedia && s.hasSession -> MetaText(text = "Buffering…", color = AarisColor.Dim)
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -218,7 +267,11 @@ private fun QueueRow(number: Int, title: String, isCurrent: Boolean, isPlaying: 
  * user browses. Clicking the track info expands to the full player.
  */
 @Composable
-fun NowPlayingBar(playback: PlaybackController, onExpand: () -> Unit) {
+fun NowPlayingBar(
+    playback: PlaybackController,
+    compact: Boolean = false,
+    onExpand: () -> Unit,
+) {
     val s: PlayerUiState by playback.state.collectAsState()
     val fraction = if (s.durationMs > 0) s.positionMs.toFloat() / s.durationMs else 0f
 
@@ -254,9 +307,13 @@ fun NowPlayingBar(playback: PlaybackController, onExpand: () -> Unit) {
                         playback.skipToNextChapter()
                     }
                 }
-                Spacer(Modifier.width(16.dp))
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                    MetaText("${formatDuration(s.positionMs)} / ${formatDuration(s.durationMs)}", color = AarisColor.Dim)
+                // The elapsed/total readout is the first thing to go in a narrow window: it is
+                // already on the player screen, and keeping it here would squeeze the transport.
+                if (!compact) {
+                    Spacer(Modifier.width(16.dp))
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                        MetaText("${formatDuration(s.positionMs)} / ${formatDuration(s.durationMs)}", color = AarisColor.Dim)
+                    }
                 }
             }
         }
@@ -306,24 +363,36 @@ private fun TransportButton(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    // Transport controls are the most likely thing to be driven from the keyboard, so focus has
+    // to be as visible here as hover is with a mouse.
+    val focused by interaction.collectIsFocusedAsState()
+    val active = hovered || focused
     val background = when {
         filled && !enabled -> AarisColor.Line
-        filled && hovered -> AarisColor.AccentHover
+        filled && active -> AarisColor.AccentHover
         filled -> AarisColor.Accent
-        hovered && enabled -> AarisColor.BgHover
+        active && enabled -> AarisColor.BgHover
         else -> Color.Transparent
     }
     val tint = when {
         filled -> AarisColor.Bg
         !enabled -> AarisColor.Dim
-        hovered -> AarisColor.Ink
+        active -> AarisColor.Ink
         else -> AarisColor.Muted
     }
     Box(
         Modifier
             .size(size)
             .background(background)
-            .let { if (filled) it else it.border(1.dp, if (hovered && enabled) AarisColor.Dim else AarisColor.Line) }
+            .border(
+                1.dp,
+                when {
+                    focused && enabled -> AarisColor.Accent
+                    filled -> Color.Transparent
+                    hovered && enabled -> AarisColor.Dim
+                    else -> AarisColor.Line
+                },
+            )
             .hoverable(interaction)
             .let { if (enabled) it.pointerHoverIcon(PointerIcon.Hand) else it }
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick),

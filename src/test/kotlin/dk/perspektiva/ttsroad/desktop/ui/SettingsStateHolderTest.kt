@@ -540,4 +540,58 @@ class SettingsStateHolderTest {
         assertEquals(emptyList(), holder.otherDevices())
         holder.clear()
     }
+
+    // --- The window-level Refresh action ---------------------------------------------------
+
+    @Test
+    fun `Refresh on the account pane re-asks who is signed in, not the device list`() = runTest {
+        val repository = FakeRepository(
+            currentUserResult = Result.success(MobileUser(id = 1, username = "operator", isAdmin = true)),
+            devicesResult = Result.success(listOf(DeviceSession(id = 42, deviceName = "workstation"))),
+        )
+        val holder = holder(repository, InMemorySessionStore(signedIn))
+        holder.verifyAccount()
+        runCurrent()
+
+        holder.refreshCurrentSection()
+        runCurrent()
+
+        assertEquals("operator", holder.state.value.verifiedUser?.username)
+        assertEquals(0, repository.devicesCalls, "F5 on the account pane must not list devices")
+        holder.clear()
+    }
+
+    @Test
+    fun `Refresh on the device pane re-reads the device list`() = runTest {
+        val repository = FakeRepository(
+            devicesResult = Result.success(listOf(DeviceSession(id = 42, deviceName = "workstation"))),
+        )
+        val holder = holder(repository, InMemorySessionStore(signedIn))
+        holder.openSection(SettingsSection.Devices)
+        holder.ensureDevicesLoaded()
+        runCurrent()
+        assertEquals(1, repository.devicesCalls)
+
+        holder.refreshCurrentSection()
+        runCurrent()
+
+        assertEquals(2, repository.devicesCalls)
+        holder.clear()
+    }
+
+    // --- Escape's precedence -----------------------------------------------------------------
+
+    @Test
+    fun `dismissing the top overlay reports whether there actually was one`() = runTest {
+        val holder = holder(FakeRepository(), InMemorySessionStore(signedIn))
+
+        assertFalse(holder.hasOpenOverlay)
+        assertFalse(holder.dismissTopOverlay(), "with nothing open, Escape must fall through to Back")
+
+        holder.askSignOut()
+        assertTrue(holder.hasOpenOverlay)
+        assertTrue(holder.dismissTopOverlay(), "an open dialog swallows the key")
+        assertNull(holder.state.value.confirmation)
+        holder.clear()
+    }
 }
