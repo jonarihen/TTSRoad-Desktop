@@ -191,14 +191,76 @@ private fun PlayerMain(
                 playback.skipToNextChapter()
             }
         }
+        // Drawn only when the backend can honour it. The Java Sound fallback reports it cannot, and
+        // then there is no control at all rather than one that silently does nothing.
+        if (s.canChangeSpeed) {
+            Spacer(Modifier.height(18.dp))
+            SpeedControl(current = s.speed, enabled = s.hasMedia) { playback.setSpeed(it) }
+        }
         Spacer(Modifier.height(12.dp))
         val error = s.error
         when {
-            error != null -> Text(error, color = MaterialTheme.colorScheme.error)
+            error != null -> Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(error, color = MaterialTheme.colorScheme.error)
+                // Only after the automatic 2s/5s/15s attempts are spent — before that the
+                // controller is already retrying and a button would just race it.
+                if (s.canRetry) {
+                    Text(
+                        "Retry",
+                        color = AarisColor.Accent,
+                        modifier = Modifier
+                            .testTag(RetryButtonTestTag)
+                            .clickable { playback.retry() }
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
+
             !s.hasMedia && s.hasSession -> MetaText(text = "Buffering…", color = AarisColor.Dim)
         }
         Spacer(Modifier.height(8.dp))
     }
+}
+
+/** The presets issue #4 names, over the 0.5x-3.0x range the GStreamer backend reports. */
+private val SpeedPresets = listOf(0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f)
+
+const val SpeedChipTestTag = "player-speed-chip"
+const val RetryButtonTestTag = "player-retry"
+
+@Composable
+private fun SpeedControl(current: Float, enabled: Boolean, onSelect: (Float) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        MetaText("Speed", color = AarisColor.Dim)
+        SpeedPresets.forEach { preset ->
+            // Compared with a tolerance, not ==: the value shown is the one the engine accepted,
+            // which can be a clamped float rather than the exact preset that was asked for.
+            val isCurrent = kotlin.math.abs(current - preset) < 0.01f
+            Text(
+                text = formatSpeed(preset),
+                color = when {
+                    !enabled -> AarisColor.Dim
+                    isCurrent -> AarisColor.Accent
+                    else -> AarisColor.Muted
+                },
+                modifier = Modifier
+                    .testTag(SpeedChipTestTag)
+                    .clickable(enabled = enabled) { onSelect(preset) }
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/** "1x", "1.25x" — no trailing zeros, because "1.00x" reads like a measurement. */
+private fun formatSpeed(speed: Float): String {
+    val text = if (speed % 1f == 0f) speed.toInt().toString() else speed.toString().trimEnd('0').trimEnd('.')
+    return "${text}x"
 }
 
 /**

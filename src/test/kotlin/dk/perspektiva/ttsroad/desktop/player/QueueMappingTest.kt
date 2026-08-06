@@ -4,8 +4,6 @@ import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.AudioInfo
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
-import java.io.File
-import javax.sound.sampled.AudioFormat
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -79,21 +77,15 @@ class QueueConstructionTest {
         audio = if (audio) AudioInfo(url = "/audio/x/000$number.mp3") else null,
     )
 
-    private val refusingDownloads = object : AudioDownloadStore {
-        override fun download(url: String): File = throw java.io.IOException("no download in this test")
-        override fun release(file: File?) = Unit
-    }
-
-    private val refusingEngine = object : AudioEngine {
-        override fun decode(file: File) = error("no decoding expected")
-        override fun open(format: AudioFormat): AudioLine = error("no audio device expected")
-    }
-
-    private fun controller() = Mp3PlaybackController(
+    /** Refuses to open anything: every case here stops at metadata publication. */
+    private fun controller() = QueuePlaybackController(
         repository = FakeRepository(),
-        downloads = refusingDownloads,
-        engine = refusingEngine,
+        sources = FakeMediaSourceFactory(failWith = transientFailure("no download in this test")),
+        engine = FakePlaybackEngine(),
         ioDispatcher = UnconfinedTestDispatcher(),
+        // No ladder: these tests assert the published queue, not the recovery behaviour, and a
+        // retry loop would only add virtual-time churn to every one of them.
+        retryDelaysMs = emptyList(),
     )
 
     @Test

@@ -35,6 +35,12 @@ mp3spi = "1.9.5.4"
 jlayer = "1.0.1.4"
 tritonus = "0.3.7.4"
 
+# --- Phase 5 playback-engine prototype (not in the shipped app yet) -------------------------
+# GStreamer bindings evaluated in docs/adr/0002-playback-engine.md. gst1-java-core's POM asks
+# for JNA as the open range [5.2.0,6.0); we pin it so the build stays reproducible.
+gst1JavaCore = "1.4.0"
+jna = "5.19.1"
+
 # --- Test ----------------------------------------------------------------------------------
 junit = "6.1.2"
 
@@ -43,6 +49,9 @@ junit = "6.1.2"
 compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "composeMaterial3" }
 compose-materialIconsExtended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "composeMaterialIcons" }
 compose-uiTestJunit4 = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "composeMultiplatform" }
+# Only the `prototype` source set needs this, and only to satisfy the Compose compiler plugin.
+# Named directly for the same reason material3 is: the `compose.runtime` accessor is deprecated.
+compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "composeMultiplatform" }
 
 # Coroutines — the Swing dispatcher is what Compose Desktop uses for Dispatchers.Main.
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
@@ -62,6 +71,11 @@ moshi-kotlin = { module = "com.squareup.moshi:moshi-kotlin", version.ref = "mosh
 soundlibs-mp3spi = { module = "com.googlecode.soundlibs:mp3spi", version.ref = "mp3spi" }
 soundlibs-jlayer = { module = "com.googlecode.soundlibs:jlayer", version.ref = "jlayer" }
 soundlibs-tritonusShare = { module = "com.googlecode.soundlibs:tritonus-share", version.ref = "tritonus" }
+
+# GStreamer bindings — used ONLY by the `prototype` source set, never by `main`.
+# jna-platform is deliberately absent: gst1-java-core's only compile dependency is `jna`.
+gst1-java-core = { module = "org.freedesktop.gstreamer:gst1-java-core", version.ref = "gst1JavaCore" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 
 # Cover images.
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }

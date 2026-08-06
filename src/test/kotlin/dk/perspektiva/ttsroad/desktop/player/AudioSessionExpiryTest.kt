@@ -9,11 +9,7 @@ import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.SessionEnd
 import dk.perspektiva.ttsroad.desktop.data.SessionEndReason
 import dk.perspektiva.ttsroad.desktop.data.SessionState
-import java.io.ByteArrayInputStream
-import java.io.File
 import java.io.IOException
-import javax.sound.sampled.AudioFormat
-import javax.sound.sampled.AudioInputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -56,24 +52,56 @@ class AudioSessionExpiryTest {
         server.close()
     }
 
-    private fun downloadStore(): HttpAudioDownloadStore {
+    private fun mediaSource(url: String): HttpMediaSource {
         val repository = object : FakeRepository(serverUrl = server.url("/").toString()) {
             override fun authHeaderValue(): String? = sessionStore.current().authorizationHeader
             override fun resolveUrl(url: String): String =
                 if (url.startsWith("http")) url else server.url("/").toString().trimEnd('/') + url
         }
-        return HttpAudioDownloadStore(authedClient(sessionStore), repository)
+        return HttpMediaSource(authedClient(sessionStore), repository, url)
+    }
+
+    /** Opens the source and drains it, which is what an engine does. */
+    private fun readFully(url: String): ByteArray = mediaSource(url).open().use { stream ->
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(4096)
+        while (true) {
+            val n = stream.read(buffer, 0, buffer.size)
+            if (n <= 0) break
+            out.write(buffer, 0, n)
+        }
+        out.toByteArray()
     }
 
     @Test
     fun `the audio request carries the bearer token from the shared interceptor`() {
         server.enqueue(MockResponse(code = 200, body = "fake-mp3-bytes"))
 
-        val file = downloadStore().download("/audio/a-test-serial/0003.mp3")
+        val bytes = readFully("/audio/a-test-serial/0003.mp3")
 
         assertEquals("Bearer ttsr_token", server.takeRequest().headers["Authorization"])
-        assertTrue(file.length() > 0)
-        file.delete()
+        assertTrue(bytes.isNotEmpty())
+    }
+
+    @Test
+    fun `the opening request is ranged, so seekability is known before the user seeks`() {
+        server.enqueue(MockResponse(code = 200, body = "fake-mp3-bytes"))
+
+        readFully("/audio/x.mp3")
+
+        // Asking for bytes=0- costs nothing and is the only way to learn, up front, whether this
+        // server can satisfy a later seek without re-reading the chapter from the start.
+        assertEquals("bytes=0-", server.takeRequest().headers["Range"])
+    }
+
+    @Test
+    fun `a server without range support reports itself unseekable rather than seeking wrongly`() {
+        server.enqueue(MockResponse(code = 200, body = "fake-mp3-bytes"))
+
+        mediaSource("/audio/x.mp3").open().use { stream ->
+            assertFalse(stream.isSeekable, "a 200 is the server declining the range")
+            assertFalse(stream.seek(4), "and seeking must then fail rather than silently restart")
+        }
     }
 
     @Test
@@ -82,7 +110,7 @@ class AudioSessionExpiryTest {
             MockResponse(code = 401, headers = jsonHeaders, body = ServerFixtures.UNAUTHORIZED_TOKEN_REVOKED),
         )
 
-        val failure = runCatching { downloadStore().download("/audio/a-test-serial/0003.mp3") }.exceptionOrNull()
+        val failure = runCatching { readFully("/audio/a-test-serial/0003.mp3") }.exceptionOrNull()
 
         val expiry = assertIsSessionExpired(failure)
         assertEquals(SessionEndReason.Revoked, expiry.sessionEnd.reason)
@@ -93,7 +121,7 @@ class AudioSessionExpiryTest {
     fun `a 500 on audio stays an ordinary IO failure`() {
         server.enqueue(MockResponse(code = 500, body = "boom"))
 
-        val failure = runCatching { downloadStore().download("/audio/x.mp3") }.exceptionOrNull()
+        val failure = runCatching { readFully("/audio/x.mp3") }.exceptionOrNull()
 
         assertTrue(failure is IOException)
         assertFalse(failure is SessionExpiredException, "a broken server is not a revoked credential")
@@ -103,7 +131,7 @@ class AudioSessionExpiryTest {
     fun `signed out, the audio path fails fast without a request`() {
         sessionStore.clearToken()
 
-        val failure = runCatching { downloadStore().download("/audio/x.mp3") }.exceptionOrNull()
+        val failure = runCatching { readFully("/audio/x.mp3") }.exceptionOrNull()
 
         assertTrue(failure is IOException)
         assertEquals(0, server.requestCount)
@@ -111,28 +139,39 @@ class AudioSessionExpiryTest {
 
     // --- and what the player does with it -------------------------------------------------
 
+    private fun controllerFor(repository: FakeRepository, engine: FakePlaybackEngine) =
+        QueuePlaybackController(
+            repository = repository,
+            sources = FakeMediaSourceFactory(),
+            engine = engine,
+            ioDispatcher = Dispatchers.Default,
+            // No ladder: these assert which door a failure goes through, not how long it waits.
+            retryDelaysMs = emptyList(),
+        )
+
+    private val chapter = ChapterSummary(
+        id = 101,
+        fictionId = 7,
+        title = "Chapter 3",
+        audio = AudioInfo(url = "/audio/x.mp3"),
+    )
+
     @Test
     fun `a session expiry during playback stops the player and ends the session`() = runBlocking {
         val repository = FakeRepository()
         val end = SessionEnd(SessionEndReason.Expired, "This device session expired. Sign in again.")
-        val controller = Mp3PlaybackController(
-            repository,
-            object : AudioDownloadStore {
-                override fun download(url: String): File = throw SessionExpiredException(end)
-                override fun release(file: File?) = Unit
-            },
-            SilentAudioEngine(),
-            Dispatchers.Default,
-        )
+        val engine = FakePlaybackEngine().apply { prepareFailure = SessionExpiredException(end) }
+        val controller = controllerFor(repository, engine)
 
-        controller.play(
-            ChapterSummary(id = 101, fictionId = 7, title = "Chapter 3", audio = AudioInfo(url = "/audio/x.mp3")),
-            null,
-        )
+        controller.play(chapter, null)
         withTimeout(15_000) { controller.state.first { it.error != null } }
 
         assertEquals("This device session expired. Sign in again.", controller.state.value.error)
         assertFalse(controller.state.value.isPlaying)
+        assertFalse(
+            controller.state.value.canRetry,
+            "a revoked credential is not something a Retry button can fix",
+        )
         // The repository is what actually drops the token and returns the app to the login screen.
         assertEquals(SessionEndReason.Expired, repository.sessionEnd.value?.reason)
         controller.release()
@@ -141,46 +180,19 @@ class AudioSessionExpiryTest {
     @Test
     fun `an ordinary download failure does not end the session`() = runBlocking {
         val repository = FakeRepository()
-        val controller = Mp3PlaybackController(
-            repository,
-            object : AudioDownloadStore {
-                override fun download(url: String): File = throw IOException("Connection reset")
-                override fun release(file: File?) = Unit
-            },
-            SilentAudioEngine(),
-            Dispatchers.Default,
-        )
+        val engine = FakePlaybackEngine().apply { prepareFailure = IOException("Connection reset") }
+        val controller = controllerFor(repository, engine)
 
-        controller.play(
-            ChapterSummary(id = 101, fictionId = 7, title = "Chapter 3", audio = AudioInfo(url = "/audio/x.mp3")),
-            null,
-        )
+        controller.play(chapter, null)
         withTimeout(15_000) { controller.state.first { it.error != null } }
 
         assertNull(repository.sessionEnd.value, "a dropped connection must not sign the user out")
+        assertTrue(controller.state.value.canRetry, "but it is worth offering another attempt")
         controller.release()
     }
 
     private fun assertIsSessionExpired(failure: Throwable?): SessionExpiredException {
         assertTrue(failure is SessionExpiredException, "expected a session expiry, got $failure")
         return failure
-    }
-
-    /** An engine that never opens a device; the failure paths above never reach it anyway. */
-    private class SilentAudioEngine : AudioEngine {
-        private val format = AudioFormat(AudioFormat.Encoding.PCM_SIGNED, 44_100f, 16, 2, 4, 44_100f, false)
-
-        override fun decode(file: File): AudioInputStream =
-            AudioInputStream(ByteArrayInputStream(ByteArray(0)), format, 0)
-
-        override fun open(format: AudioFormat): AudioLine = object : AudioLine {
-            override val isRunning: Boolean get() = false
-            override fun start() = Unit
-            override fun stop() = Unit
-            override fun flush() = Unit
-            override fun drain() = Unit
-            override fun write(buffer: ByteArray, offset: Int, length: Int): Int = length
-            override fun close() = Unit
-        }
     }
 }

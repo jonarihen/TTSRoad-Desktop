@@ -42,9 +42,15 @@ dependencies {
     implementation(libs.moshi)
     implementation(libs.moshi.kotlin)
 
-    // Pure-JVM MP3 decoding, registered as a javax.sound.sampled SPI so chapter audio
-    // (downloaded with the bearer auth header attached) can be played via SourceDataLine
-    // without an external native player like VLC.
+    // The production playback backend (docs/adr/0002-playback-engine.md). GStreamer itself is a
+    // system package, not a bundled one — these are only the bindings, and JNA is pinned here
+    // because gst1-java-core's POM asks for the open range [5.2.0,6.0).
+    implementation(libs.gst1.java.core)
+    implementation(libs.jna)
+
+    // Pure-JVM MP3 decoding, registered as a javax.sound.sampled SPI. Retained as the fallback
+    // engine on machines without GStreamer — Windows and macOS by default — where it keeps the
+    // behaviour it has always had, speed control included (i.e. none).
     implementation(libs.soundlibs.mp3spi)
     implementation(libs.soundlibs.jlayer)
     implementation(libs.soundlibs.tritonusShare)
@@ -158,6 +164,45 @@ tasks.test {
     systemProperty("java.awt.headless", "false")
     jvmArgs(nativeAccessArgs)
 }
+
+/*
+ * Phase 5 playback-engine prototype — see docs/adr/0002-playback-engine.md.
+ *
+ * It gets its own source set on purpose. `main` never sees gst1-java-core, so the shipped app and
+ * its jlink image are untouched by an evaluation that has not been accepted yet, and production
+ * code cannot import the prototype by accident.
+ *
+ * `check` *compiles* it so it cannot silently rot, but never runs it: running needs a real
+ * GStreamer install, which CI does not have. Run it by hand on a machine that does:
+ *
+ *     ./gradlew runPlaybackPrototype
+ */
+val prototype: SourceSet = sourceSets.create("prototype")
+
+dependencies {
+    "prototypeImplementation"(libs.gst1.java.core)
+    "prototypeImplementation"(libs.jna)
+    // The Compose compiler plugin is applied to every Kotlin compilation in the project and
+    // refuses to run without the Compose runtime on the compile classpath — even here, where there
+    // is no UI at all. compileOnly satisfies it without putting Compose in the prototype's runtime
+    // classpath or implying this code draws anything.
+    "prototypeCompileOnly"(libs.compose.runtime)
+}
+
+tasks.register<JavaExec>("runPlaybackPrototype") {
+    group = "verification"
+    description = "Measures rate/pitch, time-to-first-audio and seek latency through GStreamer."
+    classpath = prototype.runtimeClasspath
+    mainClass.set("dk.perspektiva.ttsroad.desktop.prototype.GstPlaybackPrototypeKt")
+    // gst1-java-core reaches native code through JNA's System.load — the same restricted-method
+    // problem Skiko and the Windows credential store already have, so the same declaration.
+    jvmArgs(nativeAccessArgs)
+    javaLauncher.set(
+        javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(jdkVersion)) },
+    )
+}
+
+tasks.named("check") { dependsOn(tasks.named("compilePrototypeKotlin")) }
 
 // jlink/jpackage default to the JVM that is *running Gradle*, not to the Kotlin toolchain, so
 // without this the bundled runtime image is a JDK 21 that cannot load our class-file-69 output
