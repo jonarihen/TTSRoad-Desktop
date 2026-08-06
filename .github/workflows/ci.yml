@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Verifies gradle-wrapper.jar against the checksums Gradle publishes, before it is executed.
       - name: Validate the Gradle wrapper
