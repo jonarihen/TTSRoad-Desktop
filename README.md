@@ -37,6 +37,11 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Remembered window size, position and maximised state | ✅ |
 | Async cover images (cached) | ✅ |
 | Dedicated fiction-detail screen | ✅ |
+| Chapter list — All/Unplayed/Ready filter, oldest/newest sort, visible counts | ✅ |
+| Highlight + auto-scroll to the playing chapter, "Jump to current" | ✅ |
+| Bulk marks — all played / all unplayed / all previous, in one request | ✅ |
+| Optimistic marking with rollback and an inline error | ✅ |
+| Searchable up-next panel for long queues | ✅ |
 | Player UI (play/pause, seek, ±30 s, next/previous, up-next queue) | ✅ |
 | **MP3 audio playback** | ✅ |
 | Settings — two-pane control centre (account, devices, about) | ✅ |
@@ -77,6 +82,8 @@ Device-session management, the two-pane Settings screen and how an older server 
 [`docs/adr/0003-device-sessions-and-settings.md`](docs/adr/0003-device-sessions-and-settings.md).
 The back stack, the repository-backed cache, lazy lists and the adaptive breakpoints are in
 [`docs/adr/0004-stateful-adaptive-navigation.md`](docs/adr/0004-stateful-adaptive-navigation.md).
+Chapter filtering and ordering, bulk marking, optimistic rollback and current-chapter resolution are in
+[`docs/adr/0005-chapter-browsing-and-bulk-controls.md`](docs/adr/0005-chapter-browsing-and-bulk-controls.md).
 
 ## 🚀 Bootstrap
 
@@ -151,7 +158,7 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── Models.kt                 mobile API models (Moshi)
 │   ├── Cached.kt                 value + error + isRefreshing + last success, independently
 │   ├── LibraryCache.kt           library/chapter state held above the screens
-│   ├── ChapterLists.kt           filters, identity-preserving played patch, lazy keys
+│   ├── ChapterLists.kt           filter/sort, bulk id selection, status, played patch + rollback
 │   ├── WindowPreferences.kt      persisted placement + clamping to attached displays
 │   ├── TtsRoadApi.kt             Retrofit interface
 │   ├── Repository.kt             TtsRoadRepository (interface) + RetrofitTtsRoadRepository
@@ -178,7 +185,7 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
     ├── LoginStateHolder.kt       login submit + result mapping
     ├── SettingsStateHolder.kt    settings panes, device sessions, confirmations
     ├── LibraryScreen.kt          LazyVerticalGrid: hero, shelves, search, fictions
-    ├── FictionDetailScreen.kt    LazyColumn: header, filter, chapters
+    ├── FictionDetailScreen.kt    LazyColumn: one header item, then chapter rows + bulk controls
     ├── SettingsScreen.kt         two-pane control centre
     └── PlayerScreen.kt           full player + NowPlayingBar (stacked when narrow)
 
@@ -219,9 +226,10 @@ Browsing is a real back stack over destinations (Library, Fiction, Player, Reade
 Devices) with stable keys. Re-opening a destination that is already open **pops back to it** rather
 than stacking a second copy, so Fiction ↔ Player loops stay bounded.
 
-- **Nothing is rebuilt on the way back.** Search text, the chapter filter and scroll offsets are
-  filed under the destination's key and handed back on the next visit; library and chapter data live
-  in a `LibraryCache` above the screens, so Library → Fiction → Back costs zero requests.
+- **Nothing is rebuilt on the way back.** Search text and scroll offsets are filed under the
+  destination's key and handed back on the next visit; library and chapter data — and each
+  fiction's chosen filter and sort — live in a `LibraryCache` above the screens, so
+  Library → Fiction → Back costs zero requests and re-opening a serial keeps how you were reading it.
 - **Refresh is explicit**: a header button, `F5`, and `Ctrl+R` (`Cmd+R` on macOS). Duplicate
   requests are coalesced and a superseded load is cancelled before it can publish a stale answer.
 - **A failed refresh never blanks the screen.** Content stays, a banner reports the failure and says
@@ -235,6 +243,37 @@ than stacking a second copy, so Fiction ↔ Player loops stay bounded.
   monitor that has since been unplugged is discarded rather than restored off-screen. Nothing
   transient and nothing secret is persisted. The supported minimum window size is **720×560**;
   below 900 dp wide the player's up-next panel stacks and the header scrolls rather than clipping.
+
+## 📖 Browsing a long serial
+
+A 1,000-chapter fiction composes roughly twenty rows — the ones on screen — and still roughly
+twenty after scrolling to chapter 900. Everything above the rows is a single lazy item, which is
+what makes "scroll to the chapter that is playing" arithmetic rather than a guess.
+
+- **Filter and sort** are All / Unplayed / Ready and oldest / newest, with a visible
+  "*n* of *m*" count while filtered. *Ready* means the chapter has an audio object the player can
+  actually open — not the `playable` flag and not `status == "done"`.
+- **Sorting is a view.** The queue is always built in reading order, so flipping the list to
+  newest-first never makes the serial play backwards, and "mark all previous" means the same thing
+  whichever way the list is facing.
+- **The playing chapter** is highlighted, opening the fiction lands on it, and "Jump to current"
+  appears once you scroll away. A queue belonging to a different serial highlights nothing here.
+- **Marking is optimistic and atomic.** One `playback/mark` request carries the whole id set —
+  forty chapters is one request, not forty — the rows move in the frame you click, and a failure
+  restores each row's *exact* previous position rather than un-marking it. (Un-marking would zero
+  out real progress on a chapter that was already finished.) Ids the server silently drops are
+  rolled back on their own.
+- **Non-playable chapters** are legible (`Converting 41%`, `Failed`, `Queued`, `Excluded`) and
+  never queued. The server's own `error_message` is deliberately not shown — it carries paths and
+  stack fragments a listener cannot act on.
+- **Every row action is keyboard-reachable**: play, mark played/unplayed, mark all previous, and
+  read-along are always in the semantics tree with a content description, and merely dim when the
+  row is not hovered or focused.
+- **Read-along** appears only when the server reports the `readalong` capability *and* the chapter
+  has timings. It currently navigates to the reader placeholder; the reader itself lands in a later
+  phase.
+- The **up-next panel** grows a search box once a queue passes eight chapters. Filtering it never
+  reorders or renumbers anything.
 
 ## 🔐 Sessions and credentials
 

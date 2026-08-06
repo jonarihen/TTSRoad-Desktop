@@ -229,6 +229,14 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     repository = repository,
                                     playback = playback,
                                     onBack = { nav.back() },
+                                    // Offered only for chapters the *server* holds timings for, so
+                                    // the row action cannot appear on a chapter the reader could
+                                    // never open.
+                                    onOpenReader = { chapter ->
+                                        nav.open(
+                                            Destination.Reader(chapter.resolvedChapterId, chapter.resolvedTitle),
+                                        )
+                                    },
                                 )
 
                                 Destination.Player -> PlayerScreen(

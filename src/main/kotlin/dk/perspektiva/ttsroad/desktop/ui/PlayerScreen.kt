@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -43,6 +44,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -198,9 +201,42 @@ private fun PlayerMain(
     }
 }
 
-/** Up-next side panel: the loaded fiction's chapters, with the current one highlighted. */
+/**
+ * Queue length at which the up-next panel grows a search box.
+ *
+ * A serial with a few chapters is faster to scan than to type into; one with four hundred is not,
+ * and scrolling a lazy list looking for "Chapter 217" is exactly the case this phase exists to fix.
+ */
+const val QueueSearchThreshold: Int = 8
+
+/** Test handle for an up-next row, so a search box holding the same text is not mistaken for one. */
+const val QueueRowTestTag: String = "queueRow"
+
+/**
+ * Up-next side panel: the loaded queue, with the current chapter highlighted.
+ *
+ * Rows are labelled with the chapter's own number where the server supplied one, not with the queue
+ * position — the queue holds only playable chapters, so the two diverge the moment one chapter in
+ * the middle is still converting. Filtering narrows what is listed; it never renumbers or reorders
+ * anything, and clicking a filtered row still jumps to that row's real position in the queue.
+ */
 @Composable
 private fun QueuePanel(s: PlayerUiState, playback: PlaybackController, modifier: Modifier) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val searchable = s.queue.size >= QueueSearchThreshold
+    val rows = remember(s.queue, query, searchable) {
+        if (!searchable) {
+            s.queue.withIndex().toList()
+        } else {
+            val q = query.trim()
+            if (q.isBlank()) {
+                s.queue.withIndex().toList()
+            } else {
+                s.queue.withIndex().filter { (_, item) -> item.title.contains(q, ignoreCase = true) }
+            }
+        }
+    }
+
     Column(modifier.border(1.dp, AarisColor.Line).background(AarisColor.BgRaise)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -210,11 +246,26 @@ private fun QueuePanel(s: PlayerUiState, playback: PlaybackController, modifier:
             MetaText("// Up next", color = AarisColor.Accent)
             MetaText("${s.currentIndex + 1}/${s.queue.size}", color = AarisColor.Dim)
         }
+        if (searchable) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("FIND A CHAPTER") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp),
+            )
+        }
         HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+        if (rows.isEmpty()) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                MetaText("No matches for \"$query\"", color = AarisColor.Dim)
+            }
+            return@Column
+        }
         LazyColumn(Modifier.weight(1f)) {
-            itemsIndexed(s.queue, key = { index, item -> "${item.chapterId}-$index" }) { index, item ->
+            itemsIndexed(rows, key = { _, (index, item) -> "${item.chapterId}-$index" }) { _, (index, item) ->
                 QueueRow(
-                    number = index + 1,
+                    label = item.displayNumber?.let(::queueNumberLabel) ?: "%02d".format(index + 1),
                     title = item.title,
                     isCurrent = index == s.currentIndex,
                     isPlaying = s.isPlaying,
@@ -225,12 +276,18 @@ private fun QueuePanel(s: PlayerUiState, playback: PlaybackController, modifier:
     }
 }
 
+private fun queueNumberLabel(number: Double): String =
+    if (number % 1.0 == 0.0) "%02d".format(number.toLong()) else number.toString()
+
 @Composable
-private fun QueueRow(number: Int, title: String, isCurrent: Boolean, isPlaying: Boolean, onClick: () -> Unit) {
+private fun QueueRow(label: String, title: String, isCurrent: Boolean, isPlaying: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
+    val pointerOver by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    val hovered = pointerOver || focused
     Row(
         Modifier
+            .testTag(QueueRowTestTag)
             .fillMaxWidth()
             .hoverable(interaction)
             .pointerHoverIcon(PointerIcon.Hand)
@@ -242,10 +299,11 @@ private fun QueueRow(number: Int, title: String, isCurrent: Boolean, isPlaying: 
                     else -> Color.Transparent
                 },
             )
+            .border(1.dp, if (focused) AarisColor.Accent else Color.Transparent)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        MetaText("%02d".format(number), color = if (isCurrent) AarisColor.Accent else AarisColor.Dim)
+        MetaText(label, color = if (isCurrent) AarisColor.Accent else AarisColor.Dim)
         Spacer(Modifier.width(12.dp))
         Text(
             title,
