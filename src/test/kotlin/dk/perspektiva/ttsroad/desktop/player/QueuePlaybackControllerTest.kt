@@ -57,6 +57,23 @@ class QueuePlaybackControllerTest {
         fail("timed out waiting for: $description; last state was ${state.value}")
     }
 
+    /**
+     * Waits on something that is *not* published through [PlaybackController.state].
+     *
+     * `state.first { }` cannot do this job: a StateFlow conflates equal values, so once the player
+     * has settled it stops emitting and a predicate over the repository is never re-evaluated. The
+     * saves below are also launched asynchronously, so asserting on them straight after the call
+     * that triggers them is a race either way.
+     */
+    private suspend fun awaitCondition(description: String, timeoutMs: Long = 15_000, predicate: () -> Boolean) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        while (System.nanoTime() < deadline) {
+            if (predicate()) return
+            kotlinx.coroutines.delay(10)
+        }
+        fail("timed out waiting for: $description")
+    }
+
     private fun finished(state: PlayerUiState) = state.hasMedia && !state.isPlaying && state.error == null
 
     @Test
@@ -280,10 +297,9 @@ class QueuePlaybackControllerTest {
         controller.togglePlayPause()
         controller.await("the pause to land") { !it.isPlaying }
 
-        assertTrue(
-            repository.savedProgress.any { it.first == 101 && it.second == 42.0 && !it.third },
-            "expected a save on pause; got ${repository.savedProgress}",
-        )
+        awaitCondition("a save on pause at the reported position") {
+            repository.savedProgress.any { it.first == 101 && it.second == 42.0 && !it.third }
+        }
         controller.release()
     }
 
@@ -303,10 +319,9 @@ class QueuePlaybackControllerTest {
         controller.togglePlayPause()
         controller.await("the pause to land") { !it.isPlaying }
 
-        assertTrue(
-            repository.savedProgress.any { it.first == 101 && it.third },
-            "expected an is_played save; got ${repository.savedProgress}",
-        )
+        awaitCondition("an is_played save without a byte-perfect end of stream") {
+            repository.savedProgress.any { it.first == 101 && it.third }
+        }
         controller.release()
     }
 
@@ -323,7 +338,7 @@ class QueuePlaybackControllerTest {
         controller.seekTo(120_000)
 
         assertEquals(listOf(120_000L), engine.seeks.toList())
-        controller.await("the seek to be saved") {
+        awaitCondition("the seek to be saved") {
             repository.savedProgress.any { saved -> saved.first == 101 && saved.second == 120.0 }
         }
         controller.release()

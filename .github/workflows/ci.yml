@@ -51,8 +51,29 @@ jobs:
       - name: Set up Gradle (with dependency + build caching)
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Install Xvfb
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+      # Xvfb: Skiko needs a display even for off-screen rendering.
+      #
+      # GStreamer: the production playback backend (docs/adr/0002-playback-engine.md). The runner
+      # image already carries GStreamer's *core* library but none of its plugins, which is the
+      # worst of both worlds — `Gst.init` succeeds, then every element lookup fails. Installing the
+      # plugins the pipeline actually names means GstPlaybackEngineIntegrationTest runs here
+      # instead of skipping, so the real engine has CI coverage rather than none. These are also
+      # exactly the packages the .deb will declare in phase 9 (#3).
+      - name: Install Xvfb and GStreamer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good
+
+      # Fails the build if the pipeline's elements are missing, rather than letting the integration
+      # test quietly skip and report green.
+      - name: Verify the GStreamer elements the engine needs
+        run: |
+          for element in appsrc decodebin audioconvert scaletempo audioresample fakesink; do
+            gst-inspect-1.0 "$element" > /dev/null || { echo "missing GStreamer element: $element"; exit 1; }
+          done
 
       # Compiles main + test, runs the JUnit 5 unit tests AND the Compose desktop UI tests.
       # Skiko needs a display even for off-screen rendering, hence Xvfb.
