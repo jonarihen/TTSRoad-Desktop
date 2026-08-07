@@ -1,0 +1,172 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A Compose for Desktop (JVM, Skia-rendered) client for the private TTSRoad audiobook server. Single
+Gradle module, Kotlin only, package root `dk.perspektiva.ttsroad.desktop`. It talks to the same
+`/api/mobile/*` endpoints as the Android client.
+
+## Commands
+
+```bash
+./gradlew clean check          # compile + unit tests + Compose UI tests + compile the prototype
+./gradlew run                  # run from source
+./gradlew createDistributable  # app image with a bundled JDK 25 runtime
+./gradlew packageDistributionForCurrentOS   # .msi / .dmg / .deb
+
+# Prove the packaged image starts (renders a frame, exits 0):
+./build/compose/binaries/main/app/TTSRoad/bin/TTSRoad --smoke-test
+```
+
+Single test class or method — the `test` task uses the JUnit Platform:
+
+```bash
+./gradlew test --tests 'dk.perspektiva.ttsroad.desktop.data.ServerUrlsTest'
+./gradlew test --tests '*.QueuePlaybackControllerTest.auto advances*'
+```
+
+**Tests need a display.** `tasks.test` sets `java.awt.headless=false` because Skiko renders through
+AWT even off-screen. Locally they use your desktop; headless, prefix with `xvfb-run -a`.
+
+Reproduce a CI failure locally — CI adds two gates that local builds do not have:
+
+```bash
+./gradlew --no-daemon clean check --warning-mode fail -Pttsroad.warningsAsErrors=true
+```
+
+You do **not** need JDK 25 installed; the foojay resolver in `settings.gradle.kts` provisions the
+toolchain. Any JDK 17+ on `PATH` bootstraps the wrapper.
+
+## Architecture
+
+### One composition root
+
+`di/AppContainer.kt` is the only place that constructs a repository, session store, credential
+store, HTTP client, playback engine or playback controller. Every collaborator is a constructor
+parameter with a production default, so a test builds a fully substituted container in one
+expression. Do not construct these types anywhere else — the ordering in that file (credential
+store → session store → HTTP client's auth interceptor) is what makes "one place attaches the
+bearer token" true.
+
+`AppDispatchers` passes dispatchers as data rather than touching global `Dispatchers`;
+`Dispatchers.Main` is the Swing/AWT queue and is resolved lazily because it throws on a
+non-UI-capable JVM.
+
+### One HTTP client, one interceptor
+
+A single `OkHttpClient` serves API calls, chapter audio and Coil cover images.
+`data/AuthInterceptor.kt` attaches the bearer token **only when scheme, host and port match the
+signed-in server** — that same-origin rule is the thing that stops an absolute audio or cover URL
+elsewhere from leaking the credential. Server discovery opts out explicitly. Any new outbound call
+should go through this client rather than building its own.
+
+A `401` on any authenticated request (including `/audio/…`) is a session end: drop the credential,
+stop playback, clear capabilities, return to login. A 5xx, a timeout or a dropped connection is
+explicitly *not* — an outage is not a revocation. `data/SessionEnd.kt` holds the structured reasons.
+
+### Playback: two layers, split so the interesting half needs no sound card
+
+- `player/PlaybackEngine.kt` — the backend seam. One chapter at a time: decode, clock, output
+  device. `GstPlaybackEngine` (GStreamer via gst1-java-core) in production,
+  `JavaSoundPlaybackEngine` (mp3spi/JLayer → `SourceDataLine`) where GStreamer is absent, selected
+  by `GstPlaybackEngine.createOrNull() ?: JavaSoundPlaybackEngine()` in the container.
+- `player/QueuePlaybackController.kt` — queue, auto-advance, progress saving, retry ladder, session
+  expiry. All of it unit-tested against a fake engine.
+
+Two invariants worth preserving:
+
+- **Capabilities gate the UI.** Each engine reports `EngineCapabilities`; the speed control is drawn
+  only when the backend can honour it. The predecessor API accepted a speed number that no backend
+  acted on — don't reintroduce a control the engine ignores.
+- **Failures are typed.** `PlaybackFailure` is `SessionExpired` / `Transient` / `Fatal`, and the
+  three are handled differently: end the session, retry on a timer, don't retry. Engine events go
+  through a synchronous listener rather than a hot flow, so a failure raised inside `prepare` cannot
+  be lost before a collector starts.
+
+Chapter MP3s are bearer-protected and pushed *into* GStreamer (`appsrc`) rather than fetched by it,
+via `HttpMediaSource` on the shared client — that is how the auth interceptor and its origin rule
+apply to audio.
+
+### Navigation and state
+
+`nav/AppNavigation.kt` is a real back stack of `Destination` values. `Destination.key` is stable
+identity: re-opening an already-open destination **pops back to it** instead of stacking a copy, and
+retained per-destination UI state (search text, scroll offset) is filed under that key. A destination
+carries arguments only, never screen state.
+
+- `ui/StateHolder.kt` — the desktop equivalent of a ViewModel. It owns a scope cancelled exactly
+  once via `RememberObserver` (which also covers abandoned compositions, where effects never run).
+  New screen logic belongs in a holder, driven from plain `runTest`, not in `rememberCoroutineScope`.
+- `data/LibraryCache.kt` lives in the container, above the screens, so Library → Fiction → Back
+  costs zero requests. `data/Cached.kt` tracks value, error, `isRefreshing` and last-success time
+  independently — which is why a failed refresh shows a banner over retained content instead of
+  blanking the screen. Full-screen errors are only for the nothing-cached case, and always carry a
+  Retry.
+- `data/ChapterLists.kt` holds filter/sort, bulk id selection and the optimistic played patch.
+  Sorting is a *view*: the queue is always built in reading order. Marking is optimistic and atomic
+  (one `playback/mark` request for the whole id set), and rollback restores each row's exact previous
+  position rather than un-marking it — un-marking would zero real progress.
+
+### Credentials
+
+The token lives in the OS credential store only (`security/`): Windows Credential Manager via
+`java.lang.foreign`, macOS Keychain and freedesktop Secret Service via CLI with the secret on
+**stdin**, never `argv`. Where no keyring exists the session is memory-only and the UI says so.
+There is deliberately no file-based fallback — encrypting with a key stored beside the ciphertext is
+plaintext with extra steps. `session.json` holds non-secret hints plus the keyring entry id, written
+atomically and owner-only.
+
+### Server capability discovery
+
+`GET /api/mobile/capabilities` is unauthenticated and additive. Only a literal JSON `true` enables a
+feature; unknown keys are ignored; `404` means baseline and is cached; a transient failure keeps the
+last known answer rather than downgrading; `api_version` is never a proxy for a feature.
+
+## Repo conventions
+
+- **One version number**: `ttsroad.version` in `gradle.properties`. It feeds the Gradle coordinate,
+  jpackage's `packageVersion`/installer filenames, and the generated `BuildInfo.kt` the About text
+  and window title render. Never add a second constant. jpackage rejects MAJOR `0`.
+- **`BuildInfo.kt` is generated** by the `generateBuildInfo` task into `build/generated/` — don't
+  edit or commit it.
+- **Version catalog**: all dependency and toolchain versions live in `gradle/libs.versions.toml`,
+  including `jdk`. Compose Material 3 and the extended icons are versioned independently of the CMP
+  version on purpose (see ADR 0001).
+- **`src/prototype/`** is a separate source set that `main` never sees, so an unaccepted evaluation
+  can't reach the shipped app or its jlink image. `check` compiles it; running it needs a real
+  GStreamer install: `./gradlew runPlaybackPrototype`.
+- **jlink module list** in `build.gradle.kts` (`java.desktop`, `java.naming`, `jdk.crypto.ec`, …) is
+  load-bearing — module inference misses these, and dropping one breaks the packaged app at runtime
+  rather than at build time. The `--smoke-test` launch is what catches it.
+- **`--enable-native-access=ALL-UNNAMED`** is applied to run, test and the packaged app; Skiko,
+  the Windows credential store and JNA all use restricted methods on JDK 25.
+
+## Tests
+
+JUnit 5 (plus Vintage, because Compose UI tests use the JUnit 4 `createComposeRule()` API).
+`ServerFixtures.kt` carries real server-1.4.0 payloads including unknown additive fields;
+`Fakes.kt` / `player/PlayerFakes.kt` carry the fake repository, playback controller, keyring and
+command runner. Prefer these over new ad-hoc doubles.
+
+`GstPlaybackEngineIntegrationTest` runs the real engine against a real GStreamer install using
+`fakesink`, so it needs GStreamer but not a sound card. It **skips** where GStreamer is absent —
+that is a supported configuration, not a broken one. CI installs
+`gstreamer1.0-plugins-base`/`-good` and fails the build if a named element is missing, so the test
+can't quietly skip its way to green.
+
+## Decisions live in ADRs
+
+`docs/adr/` records the reasoning and rejected alternatives behind the build baseline (0001),
+credential storage and capability discovery (0002), the playback engine (0002-playback-engine),
+device sessions and Settings (0003), navigation (0004), and chapter browsing (0005). Read the
+relevant one before changing any of the invariants above — they exist because the alternative was
+tried or measured.
+
+## CI
+
+`.github/workflows/ci.yml` runs on PRs and `master`: wrapper checksum validation, `clean check`
+under Xvfb, a configuration-only re-run for build-script deprecations, `createDistributable`, and
+the headless `--smoke-test` of the packaged image. Note it has **no base-branch filter** on purpose —
+roadmap phases land as stacked PRs whose base is the preceding phase branch, not `master`.
