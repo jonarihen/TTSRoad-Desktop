@@ -318,16 +318,31 @@ class GstPlaybackEngine private constructor(
          * exception, so this catches [Throwable]. Letting that propagate would turn "no GStreamer
          * installed" into "the app does not start".
          */
-        fun createOrNull(sinkElement: String = "autoaudiosink"): GstPlaybackEngine? {
-            if (!ensureInitialised()) return null
-            val missing = (REQUIRED_ELEMENTS + sinkElement).filter { ElementFactory.find(it) == null }
-            if (missing.isNotEmpty()) return null
-            return runCatching { GstPlaybackEngine(sinkElement) }.getOrNull()
-        }
+        fun createOrNull(sinkElement: String = "autoaudiosink"): GstPlaybackEngine? = runCatching {
+            if (!ensureInitialised()) return@runCatching null
+            if (!hasEveryElement(REQUIRED_ELEMENTS + sinkElement)) return@runCatching null
+            GstPlaybackEngine(sinkElement)
+        }.getOrNull()
 
         /** Whether this machine can run the GStreamer backend at all. */
-        fun isAvailable(): Boolean =
-            ensureInitialised() && REQUIRED_ELEMENTS.all { ElementFactory.find(it) != null }
+        fun isAvailable(): Boolean = runCatching {
+            ensureInitialised() && hasEveryElement(REQUIRED_ELEMENTS)
+        }.getOrDefault(false)
+
+        /**
+         * Whether every named element can be created here.
+         *
+         * `ElementFactory.find` **throws** `IllegalArgumentException` for an element that does not
+         * exist rather than returning null, so a bare null check is not a check at all. That is not
+         * hypothetical: a GitHub Ubuntu runner carries GStreamer's core library — enough for
+         * `Gst.init` to succeed — but none of its plugins, and the resulting
+         * "No such Gstreamer factory: appsrc" turned every UI test red. The whole point of this
+         * class being fallible is that a machine without GStreamer falls back to
+         * [JavaSoundPlaybackEngine]; a probe that throws defeats it.
+         */
+        private fun hasEveryElement(names: List<String>): Boolean = names.all { name ->
+            runCatching { ElementFactory.find(name) != null }.getOrDefault(false)
+        }
 
         @Synchronized
         private fun ensureInitialised(): Boolean {
