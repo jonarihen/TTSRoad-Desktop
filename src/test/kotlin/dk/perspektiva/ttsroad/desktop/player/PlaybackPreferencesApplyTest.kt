@@ -377,6 +377,44 @@ class PlaybackPreferencesApplyTest {
     }
 
     @Test
+    fun `switching to another fiction records the chapter being left, not one from the new queue`() =
+        runBlocking {
+            // playQueue replaces the queue before begin() runs, so anything that reads
+            // queue[queueIndex] afterwards is describing the *new* queue with the *old* index —
+            // which is a different chapter, or none at all when the new queue is shorter.
+            val engine = FakePlaybackEngine()
+            val history = InMemoryPlaybackHistoryStore()
+            val playback = controller(engine, history = history)
+
+            // Start deep enough into the first serial that the old index does not exist in the new
+            // queue: index 2 here, and the serial we switch to has a single chapter.
+            playback.playQueue(
+                listOf(chapter(1), chapter(2), chapter(3)),
+                startChapterId = 3,
+                fiction = null,
+            )
+            playback.await("the third chapter to load") { it.hasMedia }
+            engine.setDuration(600_000)
+            engine.setPosition(90_000)
+            awaitCondition("a position") { playback.state.value.positionMs > 0 }
+
+            playback.play(chapter(99), fiction = null)
+            playback.await("the new chapter to load") { it.queue.singleOrNull()?.chapterId == 99 }
+
+            val left = history.history.value.firstOrNull { it.chapterId == 3 }
+            assertTrue(
+                left != null,
+                "the chapter being left was never recorded; history was ${history.history.value}",
+            )
+            assertEquals(90.0, left.positionSeconds, 0.001)
+            // And the position must not have been filed against the chapter we switched *to*.
+            assertTrue(
+                history.history.value.none { it.chapterId == 99 && it.positionSeconds > 0 },
+                "the old position was recorded against the new chapter",
+            )
+        }
+
+    @Test
     fun `nothing is recorded when nothing has loaded`() = runBlocking {
         val history = InMemoryPlaybackHistoryStore()
         val playback = controller(FakePlaybackEngine(), history = history)

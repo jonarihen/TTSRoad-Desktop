@@ -153,9 +153,12 @@ class QueuePlaybackController(
                 .copy(error = "This chapter has no audio yet")
             return
         }
+        // Before the queue changes, not after: `leaveCurrentChapter` reads queue[queueIndex], and
+        // once the new queue is in place that index names a different chapter — or nothing at all.
+        leaveCurrentChapter()
         queue = listOf(chapter)
         queueFiction = fiction
-        begin(0, resumeMsOf(chapter))
+        begin(0, resumeMsOf(chapter), leaveCurrent = false)
     }
 
     override suspend fun playQueue(
@@ -170,10 +173,13 @@ class QueuePlaybackController(
             _state.update { it.copy(error = "No playable chapters yet") }
             return
         }
+        // See `play`: the chapter being left has to be recorded while it is still the one the queue
+        // and the index point at.
+        leaveCurrentChapter()
         queue = playable
         queueFiction = fiction
         val startIndex = playable.indexOfFirst { it.resolvedChapterId == startChapterId }.coerceAtLeast(0)
-        begin(startIndex, resumeMsOf(playable[startIndex]))
+        begin(startIndex, resumeMsOf(playable[startIndex]), leaveCurrent = false)
     }
 
     override fun togglePlayPause() {
@@ -310,11 +316,29 @@ class QueuePlaybackController(
      * One job owns a chapter from prepare to end-of-stream, including its retries, so cancelling
      * it is all that is needed to abandon everything in flight.
      */
-    private suspend fun begin(startIndex: Int, startMs: Long) {
+    /**
+     * Stops the current chapter and files what the listener had reached.
+     *
+     * Must be called while `queue` and `queueIndex` still describe the chapter being left. A caller
+     * that is about to *replace* the queue has to do this first and pass `leaveCurrent = false` to
+     * [begin] — otherwise the save and the snapshot are attributed to whatever chapter now happens
+     * to sit at the old index, which is a different chapter or none.
+     */
+    private suspend fun leaveCurrentChapter() {
         playJob?.cancelAndJoin()
+        playJob = null
         // Leaving the previous chapter is one of the required save points.
         saveProgressNow()
         recordHistory()
+    }
+
+    private suspend fun begin(startIndex: Int, startMs: Long, leaveCurrent: Boolean = true) {
+        if (leaveCurrent) {
+            leaveCurrentChapter()
+        } else {
+            playJob?.cancelAndJoin()
+            playJob = null
+        }
         queueIndex = startIndex
         lastKnownPositionMs = startMs
         publishMetadata(startIndex, startMs)

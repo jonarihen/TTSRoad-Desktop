@@ -148,6 +148,7 @@ class InMemoryPlaybackPreferencesStore(
     private val _preferences = MutableStateFlow(initial)
     override val preferences: StateFlow<PlaybackPreferences> = _preferences.asStateFlow()
 
+    @Synchronized
     override fun update(transform: (PlaybackPreferences) -> PlaybackPreferences) {
         _preferences.value = transform(_preferences.value).sanitised()
     }
@@ -171,6 +172,13 @@ class FilePlaybackPreferencesStore(
     private val _preferences = MutableStateFlow(read())
     override val preferences: StateFlow<PlaybackPreferences> = _preferences.asStateFlow()
 
+    /**
+     * Synchronised because `update` is read-modify-write and three threads reach it: the Compose
+     * thread from Settings, the controller when it stores a speed, and dbus-java's reader thread
+     * when a shell sets the volume. Two overlapping updates would otherwise each derive from the
+     * same value and the later write would drop the other's field entirely.
+     */
+    @Synchronized
     override fun update(transform: (PlaybackPreferences) -> PlaybackPreferences) {
         val next = transform(_preferences.value).sanitised()
         if (next == _preferences.value) return
