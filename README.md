@@ -81,7 +81,7 @@ Install a downloaded package with APT so its GStreamer and Secret Service depend
 sudo apt install ./ttsroad_1.0.1-1_amd64.deb
 ```
 
-Open **TTSRoad** from Cinnamon's Audio & Video menu, or run `/opt/TTSRoad/bin/TTSRoad`. Java 25 is
+Open **TTSRoad** from Cinnamon's Audio & Video menu, or run `/opt/ttsroad/bin/TTSRoad`. Java 25 is
 included in the package; installing a system JRE or JDK is neither required nor used. To upgrade,
 install the newer `.deb` with the same command. The lowercase Debian package identity remains
 `ttsroad`, so APT replaces the existing version rather than installing a second copy.
@@ -90,8 +90,8 @@ Before opening the UI, these side-effect-free commands can identify the installe
 safe environment information:
 
 ```bash
-/opt/TTSRoad/bin/TTSRoad --version
-/opt/TTSRoad/bin/TTSRoad --diagnostics
+/opt/ttsroad/bin/TTSRoad --version
+/opt/ttsroad/bin/TTSRoad --diagnostics
 ```
 
 Diagnostics report versions, paths, runtime modules, GStreamer, D-Bus and keyring availability. They

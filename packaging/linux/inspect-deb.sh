@@ -18,6 +18,7 @@ properties="$project_dir/gradle.properties"
 app_version=${2:-$(sed -n 's/^ttsroad\.version=//p' "$properties")}
 deb_revision=${3:-$(sed -n 's/^ttsroad\.debRevision=//p' "$properties")}
 expected_version="$app_version-$deb_revision"
+install_root=/opt/ttsroad
 
 [[ -f "$deb" ]] || fail "package does not exist: $deb"
 command -v dpkg-deb >/dev/null || fail "dpkg-deb is required"
@@ -60,10 +61,10 @@ require_payload() {
     [[ -e "$payload$1" ]] || fail "payload is missing $1"
 }
 
-require_payload /opt/TTSRoad/bin/TTSRoad
-require_payload /opt/TTSRoad/lib/runtime/release
-require_payload /opt/TTSRoad/lib/runtime/lib/modules
-require_payload /opt/TTSRoad/lib/TTSRoad.png
+require_payload "$install_root/bin/TTSRoad"
+require_payload "$install_root/lib/runtime/release"
+require_payload "$install_root/lib/runtime/lib/modules"
+require_payload "$install_root/lib/TTSRoad.png"
 require_payload /usr/share/doc/ttsroad/copyright
 
 mapfile -d '' -t desktop_candidates < <(
@@ -102,16 +103,16 @@ if command -v desktop-file-validate >/dev/null; then
     desktop-file-validate "$desktop"
 fi
 
-runtime_release="$payload/opt/TTSRoad/lib/runtime/release"
+runtime_release="$payload$install_root/lib/runtime/release"
 modules=$(sed -n 's/^MODULES="\([^"]*\)"/\1/p' "$runtime_release")
 [[ -n $modules ]] || fail "bundled runtime release metadata has no module list"
 for module in java.desktop java.instrument jdk.accessibility jdk.security.auth jdk.unsupported; do
     [[ " $modules " == *" $module "* ]] || fail "bundled runtime is missing $module"
 done
 
-launcher="$payload/opt/TTSRoad/bin/TTSRoad"
-[[ $($launcher --version) == "TTSRoad $app_version" ]] || fail "installed launcher --version is wrong"
-diagnostics=$($launcher --diagnostics)
+launcher="$payload$install_root/bin/TTSRoad"
+[[ $("$launcher" --version) == "TTSRoad $app_version" ]] || fail "installed launcher --version is wrong"
+diagnostics=$("$launcher" --diagnostics)
 grep -Fq "Debian package version: $expected_version" <<< "$diagnostics" ||
     fail "installed launcher diagnostics report the wrong package version"
 grep -Fq 'Accessibility module: present' <<< "$diagnostics" ||
@@ -120,7 +121,7 @@ if grep -E -q 'ttsr_[A-Za-z0-9_-]+|Authorization:[[:space:]]*Bearer' <<< "$diagn
     fail "installed launcher diagnostics contain credential-shaped text"
 fi
 
-runtime_library_path="$payload/opt/TTSRoad/lib/runtime/lib/server:$payload/opt/TTSRoad/lib/runtime/lib"
+runtime_library_path="$payload$install_root/lib/runtime/lib/server:$payload$install_root/lib/runtime/lib"
 while IFS= read -r -d '' candidate; do
     if file --brief "$candidate" | grep -q 'ELF'; then
         if env LD_LIBRARY_PATH="$runtime_library_path" ldd "$candidate" 2>&1 | grep -q 'not found'; then

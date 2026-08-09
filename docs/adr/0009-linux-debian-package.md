@@ -21,9 +21,10 @@ toolchain. No native Linux ARM64 runner currently verifies the resulting runtime
 
 ### One stable Debian identity and two version components
 
-The Debian package name is `ttsroad`; the product, menu label, launcher and installed directory are
-`TTSRoad`. JDK 25 jpackage names the desktop entry `ttsroad-TTSRoad.desktop`, which is also MPRIS's
-`DesktopEntry` value. This identity remains stable so APT upgrades replace the installed package.
+The Debian package name and installation directory are `ttsroad` and `/opt/ttsroad`; the product,
+menu label and launcher are `TTSRoad`. JDK 25 jpackage names the desktop entry
+`ttsroad-TTSRoad.desktop`, which is also MPRIS's `DesktopEntry` value. This identity remains stable
+so APT upgrades replace the installed package.
 
 `ttsroad.version` remains the only application SemVer and supplies Gradle, jpackage, About,
 `--version` and `--diagnostics`. `ttsroad.debRevision` is Debian's separate revision for rebuilding

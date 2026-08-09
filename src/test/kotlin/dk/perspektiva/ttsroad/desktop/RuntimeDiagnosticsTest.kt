@@ -34,7 +34,7 @@ class RuntimeDiagnosticsTest {
             javaVm = "Test VM",
             javaVersion = "25",
             userHome = "/home/test",
-            appPath = "/opt/TTSRoad/bin/TTSRoad",
+            appPath = "/opt/ttsroad/bin/TTSRoad",
             env = values::get,
             commandAvailable = { name, _ -> name == "secret-tool" },
             gstreamerAvailable = { true },

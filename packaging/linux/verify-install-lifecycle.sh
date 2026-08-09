@@ -14,6 +14,7 @@ fi
 
 previous=$(readlink -f -- "$1")
 current=$(readlink -f -- "$2")
+install_root=/opt/ttsroad
 [[ -f $previous ]] || fail "previous package is missing: $previous"
 [[ -f $current ]] || fail "current package is missing: $current"
 command -v java >/dev/null && fail "the clean image already has a java command"
@@ -42,9 +43,9 @@ server_url=$(<"$ready_file")
 apt-get install -y "$previous"
 [[ $(dpkg-query -W -f='${Status}' ttsroad) == "install ok installed" ]] || fail "previous package is not installed"
 dpkg --verify ttsroad
-[[ $(/opt/TTSRoad/bin/TTSRoad --version) == TTSRoad\ * ]] || fail "installed --version failed"
+[[ $("$install_root/bin/TTSRoad" --version) == TTSRoad\ * ]] || fail "installed --version failed"
 TTSROAD_SMOKE_TEST=1 TTSROAD_SMOKE_SERVER_URL="$server_url" \
-    timeout --signal=TERM --kill-after=5s 40s xvfb-run -a /opt/TTSRoad/bin/TTSRoad
+    timeout --signal=TERM --kill-after=5s 40s xvfb-run -a "$install_root/bin/TTSRoad"
 grep -Fxq 'GET /api/mobile/capabilities' "$request_log" ||
     fail "the installed login window never probed the mock server"
 
@@ -58,10 +59,10 @@ dpkg --verify ttsroad
 [[ -f $XDG_CONFIG_HOME/TTSRoad/upgrade-sentinel ]] || fail "upgrade removed settings"
 [[ -f $XDG_DATA_HOME/TTSRoad/downloads/upgrade-sentinel ]] || fail "upgrade removed downloads"
 TTSROAD_SMOKE_TEST=1 TTSROAD_SMOKE_SERVER_URL="$server_url" \
-    timeout --signal=TERM --kill-after=5s 40s xvfb-run -a /opt/TTSRoad/bin/TTSRoad
+    timeout --signal=TERM --kill-after=5s 40s xvfb-run -a "$install_root/bin/TTSRoad"
 
 apt-get remove -y ttsroad
-[[ ! -e /opt/TTSRoad ]] || fail "uninstall left application files under /opt/TTSRoad"
+[[ ! -e $install_root ]] || fail "uninstall left application files under $install_root"
 [[ -f $XDG_CONFIG_HOME/TTSRoad/upgrade-sentinel ]] || fail "uninstall removed settings"
 [[ -f $XDG_DATA_HOME/TTSRoad/downloads/upgrade-sentinel ]] || fail "uninstall removed downloads"
 command -v java >/dev/null && fail "installing the package added a system java command"
