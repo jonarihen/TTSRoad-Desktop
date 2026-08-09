@@ -280,8 +280,37 @@ class PlaybackHistoryTest {
         assertFalse(key.contains("host.example"))
         assertFalse(key.contains("alice"))
         assertTrue(key.all { it in "0123456789abcdef" })
-        // Same session, same key; a different account, a different key.
-        assertEquals(key, PlaybackHistory.ownerKeyFor("https://host.example/", "Alice"))
         assertFalse(key == PlaybackHistory.ownerKeyFor("https://host.example", "bob"))
+    }
+
+    @Test
+    fun `scheme and host are case-insensitive but the path is not`() {
+        val canonical = PlaybackHistory.ownerKeyFor("https://host.example", "alice")
+        // Scheme, host and a trailing slash are noise.
+        assertEquals(canonical, PlaybackHistory.ownerKeyFor("HTTPS://Host.Example/", "alice"))
+
+        // The path is not. Retrofit supports path-based base URLs and normalizeBaseUrl keeps
+        // whatever the user configured, so these are two deployments — and folding them together
+        // would let two people with the same username read and dismiss each other's history.
+        assertFalse(
+            PlaybackHistory.ownerKeyFor("https://host.example/TTSRoad/", "alice") ==
+                PlaybackHistory.ownerKeyFor("https://host.example/ttsroad/", "alice"),
+        )
+        // A path still identifies one deployment consistently.
+        assertEquals(
+            PlaybackHistory.ownerKeyFor("https://host.example/TTSRoad/", "alice"),
+            PlaybackHistory.ownerKeyFor("https://HOST.example/TTSRoad", "alice"),
+        )
+    }
+
+    @Test
+    fun `usernames differing only in case are different accounts`() {
+        // The stored username is what the server called the account, so it is already canonical;
+        // folding it would merge two real accounts on a case-sensitive server. Splitting one
+        // identity costs a lost strip, merging two discloses one person's reading to another.
+        assertFalse(
+            PlaybackHistory.ownerKeyFor("https://host.example", "Alice") ==
+                PlaybackHistory.ownerKeyFor("https://host.example", "alice"),
+        )
     }
 }

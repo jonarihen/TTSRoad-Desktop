@@ -116,11 +116,38 @@ object PlaybackHistory {
      * URLs out of [PlaybackSnapshot] entirely.
      */
     fun ownerKeyFor(serverUrl: String, username: String?): String {
-        val identity = "${serverUrl.trim().trimEnd('/').lowercase()}|${username?.trim()?.lowercase().orEmpty()}"
+        // The username is *not* case-folded: it is `response.user.username` as the server spelled
+        // it, so it is already canonical, and folding it would merge two genuinely distinct
+        // accounts on a server that treats case as significant (Django's default). Throughout this
+        // function the rule is that merging two identities is far worse than splitting one —
+        // splitting costs a lost strip, merging discloses one person's reading to another.
+        val identity = "${canonicalServer(serverUrl)}|${username?.trim().orEmpty()}"
         return java.security.MessageDigest.getInstance("SHA-256")
             .digest(identity.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
             .take(32)
+    }
+
+    /**
+     * Lowercases only the parts of a URL that are genuinely case-insensitive.
+     *
+     * Scheme and host are; **the path is not**. `normalizeBaseUrl` keeps whatever path the user
+     * configured and Retrofit supports path-based base URLs, so `https://host/TTSRoad/` and
+     * `https://host/ttsroad/` are two different deployments. Folding the whole URL made them one
+     * owner, and two people with the same username on those instances would have seen and dismissed
+     * each other's history.
+     */
+    private fun canonicalServer(serverUrl: String): String {
+        val trimmed = serverUrl.trim().trimEnd('/')
+        val schemeEnd = trimmed.indexOf("://")
+        if (schemeEnd <= 0) return trimmed
+
+        val scheme = trimmed.substring(0, schemeEnd).lowercase(java.util.Locale.ROOT)
+        val rest = trimmed.substring(schemeEnd + 3)
+        val authorityEnd = rest.indexOf('/').takeIf { it >= 0 } ?: rest.length
+        val authority = rest.substring(0, authorityEnd).lowercase(java.util.Locale.ROOT)
+        val path = rest.substring(authorityEnd)
+        return "$scheme://$authority$path"
     }
 
     /**

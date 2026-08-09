@@ -87,6 +87,18 @@ class QueuePlaybackController(
     private var queue: List<ChapterSummary> = emptyList()
     private var queueFiction: FictionSummary? = null
 
+    /**
+     * Which account this queue was loaded for, captured at load time rather than read at record
+     * time.
+     *
+     * `recordHistory` runs *after* a suspending progress save, and `stop()` is fire-and-forget. If
+     * the session changes while that request is in flight — account A signs out, B signs in — then
+     * resolving the owner live would file A's chapter titles under B's key, which is precisely the
+     * cross-account disclosure the owner key exists to prevent. The queue and its owner belong
+     * together, so they are captured together.
+     */
+    @Volatile private var queueOwnerKey: String = ""
+
     @Volatile private var queueIndex = 0
 
     /** Last position actually reported by the engine — what a save or a retry resumes from. */
@@ -163,6 +175,7 @@ class QueuePlaybackController(
         leaveCurrentChapter()
         queue = listOf(chapter)
         queueFiction = fiction
+        queueOwnerKey = ownerKey()
         begin(0, resumeMsOf(chapter), leaveCurrent = false)
     }
 
@@ -183,6 +196,7 @@ class QueuePlaybackController(
         leaveCurrentChapter()
         queue = playable
         queueFiction = fiction
+        queueOwnerKey = ownerKey()
         val startIndex = playable.indexOfFirst { it.resolvedChapterId == startChapterId }.coerceAtLeast(0)
         begin(startIndex, resumeMsOf(playable[startIndex]), leaveCurrent = false)
     }
@@ -306,6 +320,7 @@ class QueuePlaybackController(
         if (clearQueue) {
             queue = emptyList()
             queueFiction = null
+            queueOwnerKey = ""
             queueIndex = 0
             lastKnownPositionMs = 0
             // A stop is also the end of any sleep timer: the thing it was counting down to has
@@ -597,7 +612,7 @@ class QueuePlaybackController(
                 positionSeconds = lastKnownPositionMs / 1000.0,
                 durationSeconds = current.durationMs / 1000.0,
                 recordedAtMs = clock(),
-                ownerKey = ownerKey(),
+                ownerKey = queueOwnerKey,
             ),
         )
     }

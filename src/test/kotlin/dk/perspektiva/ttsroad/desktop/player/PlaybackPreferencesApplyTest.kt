@@ -48,6 +48,7 @@ class PlaybackPreferencesApplyTest {
         history: InMemoryPlaybackHistoryStore = InMemoryPlaybackHistoryStore(),
         sleepTimer: SleepTimer = SleepTimer(),
         clock: () -> Long = System::currentTimeMillis,
+        ownerKey: () -> String = { "owner-a" },
     ) = QueuePlaybackController(
         repository = FakeRepository(),
         sources = FakeMediaSourceFactory(),
@@ -57,6 +58,7 @@ class PlaybackPreferencesApplyTest {
         historyStore = history,
         sleepTimer = sleepTimer,
         clock = clock,
+        ownerKey = ownerKey,
         retryDelaysMs = emptyList(),
         tickIntervalMs = 10,
     )
@@ -418,6 +420,33 @@ class PlaybackPreferencesApplyTest {
             assertTrue(
                 history.history.value.none { it.chapterId == 99 && it.positionSeconds > 0 },
                 "the old position was recorded against the new chapter",
+            )
+        }
+
+    @Test
+    fun `a snapshot is filed under the account that was listening, not the one signed in now`() =
+        runBlocking {
+            // stop() is fire-and-forget and records history *after* a suspending server save. If
+            // account A signs out and B signs in while that request is in flight, resolving the
+            // owner live would file A's chapter titles under B's key — the exact cross-account
+            // disclosure the owner key exists to prevent.
+            val engine = FakePlaybackEngine()
+            val history = InMemoryPlaybackHistoryStore()
+            var signedIn = "owner-a"
+            val playback = controller(engine, history = history, ownerKey = { signedIn })
+
+            playback.playQueue(listOf(chapter(1)), startChapterId = 1, fiction = null)
+            playback.await("media to load") { it.hasMedia }
+
+            // The session changes underneath a queue that is still A's.
+            signedIn = "owner-b"
+            playback.togglePlayPause()
+            awaitCondition("a snapshot") { history.history.value.isNotEmpty() }
+
+            assertEquals(
+                "owner-a",
+                history.history.value.single().ownerKey,
+                "the chapter was filed under whoever happened to be signed in at record time",
             )
         }
 
