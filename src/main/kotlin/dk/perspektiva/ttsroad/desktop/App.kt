@@ -169,6 +169,14 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             AppShortcut.Dismiss -> dismissOrGoBack()
 
             AppShortcut.PlayPause -> whenPlaying(playback::togglePlayPause)
+
+            // Idempotent, unlike the toggle above: these arrive from a keyboard that has separate
+            // Play and Pause keys and means them literally. Already playing and Play pressed is a
+            // no-op that still counts as handled — the key was for this app, and letting it fall
+            // through would hand a transport key to whatever button has focus.
+            AppShortcut.Play -> whenPlaying { if (!playerState.isPlaying) playback.togglePlayPause() }
+            AppShortcut.Pause -> whenPlaying { if (playerState.isPlaying) playback.togglePlayPause() }
+
             AppShortcut.SeekBackward -> whenPlaying(playback::skipBackward)
             AppShortcut.SeekForward -> whenPlaying(playback::skipForward)
             AppShortcut.PreviousChapter -> whenPlaying(playback::skipToPreviousChapter)

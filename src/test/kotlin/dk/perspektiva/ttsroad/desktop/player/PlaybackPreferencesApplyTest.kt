@@ -298,6 +298,32 @@ class PlaybackPreferencesApplyTest {
     }
 
     @Test
+    fun `resuming after the timer expired still tracks progress and advances`() = runBlocking {
+        // Expiry pauses; the morning's resume must land in a live controller. If expiry ended the
+        // playback job, the audio would restart with nothing polling position and nothing draining
+        // engine events — so the UI would freeze and end-of-stream would never advance the queue.
+        val engine = FakePlaybackEngine()
+        val clock = FakeClock()
+        val timer = SleepTimer(clock)
+        val playback = controller(engine, sleepTimer = timer, clock = clock)
+
+        playback.playQueue(listOf(chapter(1), chapter(2)), startChapterId = 1, fiction = null)
+        playback.await("playback to start") { it.hasMedia && it.isPlaying }
+
+        playback.setSleepTimer(SleepTimerMode.Duration(5))
+        clock.nowMs += 5 * 60_000L
+        playback.await("the timer to pause playback") { !it.isPlaying }
+        assertFalse(playback.state.value.sleepTimer.isArmed, "the timer should disarm on expiry")
+
+        // Resume, then let the chapter end on its own: the queue must still advance, which it can
+        // only do if a loop is still draining engine events.
+        playback.togglePlayPause()
+        playback.await("playback to resume") { it.isPlaying }
+        engine.emit(EngineEvent.Completed)
+        awaitCondition("the second chapter to start") { engine.prepareCount.get() >= 2 }
+    }
+
+    @Test
     fun `stopping disarms the timer so the next chapter is not silenced`() = runBlocking {
         val engine = FakePlaybackEngine()
         val playback = controller(engine)

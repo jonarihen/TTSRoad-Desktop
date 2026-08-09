@@ -369,16 +369,6 @@ class QueuePlaybackController(
                 // The job was cancelled: a new chapter, a stop, or shutdown superseded this.
                 is AttemptResult.Stopped -> return ChapterOutcome.Stopped
 
-                is AttemptResult.SleptOff -> {
-                    // A pause, not a stop: the queue and the position stay exactly where they are
-                    // so the morning's "resume" is one keypress, not a search for the chapter.
-                    engine.pause()
-                    _state.update { it.copy(isPlaying = false) }
-                    saveProgressNow()
-                    recordHistory()
-                    return ChapterOutcome.Stopped
-                }
-
                 is AttemptResult.SessionExpired -> {
                     _state.update { it.copy(isPlaying = false, error = result.failure.message, canRetry = false) }
                     // Same door as a 401 on an API call: drop the token and return to login rather
@@ -412,8 +402,6 @@ class QueuePlaybackController(
         data object Completed : AttemptResult
         data object Stopped : AttemptResult
 
-        /** The sleep timer ran out mid-chapter. Distinct from [Stopped] so it can pause, not tear down. */
-        data object SleptOff : AttemptResult
         data class Transient(val message: String) : AttemptResult
         data class Fatal(val message: String) : AttemptResult
         data class SessionExpired(val failure: PlaybackFailure.SessionExpired) : AttemptResult
@@ -458,7 +446,19 @@ class QueuePlaybackController(
             // The timer is driven by this tick rather than by a scheduler of its own, which is
             // what makes the fade and the expiry deterministic in tests: no wall-clock race, and
             // the fade gain is recomputed on exactly the cadence the position is.
-            if (sleepTimer.tick() == SleepTimerEvent.Expired) return AttemptResult.SleptOff
+            //
+            // Expiry pauses *inside* the loop rather than returning out of it. Returning would end
+            // the only job that polls the position and drains engine events, so the morning's
+            // "resume" would restart the audio into a dead controller: no progress updates, and an
+            // end-of-stream that never advances the queue. A sleep pause has to look exactly like
+            // a manual one, and a manual one keeps this loop running.
+            if (sleepTimer.tick() == SleepTimerEvent.Expired) {
+                engine.pause()
+                _state.update { it.copy(isPlaying = false) }
+                lastSavedMs = lastKnownPositionMs
+                saveProgress(chapter, lastKnownPositionMs, isPlayed = false)
+                recordHistory()
+            }
 
             val position = engine.positionMs()
             if (position > 0) lastKnownPositionMs = position

@@ -3,6 +3,8 @@ package dk.perspektiva.ttsroad.desktop.nav
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
@@ -103,6 +105,24 @@ class ShortcutsTest {
         assertEquals(AppShortcut.PlayPause, shortcutFor(Key.MediaPlayPause, KeyEventType.KeyDown))
         assertEquals(AppShortcut.NextChapter, shortcutFor(Key.MediaNext, KeyEventType.KeyDown))
         assertEquals(AppShortcut.PreviousChapter, shortcutFor(Key.MediaPrevious, KeyEventType.KeyDown))
+    }
+
+    @Test
+    fun `dedicated play and pause keys are not the toggle`() {
+        // A keyboard with separate Play and Pause keys means them literally. Mapping both onto the
+        // toggle makes the Play key pause audio that is already playing — the exact opposite of
+        // what was pressed.
+        assertEquals(AppShortcut.Play, shortcutFor(Key.MediaPlay, KeyEventType.KeyDown))
+        assertEquals(AppShortcut.Pause, shortcutFor(Key.MediaPause, KeyEventType.KeyDown))
+        assertNotEquals(AppShortcut.PlayPause, shortcutFor(Key.MediaPlay, KeyEventType.KeyDown))
+    }
+
+    @Test
+    fun `media keys still fire while a text field has focus`() {
+        // A transport key is not a text-editing key, so the search box has no claim on it.
+        for (key in listOf(Key.MediaPlay, Key.MediaPause)) {
+            assertNotNull(shortcutFor(key, KeyEventType.KeyDown, textInputFocused = true))
+        }
     }
 
     // --- Typing safety --------------------------------------------------------------------------

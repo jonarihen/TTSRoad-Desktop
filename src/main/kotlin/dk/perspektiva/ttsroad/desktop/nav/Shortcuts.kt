@@ -21,8 +21,20 @@ enum class AppShortcut {
     /** Escape — closes the top dialog or sheet first, and only navigates if there was none. */
     Dismiss,
 
-    /** Space. */
+    /** Space, and the transport row's combined play/pause key. */
     PlayPause,
+
+    /**
+     * The dedicated `MediaPlay` key, which is a request to *play* — not to toggle.
+     *
+     * Idempotent on purpose. A keyboard that sends distinct Play and Pause keys means them
+     * literally, so mapping both onto a toggle makes the Play key pause audio that is already
+     * playing. The MPRIS `Play` and `Pause` methods already have exactly this shape.
+     */
+    Play,
+
+    /** The dedicated `MediaPause` key. Idempotent; see [Play]. */
+    Pause,
 
     /** Left — back by the configured skip interval. */
     SeekBackward,
@@ -61,6 +73,9 @@ enum class AppShortcut {
     val firesWhileTyping: Boolean
         get() = when (this) {
             Back, Refresh, Dismiss, OpenLibrary, OpenSettings, ShowShortcuts -> true
+            // The transport keys are not text-editing keys, so a focused search box has no claim
+            // on them — a media key must work wherever the caret happens to be.
+            Play, Pause -> true
             PlayPause, SeekBackward, SeekForward, PreviousChapter, NextChapter -> false
         }
 }
@@ -120,8 +135,11 @@ private fun match(key: Key, alt: Boolean, ctrl: Boolean, meta: Boolean, shift: B
 
         // The keys a keyboard's transport row sends when the app itself has focus. With no focus
         // they go to the desktop, which routes them over MPRIS instead — same actions, other door.
-        key == Key.MediaPlayPause || key == Key.MediaPlay || key == Key.MediaPause ->
-            AppShortcut.PlayPause
+        // The dedicated Play and Pause keys stay distinct from the combined one: they are requests
+        // for a *state*, and toggling on them makes Play pause audio that is already playing.
+        key == Key.MediaPlayPause -> AppShortcut.PlayPause
+        key == Key.MediaPlay -> AppShortcut.Play
+        key == Key.MediaPause -> AppShortcut.Pause
         key == Key.MediaNext -> AppShortcut.NextChapter
         key == Key.MediaPrevious -> AppShortcut.PreviousChapter
 
