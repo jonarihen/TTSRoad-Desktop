@@ -48,6 +48,7 @@ class PlaybackPreferencesApplyTest {
         history: InMemoryPlaybackHistoryStore = InMemoryPlaybackHistoryStore(),
         sleepTimer: SleepTimer = SleepTimer(),
         clock: () -> Long = System::currentTimeMillis,
+        ownerKey: () -> String = { "owner-a" },
     ) = QueuePlaybackController(
         repository = FakeRepository(),
         sources = FakeMediaSourceFactory(),
@@ -57,6 +58,7 @@ class PlaybackPreferencesApplyTest {
         historyStore = history,
         sleepTimer = sleepTimer,
         clock = clock,
+        ownerKey = ownerKey,
         retryDelaysMs = emptyList(),
         tickIntervalMs = 10,
     )
@@ -298,6 +300,39 @@ class PlaybackPreferencesApplyTest {
     }
 
     @Test
+    fun `starting another chapter unfreezes a timer armed while paused`() = runBlocking {
+        // Only togglePlayPause used to resume a frozen countdown, but audio also starts when a new
+        // chapter begins or a failed one is retried. Without unfreezing there, the timer sat still
+        // while playback ran on indefinitely — the display frozen and the sleep never arriving.
+        val engine = FakePlaybackEngine()
+        val clock = FakeClock()
+        val timer = SleepTimer(clock)
+        val playback = controller(engine, sleepTimer = timer, clock = clock)
+
+        playback.playQueue(listOf(chapter(1), chapter(2)), startChapterId = 1, fiction = null)
+        playback.await("playback to start") { it.hasMedia && it.isPlaying }
+
+        playback.togglePlayPause()
+        playback.await("the pause to land") { !it.isPlaying }
+        playback.setSleepTimer(SleepTimerMode.Duration(30))
+        // Read from the timer rather than the published state: the controller mirrors it through a
+        // collector, which has not necessarily run yet on this line.
+        assertEquals(30 * 60_000L, timer.state.value.remainingMs)
+
+        // Starting a different chapter is a resume as far as the timer is concerned.
+        playback.skipToNextChapter()
+        playback.await("the next chapter to play") { it.isPlaying && it.currentIndex == 1 }
+
+        clock.nowMs += 10 * 60_000L
+        delay(100)
+        assertEquals(
+            20 * 60_000L,
+            playback.state.value.sleepTimer.remainingMs,
+            "the timer stayed frozen while a new chapter played",
+        )
+    }
+
+    @Test
     fun `stopping disarms the timer so the next chapter is not silenced`() = runBlocking {
         val engine = FakePlaybackEngine()
         val playback = controller(engine)
@@ -349,6 +384,71 @@ class PlaybackPreferencesApplyTest {
             history.history.value.any { it.chapterId == 1 }
         }
     }
+
+    @Test
+    fun `switching to another fiction records the chapter being left, not one from the new queue`() =
+        runBlocking {
+            // playQueue replaces the queue before begin() runs, so anything that reads
+            // queue[queueIndex] afterwards is describing the *new* queue with the *old* index —
+            // which is a different chapter, or none at all when the new queue is shorter.
+            val engine = FakePlaybackEngine()
+            val history = InMemoryPlaybackHistoryStore()
+            val playback = controller(engine, history = history)
+
+            // Start deep enough into the first serial that the old index does not exist in the new
+            // queue: index 2 here, and the serial we switch to has a single chapter.
+            playback.playQueue(
+                listOf(chapter(1), chapter(2), chapter(3)),
+                startChapterId = 3,
+                fiction = null,
+            )
+            playback.await("the third chapter to load") { it.hasMedia }
+            engine.setDuration(600_000)
+            engine.setPosition(90_000)
+            awaitCondition("a position") { playback.state.value.positionMs > 0 }
+
+            playback.play(chapter(99), fiction = null)
+            playback.await("the new chapter to load") { it.queue.singleOrNull()?.chapterId == 99 }
+
+            val left = history.history.value.firstOrNull { it.chapterId == 3 }
+            assertTrue(
+                left != null,
+                "the chapter being left was never recorded; history was ${history.history.value}",
+            )
+            assertEquals(90.0, left.positionSeconds, 0.001)
+            // And the position must not have been filed against the chapter we switched *to*.
+            assertTrue(
+                history.history.value.none { it.chapterId == 99 && it.positionSeconds > 0 },
+                "the old position was recorded against the new chapter",
+            )
+        }
+
+    @Test
+    fun `a snapshot is filed under the account that was listening, not the one signed in now`() =
+        runBlocking {
+            // stop() is fire-and-forget and records history *after* a suspending server save. If
+            // account A signs out and B signs in while that request is in flight, resolving the
+            // owner live would file A's chapter titles under B's key — the exact cross-account
+            // disclosure the owner key exists to prevent.
+            val engine = FakePlaybackEngine()
+            val history = InMemoryPlaybackHistoryStore()
+            var signedIn = "owner-a"
+            val playback = controller(engine, history = history, ownerKey = { signedIn })
+
+            playback.playQueue(listOf(chapter(1)), startChapterId = 1, fiction = null)
+            playback.await("media to load") { it.hasMedia }
+
+            // The session changes underneath a queue that is still A's.
+            signedIn = "owner-b"
+            playback.togglePlayPause()
+            awaitCondition("a snapshot") { history.history.value.isNotEmpty() }
+
+            assertEquals(
+                "owner-a",
+                history.history.value.single().ownerKey,
+                "the chapter was filed under whoever happened to be signed in at record time",
+            )
+        }
 
     @Test
     fun `nothing is recorded when nothing has loaded`() = runBlocking {

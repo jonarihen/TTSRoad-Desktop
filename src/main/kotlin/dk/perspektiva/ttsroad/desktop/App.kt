@@ -277,6 +277,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     repository = repository,
                                     playback = playback,
                                     history = container.playbackHistory,
+                                    historyOwnerKey = container.historyOwnerKey(),
                                     onOpenFiction = { nav.open(Destination.Fiction(it)) },
                                     onOpenPlayer = { nav.open(Destination.Player) },
                                 )

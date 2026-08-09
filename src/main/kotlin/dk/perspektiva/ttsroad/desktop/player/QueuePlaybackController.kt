@@ -67,6 +67,11 @@ class QueuePlaybackController(
     private val historyStore: PlaybackHistoryStore = InMemoryPlaybackHistoryStore(),
     private val sleepTimer: SleepTimer = SleepTimer(),
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * Which account a history snapshot belongs to. Read at record time rather than at construction,
+     * because a sign-out and a sign-in as somebody else happen without rebuilding this controller.
+     */
+    private val ownerKey: () -> String = { "" },
     /** Overridable so tests do not wait real seconds for the retry ladder. */
     private val retryDelaysMs: List<Long> = listOf(2_000, 5_000, 15_000),
     private val tickIntervalMs: Long = 250,
@@ -81,6 +86,18 @@ class QueuePlaybackController(
     private var playJob: Job? = null
     private var queue: List<ChapterSummary> = emptyList()
     private var queueFiction: FictionSummary? = null
+
+    /**
+     * Which account this queue was loaded for, captured at load time rather than read at record
+     * time.
+     *
+     * `recordHistory` runs *after* a suspending progress save, and `stop()` is fire-and-forget. If
+     * the session changes while that request is in flight — account A signs out, B signs in — then
+     * resolving the owner live would file A's chapter titles under B's key, which is precisely the
+     * cross-account disclosure the owner key exists to prevent. The queue and its owner belong
+     * together, so they are captured together.
+     */
+    @Volatile private var queueOwnerKey: String = ""
 
     @Volatile private var queueIndex = 0
 
@@ -153,9 +170,13 @@ class QueuePlaybackController(
                 .copy(error = "This chapter has no audio yet")
             return
         }
+        // Before the queue changes, not after: `leaveCurrentChapter` reads queue[queueIndex], and
+        // once the new queue is in place that index names a different chapter — or nothing at all.
+        leaveCurrentChapter()
         queue = listOf(chapter)
         queueFiction = fiction
-        begin(0, resumeMsOf(chapter))
+        queueOwnerKey = ownerKey()
+        begin(0, resumeMsOf(chapter), leaveCurrent = false)
     }
 
     override suspend fun playQueue(
@@ -170,10 +191,14 @@ class QueuePlaybackController(
             _state.update { it.copy(error = "No playable chapters yet") }
             return
         }
+        // See `play`: the chapter being left has to be recorded while it is still the one the queue
+        // and the index point at.
+        leaveCurrentChapter()
         queue = playable
         queueFiction = fiction
+        queueOwnerKey = ownerKey()
         val startIndex = playable.indexOfFirst { it.resolvedChapterId == startChapterId }.coerceAtLeast(0)
-        begin(startIndex, resumeMsOf(playable[startIndex]))
+        begin(startIndex, resumeMsOf(playable[startIndex]), leaveCurrent = false)
     }
 
     override fun togglePlayPause() {
@@ -295,6 +320,7 @@ class QueuePlaybackController(
         if (clearQueue) {
             queue = emptyList()
             queueFiction = null
+            queueOwnerKey = ""
             queueIndex = 0
             lastKnownPositionMs = 0
             // A stop is also the end of any sleep timer: the thing it was counting down to has
@@ -310,11 +336,29 @@ class QueuePlaybackController(
      * One job owns a chapter from prepare to end-of-stream, including its retries, so cancelling
      * it is all that is needed to abandon everything in flight.
      */
-    private suspend fun begin(startIndex: Int, startMs: Long) {
+    /**
+     * Stops the current chapter and files what the listener had reached.
+     *
+     * Must be called while `queue` and `queueIndex` still describe the chapter being left. A caller
+     * that is about to *replace* the queue has to do this first and pass `leaveCurrent = false` to
+     * [begin] — otherwise the save and the snapshot are attributed to whatever chapter now happens
+     * to sit at the old index, which is a different chapter or none.
+     */
+    private suspend fun leaveCurrentChapter() {
         playJob?.cancelAndJoin()
+        playJob = null
         // Leaving the previous chapter is one of the required save points.
         saveProgressNow()
         recordHistory()
+    }
+
+    private suspend fun begin(startIndex: Int, startMs: Long, leaveCurrent: Boolean = true) {
+        if (leaveCurrent) {
+            leaveCurrentChapter()
+        } else {
+            playJob?.cancelAndJoin()
+            playJob = null
+        }
         queueIndex = startIndex
         lastKnownPositionMs = startMs
         publishMetadata(startIndex, startMs)
@@ -439,6 +483,10 @@ class QueuePlaybackController(
         drainEngineEvents()?.let { return it }
 
         engine.play()
+        // Audio is starting here, not only in togglePlayPause, so this is where a frozen countdown
+        // has to start running again. Without it, a timer armed while paused stays frozen while a
+        // newly-started or retried chapter plays on indefinitely. A no-op when nothing is frozen.
+        sleepTimer.onPlaybackResumed()
         // A successful attempt clears whatever the previous one complained about.
         _state.update {
             it.copy(
@@ -564,6 +612,7 @@ class QueuePlaybackController(
                 positionSeconds = lastKnownPositionMs / 1000.0,
                 durationSeconds = current.durationMs / 1000.0,
                 recordedAtMs = clock(),
+                ownerKey = queueOwnerKey,
             ),
         )
     }

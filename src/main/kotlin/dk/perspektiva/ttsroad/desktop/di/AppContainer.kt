@@ -5,6 +5,7 @@ import dk.perspektiva.ttsroad.desktop.data.FilePlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.FileSessionStore
 import dk.perspektiva.ttsroad.desktop.data.FileWindowPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
+import dk.perspektiva.ttsroad.desktop.data.PlaybackHistory
 import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
@@ -88,9 +89,10 @@ class AppContainer(
         AppDispatchers,
         PlaybackPreferencesStore,
         PlaybackHistoryStore,
+        () -> String,
     ) -> PlaybackController =
-        { repo, mediaSources, engine, d, prefs, history ->
-            QueuePlaybackController(repo, mediaSources, engine, d.io, prefs, history)
+        { repo, mediaSources, engine, d, prefs, history, owner ->
+            QueuePlaybackController(repo, mediaSources, engine, d.io, prefs, history, ownerKey = owner)
         },
     libraryCacheFactory: (TtsRoadRepository, AppDispatchers, () -> Long) -> LibraryCache =
         { repo, d, now -> LibraryCache(repo, d.main, now) },
@@ -101,8 +103,26 @@ class AppContainer(
     val repository: TtsRoadRepository = repositoryFactory(sessionStore, httpClient, dispatchers)
     val mediaSources: MediaSourceFactory = mediaSourceFactory(httpClient, repository)
     val audioEngine: PlaybackEngine = audioEngineFactory()
-    val playback: PlaybackController =
-        playbackFactory(repository, mediaSources, audioEngine, dispatchers, playbackPreferences, playbackHistory)
+    /**
+     * Which account's history is being written or shown.
+     *
+     * Derived from the live session rather than captured once: signing out and signing in as
+     * somebody else on the same desktop must change the answer without rebuilding the container.
+     */
+    val historyOwnerKey: () -> String = {
+        val session = sessionStore.current()
+        if (session.serverUrl.isBlank()) "" else PlaybackHistory.ownerKeyFor(session.serverUrl, session.username)
+    }
+
+    val playback: PlaybackController = playbackFactory(
+        repository,
+        mediaSources,
+        audioEngine,
+        dispatchers,
+        playbackPreferences,
+        playbackHistory,
+        historyOwnerKey,
+    )
 
     /**
      * The scope MPRIS publishes from. Its own, not the controller's: the bus mirror has to keep

@@ -46,7 +46,7 @@ class ScreensUiTest {
     ) = AppContainer(
         sessionStore = InMemorySessionStore(session),
         repositoryFactory = { _, _, _ -> repository },
-        playbackFactory = { _, _, _, _, _, _ -> playback },
+        playbackFactory = { _, _, _, _, _, _, _ -> playback },
         // In-memory, so rendering a screen in a test never touches the real
         // ~/.config/TTSRoad files the production stores default to.
         playbackPreferences = InMemoryPlaybackPreferencesStore(),
@@ -145,7 +145,7 @@ class ScreensUiTest {
         val app = AppContainer(
             sessionStore = store,
             repositoryFactory = { _, _, _ -> repository },
-            playbackFactory = { _, _, _, _, _, _ -> playback },
+            playbackFactory = { _, _, _, _, _, _, _ -> playback },
             // In-memory, so rendering a screen in a test never touches the real
             // ~/.config/TTSRoad files the production stores default to.
             playbackPreferences = InMemoryPlaybackPreferencesStore(),
@@ -222,7 +222,7 @@ class ScreensUiTest {
         val app = AppContainer(
             sessionStore = store,
             repositoryFactory = { _, _, _ -> repository },
-            playbackFactory = { _, _, _, _, _, _ -> FakePlaybackController() },
+            playbackFactory = { _, _, _, _, _, _, _ -> FakePlaybackController() },
             // In-memory, so rendering a screen in a test never touches the real
             // ~/.config/TTSRoad files the production stores default to.
             playbackPreferences = InMemoryPlaybackPreferencesStore(),
