@@ -59,11 +59,16 @@ jobs:
       # plugins the pipeline actually names means GstPlaybackEngineIntegrationTest runs here
       # instead of skipping, so the real engine has CI coverage rather than none. These are also
       # exactly the packages the .deb will declare in phase 9 (#3).
+      #
+      # gstreamer1.0-tools is what provides `gst-inspect-1.0` itself. Without it the verification
+      # step below fails with "command not found" on the first element, which reads exactly like a
+      # missing plugin and takes the whole job down before any test runs.
       - name: Install Xvfb and GStreamer
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             xvfb \
+            gstreamer1.0-tools \
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good
 
