@@ -321,7 +321,11 @@ fun FictionDetailScreen(
                         isCurrent = index == currentRow,
                         isPlaying = player.isPlaying,
                         canMarkPrevious = (canonicalIndex[chapter.resolvedChapterId] ?: 0) > 0,
-                        readAlongAvailable = capabilities.readAlong && chapter.hasTimings,
+                        // The capability gates the endpoint. `has_timings` only changes whether
+                        // the reader follows audio: chapters converted earlier still have useful
+                        // plain narration text and must remain openable.
+                        readAlongAvailable = capabilities.readAlong,
+                        readAlongTimed = chapter.hasTimings,
                         download = downloads.stateFor(chapter),
                         onPlay = { play(chapter) },
                         onMarkPlayed = { played -> mark(listOf(chapter.resolvedChapterId), played) },
@@ -583,6 +587,7 @@ private fun ChapterListRow(
     isPlaying: Boolean,
     canMarkPrevious: Boolean,
     readAlongAvailable: Boolean,
+    readAlongTimed: Boolean,
     download: ChapterDownloadUi,
     onPlay: () -> Unit,
     onMarkPlayed: (Boolean) -> Unit,
@@ -668,7 +673,7 @@ private fun ChapterListRow(
         if (readAlongAvailable) {
             RowIconAction(
                 icon = Icons.AutoMirrored.Filled.MenuBook,
-                contentDescription = "Read along",
+                contentDescription = if (readAlongTimed) "Read along" else "Read chapter text",
                 tint = if (active) AarisColor.Ink else AarisColor.Dim,
                 onClick = onOpenReader,
             )

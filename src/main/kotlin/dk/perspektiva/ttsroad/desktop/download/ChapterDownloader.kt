@@ -78,14 +78,25 @@ class ChapterDownloader(
             alreadyHave = 0L
         }
 
+        val completePart = expectedBytes > 0L && alreadyHave == expectedBytes
         val remaining = if (expectedBytes > 0) expectedBytes - alreadyHave else 0L
-        if (!storage.hasRoomFor(remaining)) {
+        if (!completePart && !storage.hasRoomFor(remaining)) {
             return DownloadResult.Failed(
                 DownloadFailure.OutOfSpace("Not enough free disk space for this chapter"),
             )
         }
 
-        return runCatching { transfer(audioUrl, part, target, alreadyHave, expectedBytes, onProgress) }
+        return runCatching {
+            if (completePart) {
+                // A previous process may have finished writing and crashed before the atomic move.
+                // Reissuing Range: bytes=<length>- would receive 416 forever; validate and promote
+                // the complete bytes locally instead.
+                RandomAccessFile(part, "rw").use { it.fd.sync() }
+                promote(part, target, alreadyHave)
+            } else {
+                transfer(audioUrl, part, target, alreadyHave, expectedBytes, onProgress)
+            }
+        }
             .getOrElse { error ->
                 when (error) {
                     is SessionExpiredDownloadException ->
@@ -190,25 +201,34 @@ class ChapterDownloader(
             if (total > 0 && written != total) {
                 throw IOException("The download ended early (${written} of $total bytes)")
             }
-            if (!validator.looksDecodable(part)) {
-                // The bytes are wrong rather than incomplete, so a resume would resume garbage.
-                runCatching { part.delete() }
-                return DownloadResult.Failed(
-                    DownloadFailure.Corrupt("The downloaded audio could not be read"),
-                )
-            }
-
-            // Atomic: a reader sees the old file or the new one, never a partial one. This is the
-            // single moment a chapter becomes playable offline.
-            runCatching {
-                Files.move(part.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-            }.recoverCatching {
-                Files.move(part.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }.getOrElse { throw IOException("Could not finish the download", it) }
-
-            SecureFiles.restrictToOwner(target.toPath())
-            return DownloadResult.Success(written)
+            return promote(part, target, written)
         }
+    }
+
+    private fun promote(part: File, target: File, written: Long): DownloadResult {
+        if (!validator.looksDecodable(part)) {
+            // The bytes are wrong rather than incomplete, so a retry must start from zero.
+            runCatching { part.delete() }
+            return DownloadResult.Failed(
+                DownloadFailure.Corrupt("The downloaded audio could not be read"),
+            )
+        }
+
+        // Atomic: a reader sees the old file or the new one, never a partial one. This is the
+        // single moment a chapter becomes playable offline.
+        runCatching {
+            Files.move(
+                part.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }.recoverCatching {
+            Files.move(part.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }.getOrElse { throw IOException("Could not finish the download", it) }
+
+        SecureFiles.restrictToOwner(target.toPath())
+        return DownloadResult.Success(written)
     }
 
     private companion object {

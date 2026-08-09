@@ -8,6 +8,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.Path
 
 /**
  * The directory one account's downloads live in, and the only thing allowed to turn a name into a
@@ -25,6 +26,7 @@ import java.nio.file.LinkOption
 class DownloadStorage(
     val root: File,
     private val ownedDirectories: List<File> = listOf(root),
+    private val deletePath: (Path) -> Boolean = { Files.deleteIfExists(it) },
 ) {
 
     /** `downloads.json` for this account, kept beside the audio it describes. */
@@ -92,7 +94,7 @@ class DownloadStorage(
         for (candidate in listOf(name, "$name$PartSuffix")) {
             runCatching {
                 val path = resolve(candidate).toPath()
-                Files.deleteIfExists(path)
+                deletePath(path)
             }.onFailure {
                 deleted = false
                 AppLog.warn("could not delete $candidate", it)
@@ -122,7 +124,7 @@ class DownloadStorage(
             val path = file.toPath()
             if (Files.isSymbolicLink(path)) {
                 // Delete the link, never what it points at.
-                runCatching { Files.delete(path) }
+                runCatching { deletePath(path) }
                 continue
             }
             if (file.isDirectory) {
@@ -131,7 +133,7 @@ class DownloadStorage(
                 continue
             }
             val size = file.length()
-            if (runCatching { Files.deleteIfExists(path) }.getOrDefault(false)) freed += size
+            if (runCatching { deletePath(path) }.getOrDefault(false)) freed += size
         }
         runCatching { Files.deleteIfExists(root.toPath()) }
         return freed

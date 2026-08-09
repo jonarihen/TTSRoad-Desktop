@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Forward10
@@ -42,6 +43,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -88,6 +90,8 @@ fun PlayerScreen(
      * to the real config directory.
      */
     preferences: PlaybackPreferencesStore = remember { InMemoryPlaybackPreferencesStore() },
+    readAlongAvailable: Boolean = false,
+    onOpenReader: (chapterId: Int, title: String) -> Unit = { _, _ -> },
     onBack: () -> Unit,
 ) {
     val s: PlayerUiState by playback.state.collectAsState()
@@ -104,7 +108,15 @@ fun PlayerScreen(
                 Modifier.fillMaxSize().padding(top = 28.dp).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                PlayerMain(s, playback, preferences, compact = true, modifier = Modifier.fillMaxWidth())
+                PlayerMain(
+                    s,
+                    playback,
+                    preferences,
+                    compact = true,
+                    readAlongAvailable = readAlongAvailable,
+                    onOpenReader = onOpenReader,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 if (hasQueue) {
                     Spacer(Modifier.height(20.dp))
                     QueuePanel(s, playback, Modifier.fillMaxWidth().height(260.dp))
@@ -118,6 +130,8 @@ fun PlayerScreen(
                         playback,
                         preferences,
                         compact = false,
+                        readAlongAvailable = readAlongAvailable,
+                        onOpenReader = onOpenReader,
                         modifier = Modifier.align(Alignment.TopCenter).widthIn(max = NarrowMaxWidth)
                             .fillMaxWidth().fillMaxHeight(),
                     )
@@ -138,6 +152,8 @@ private fun PlayerMain(
     playback: PlaybackController,
     preferences: PlaybackPreferencesStore,
     compact: Boolean,
+    readAlongAvailable: Boolean,
+    onOpenReader: (chapterId: Int, title: String) -> Unit,
     modifier: Modifier,
 ) {
     val prefs by preferences.preferences.collectAsState()
@@ -170,6 +186,19 @@ private fun PlayerMain(
         s.fictionTitle?.let {
             Spacer(Modifier.height(8.dp))
             MetaText(it)
+        }
+        val chapterId = s.queue.getOrNull(s.currentIndex)?.chapterId ?: 0
+        if (readAlongAvailable && chapterId > 0) {
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { onOpenReader(chapterId, s.title) },
+                shape = androidx.compose.ui.graphics.RectangleShape,
+                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("READ ALONG")
+            }
         }
         Spacer(Modifier.height(20.dp))
         Slider(

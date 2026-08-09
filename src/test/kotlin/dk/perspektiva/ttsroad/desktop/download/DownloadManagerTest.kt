@@ -7,6 +7,7 @@ import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import java.io.File
+import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -96,16 +97,17 @@ class DownloadManagerTest {
         progressBytesThreshold: Long = DownloadManager.DefaultProgressBytesThreshold,
         progressIntervalNanos: Long = DownloadManager.DefaultProgressIntervalNanos,
         progressClockNanos: () -> Long = System::nanoTime,
+        downloadStorage: DownloadStorage = storage,
     ): DownloadManager {
         val repository = object : FakeRepository(serverUrl = server.url("/").toString()) {
             override fun authHeaderValue(): String? = sessionStore.current().authorizationHeader
             override fun resolveUrl(url: String): String =
                 if (url.startsWith("http")) url else server.url("/").toString().trimEnd('/') + url
         }
-        val downloader = ChapterDownloader(authedClient(sessionStore), repository, storage)
+        val downloader = ChapterDownloader(authedClient(sessionStore), repository, downloadStorage)
         return DownloadManager(
             downloader,
-            storage,
+            downloadStorage,
             indexStore,
             retryDelaysMs = retryDelaysMs,
             progressBytesThreshold = progressBytesThreshold,
@@ -308,6 +310,33 @@ class DownloadManagerTest {
         assertEquals(3 * 4096L, freed)
         assertTrue(index.entries.value.isEmpty())
         assertFalse(storage.root.exists())
+    }
+
+    @Test
+    fun `delete all preserves metadata for a file the filesystem refused to remove`() = runBlocking {
+        val stubborn = DownloadStorage(
+            root = File(tempDir, "stubborn"),
+            deletePath = { path ->
+                if (path.fileName.toString() == "2.mp3") false else Files.deleteIfExists(path)
+            },
+        ).also { it.prepare() }
+        val localIndex = InMemoryDownloadIndexStore(
+            listOf(
+                DownloadEntry(1, 7, "A Serial", "One", DownloadState.Downloaded, 100, 100, "1.mp3"),
+                DownloadEntry(2, 7, "A Serial", "Two", DownloadState.Downloaded, 200, 200, "2.mp3"),
+            ),
+        )
+        stubborn.resolve("1.mp3").writeBytes(ByteArray(100))
+        stubborn.resolve("2.mp3").writeBytes(ByteArray(200))
+
+        val freed = manager(indexStore = localIndex, downloadStorage = stubborn).deleteAll()
+
+        assertEquals(100L, freed)
+        assertNull(DownloadIndex.find(localIndex.entries.value, 1))
+        val retained = DownloadIndex.find(localIndex.entries.value, 2)!!
+        assertEquals("Two", retained.chapterTitle)
+        assertEquals(DownloadState.Downloaded, retained.state)
+        assertTrue(stubborn.resolve("2.mp3").isFile)
     }
 
     // --- Restart ------------------------------------------------------------------------------------

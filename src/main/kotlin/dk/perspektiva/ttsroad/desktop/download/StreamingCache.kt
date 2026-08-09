@@ -57,7 +57,7 @@ class StreamingCache(
     fun retaining(chapterId: Int, upstream: MediaSource): MediaSource = object : MediaSource {
         override fun open(): MediaStream {
             val network = upstream.open()
-            val part = runCatching { begin(chapterId) }
+            val part = runCatching { begin(chapterId, network.length) }
                 .onFailure { AppLog.warn("could not start the streaming cache", it) }
                 .getOrNull()
             return if (part == null) network else RetainingStream(network, part, chapterId)
@@ -92,7 +92,12 @@ class StreamingCache(
         return freed
     }
 
-    private fun begin(chapterId: Int): File {
+    @Synchronized
+    private fun begin(chapterId: Int, expectedBytes: Long): File? {
+        if (maxBytes >= 0L && (maxBytes == 0L || expectedBytes > maxBytes)) {
+            prune()
+            return null
+        }
         check(ownedDirectories.none { Files.isSymbolicLink(it.toPath()) }) {
             "cache directory is a symlink"
         }
@@ -103,6 +108,13 @@ class StreamingCache(
         val part = resolve(chapterFileName(chapterId) + DownloadStorage.PartSuffix)
         RandomAccessFile(part, "rw").use { it.setLength(0L) }
         SecureFiles.restrictToOwner(part.toPath())
+        if (maxBytes >= 0L && expectedBytes >= 0L) {
+            // Reserve the known chapter size by evicting completed LRU entries before any bytes
+            // arrive. The per-chunk check below remains authoritative under concurrent streams.
+            pruneTo((maxBytes - expectedBytes).coerceAtLeast(0L))
+        } else {
+            prune()
+        }
         return part
     }
 
@@ -123,9 +135,11 @@ class StreamingCache(
             if (read > 0) {
                 val sink = output
                 if (sink != null) {
-                    runCatching { sink.write(buffer, offset, read) }
-                        .onSuccess { written += read }
-                        .onFailure { abandon("could not retain streamed audio", it) }
+                    runCatching { retainChunk(sink, buffer, offset, read) }
+                        .fold(
+                            onSuccess = { retained -> if (retained) written += read else abandon() },
+                            onFailure = { abandon("could not retain streamed audio", it) },
+                        )
                 }
             } else if (read < 0) {
                 finish()
@@ -182,25 +196,51 @@ class StreamingCache(
         }
     }
 
+    /** Writes one chunk only while all completed and in-progress cache bytes remain within the cap. */
+    @Synchronized
+    private fun retainChunk(
+        sink: RandomAccessFile,
+        buffer: ByteArray,
+        offset: Int,
+        count: Int,
+    ): Boolean {
+        if (maxBytes >= 0L) {
+            val incoming = count.toLong()
+            if (incoming > maxBytes) return false
+            // Prefer evicting reusable LRU entries over abandoning the chapter currently playing.
+            pruneTo(maxBytes - incoming)
+            val retained = retainedFiles().sumOf(File::length)
+            if (retained > maxBytes - incoming) return false
+        }
+        sink.write(buffer, offset, count)
+        return true
+    }
+
     @Synchronized
     private fun prune() {
         if (maxBytes < 0L) return
+        pruneTo(maxBytes)
+    }
+
+    private fun pruneTo(targetBytes: Long) {
         val oldestFirst = completedFiles().sortedBy(File::lastModified).toMutableList()
-        var bytes = oldestFirst.sumOf(File::length)
-        while (bytes > maxBytes && oldestFirst.isNotEmpty()) {
+        var bytes = retainedFiles().sumOf(File::length)
+        while (bytes > targetBytes && oldestFirst.isNotEmpty()) {
             val victim = oldestFirst.removeFirst()
             val size = victim.length()
             if (runCatching { Files.deleteIfExists(victim.toPath()) }.getOrDefault(false)) bytes -= size
         }
     }
 
-    private fun completedFiles(): List<File> =
+    private fun retainedFiles(): List<File> =
         if (ownedDirectories.any { Files.isSymbolicLink(it.toPath()) }) emptyList() else root.listFiles().orEmpty().filter { file ->
             file.isFile &&
                 !Files.isSymbolicLink(file.toPath()) &&
-                file.name.endsWith(".mp3") &&
-                FileDownloadIndexStore.isSafeName(file.name)
+                FileDownloadIndexStore.isSafeName(file.name) &&
+                (file.name.endsWith(".mp3") || file.name.endsWith(".mp3${DownloadStorage.PartSuffix}"))
         }
+
+    private fun completedFiles(): List<File> = retainedFiles().filter { it.name.endsWith(".mp3") }
 
     private fun resolve(name: String): File {
         require(FileDownloadIndexStore.isSafeName(name)) { "unsafe cache file name: $name" }

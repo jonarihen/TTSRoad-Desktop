@@ -77,6 +77,7 @@ import dk.perspektiva.ttsroad.desktop.ui.MetaText
 import dk.perspektiva.ttsroad.desktop.ui.NowPlayingBar
 import dk.perspektiva.ttsroad.desktop.ui.PageGutter
 import dk.perspektiva.ttsroad.desktop.ui.PlayerScreen
+import dk.perspektiva.ttsroad.desktop.ui.ReaderScreen
 import dk.perspektiva.ttsroad.desktop.ui.SettingsScreen
 import dk.perspektiva.ttsroad.desktop.ui.SettingsSection
 import dk.perspektiva.ttsroad.desktop.ui.SettingsStateHolder
@@ -215,6 +216,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             // The library belonged to the account that just ended; the next person to sign in on
             // this machine must not be shown it.
             cache.clear()
+            container.readAlongCache.clear()
             settings.sessionEnded()
         } else {
             // Cheap, and it is what makes optional UI correct after a restart, where login did
@@ -225,6 +227,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             // startup in an address-derived directory.
             container.downloads.advertisedBaseUrl = discovered.serverBaseUrl
             container.downloads.refresh()
+            // Local values are already usable; a capable server can now replace them with this
+            // account's cross-device reader settings. Older/offline servers leave them alone.
+            container.readerPreferences.refreshFromServer()
         }
     }
 
@@ -311,9 +316,8 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                         chapters = cache.chapters(destination.fiction.id)
                                             .collectAsState().value.value?.chapters.orEmpty(),
                                     ),
-                                    // Offered only for chapters the *server* holds timings for, so
-                                    // the row action cannot appear on a chapter the reader could
-                                    // never open.
+                                    // Capability-gated at the row. A chapter without timings still
+                                    // opens as selectable plain narration text.
                                     onOpenReader = { chapter ->
                                         nav.open(
                                             Destination.Reader(chapter.resolvedChapterId, chapter.resolvedTitle),
@@ -325,6 +329,10 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     playback = playback,
                                     sizeClass = sizeClass,
                                     preferences = container.playbackPreferences,
+                                    readAlongAvailable = capabilities.readAlong,
+                                    onOpenReader = { chapterId, title ->
+                                        nav.open(Destination.Reader(chapterId, title))
+                                    },
                                     onBack = { nav.back() },
                                 )
 
@@ -352,7 +360,17 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     },
                                 )
 
-                                is Destination.Reader -> ReaderPlaceholder(destination.title)
+                                is Destination.Reader -> ReaderScreen(
+                                    chapterId = destination.chapterId,
+                                    fallbackTitle = destination.title,
+                                    cache = container.readAlongCache,
+                                    preferences = container.readerPreferences,
+                                    playback = playback,
+                                    onBack = { nav.back() },
+                                    onChapterAdvanced = { chapterId, title ->
+                                        nav.replaceTop(Destination.Reader(chapterId, title))
+                                    },
+                                )
                             }
                         }
                     }
@@ -383,26 +401,6 @@ private val Destination.isRefreshable: Boolean
         Destination.Library, is Destination.Fiction, Destination.Settings, Destination.Devices -> true
         Destination.Player, is Destination.Reader -> false
     }
-
-/**
- * Read-along is not part of this build.
- *
- * Nothing navigates here — the destination exists so the back stack's keys and retention rules are
- * settled before the reader phase lands. An honest pane beats a half-wired screen if something
- * ever does reach it.
- */
-@Composable
-private fun ReaderPlaceholder(title: String) {
-    Box(Modifier.fillMaxSize().padding(PageGutter), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            MetaText(text = "// Read-along", color = AarisColor.Accent)
-            Spacer(Modifier.height(8.dp))
-            Text(title, style = MaterialTheme.typography.titleLarge, color = AarisColor.Ink)
-            Spacer(Modifier.height(8.dp))
-            MetaText("Read-along arrives in a later build")
-        }
-    }
-}
 
 @Composable
 private fun HeaderBar(

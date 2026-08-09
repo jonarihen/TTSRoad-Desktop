@@ -164,9 +164,9 @@ jumps to its real position.
 
 **Costs and things deliberately not done.**
 
-- **Read-along still has no reader.** The row action is gated on `capabilities.readalong` *and*
+- **Read-along still had no reader in this phase (superseded by ADR 0008).** The row action was gated on `capabilities.readalong` *and*
   per-chapter `has_timings`, so it only appears where the server could actually serve it — but it
-  navigates to the `Reader` destination, which is still the honest placeholder from Phase 3. This
+  navigated to the `Reader` destination, which was still the honest placeholder from Phase 3. This
   is the one place in this phase where a control leads somewhere unfinished; it is wired now so
   that the reader phase is a screen swap rather than a change to the chapter list.
 - **The download slot draws nothing (superseded by ADR 0007).** `ChapterDownloadState` and

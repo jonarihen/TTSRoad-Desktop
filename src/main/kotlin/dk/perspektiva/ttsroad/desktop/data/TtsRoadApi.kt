@@ -3,7 +3,9 @@ package dk.perspektiva.ttsroad.desktop.data
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.Headers
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -67,6 +69,19 @@ interface TtsRoadApi {
         @Query("playable_only") playableOnly: Boolean = false,
         @Query("include_excluded") includeExcluded: Boolean = false,
     ): ChaptersResponse
+
+    /** Raw response exposes both the ETag and the normal 304 revalidation path. */
+    @GET("api/mobile/chapters/{chapter_id}/readalong")
+    suspend fun readAlong(
+        @Path("chapter_id") chapterId: Int,
+        @Header("If-None-Match") ifNoneMatch: String? = null,
+    ): retrofit2.Response<ReadAlongResponse>
+
+    @GET("api/me/preferences")
+    suspend fun readerPreferences(): ReaderPreferencesResponse
+
+    @PATCH("api/me/preferences")
+    suspend fun updateReaderPreferences(@Body request: ReaderPreferencesPatch): ReaderPreferencesResponse
 
     @POST("api/mobile/playback/progress")
     suspend fun saveProgress(@Body request: PlaybackProgressRequest): PlaybackProgressResponse

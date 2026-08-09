@@ -34,6 +34,11 @@ open class FakeRepository(
     var devicesResult: Result<List<DeviceSession>?> = Result.success(emptyList()),
     var revokeResult: Result<Boolean> = Result.success(true),
     var currentUserResult: Result<MobileUser?> = Result.success(null),
+    var readAlongResult: Result<dk.perspektiva.ttsroad.desktop.data.ReadAlongFetchResult> = Result.success(
+        dk.perspektiva.ttsroad.desktop.data.ReadAlongFetchResult.NotFound,
+    ),
+    var readerPreferencesResult: Result<dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesResponse?> =
+        Result.success(null),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -49,6 +54,11 @@ open class FakeRepository(
         private set
     var revokeOtherDevicesCalls: Int = 0
         private set
+    var readAlongCalls: Int = 0
+        private set
+    val readAlongEtags: MutableList<String?> = mutableListOf()
+    val readerPreferencePatches: MutableList<dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesPatch> =
+        mutableListOf()
 
     /** Token ids passed to [revokeDevice], in order — "the current session was never revoked". */
     val revokedDevices: MutableList<Int> = mutableListOf()
@@ -120,6 +130,25 @@ open class FakeRepository(
     override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
         chaptersCalls++
         return chaptersResult.getOrThrow()
+    }
+
+    override suspend fun readAlong(
+        chapterId: Int,
+        ifNoneMatch: String?,
+    ): dk.perspektiva.ttsroad.desktop.data.ReadAlongFetchResult {
+        readAlongCalls++
+        readAlongEtags += ifNoneMatch
+        return readAlongResult.getOrThrow()
+    }
+
+    override suspend fun readerPreferences(): dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesResponse? =
+        readerPreferencesResult.getOrThrow()
+
+    override suspend fun updateReaderPreferences(
+        request: dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesPatch,
+    ): dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesResponse? {
+        readerPreferencePatches += request
+        return readerPreferencesResult.getOrThrow()
     }
 
     override suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse {

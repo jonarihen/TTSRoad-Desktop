@@ -35,6 +35,13 @@ fun chapterDownloadUi(entry: DownloadEntry?, available: Boolean): ChapterDownloa
     }
 }
 
+/** A queue cannot download a chapter whose metadata has no audio source yet. */
+fun chapterDownloadUi(
+    chapter: ChapterSummary,
+    entry: DownloadEntry?,
+    storageAvailable: Boolean,
+): ChapterDownloadUi = chapterDownloadUi(entry, storageAvailable && chapter.hasAudio)
+
 /**
  * Which chapters "Download next N" should queue.
  *
@@ -95,7 +102,9 @@ fun rememberChapterDownloads(
 
     return ChapterDownloadsUi(
         available = manager != null,
-        stateFor = { chapter -> chapterDownloadUi(byChapter[chapter.resolvedChapterId], manager != null) },
+        stateFor = { chapter ->
+            chapterDownloadUi(chapter, byChapter[chapter.resolvedChapterId], manager != null)
+        },
         onDownload = { chapter -> manager?.download(chapter, title) },
         onCancel = { chapter -> manager?.cancel(chapter.resolvedChapterId) },
         onDelete = { chapter -> manager?.remove(chapter.resolvedChapterId) },

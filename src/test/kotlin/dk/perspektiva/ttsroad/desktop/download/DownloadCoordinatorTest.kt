@@ -1,8 +1,11 @@
 package dk.perspektiva.ttsroad.desktop.download
 
 import dk.perspektiva.ttsroad.desktop.FakeRepository
+import dk.perspektiva.ttsroad.desktop.data.CachedReadAlong
 import dk.perspektiva.ttsroad.desktop.data.FileSessionStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
+import dk.perspektiva.ttsroad.desktop.data.ReadAlongChapter
+import dk.perspektiva.ttsroad.desktop.data.ReadAlongResponse
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.security.InMemoryCredentialStore
@@ -94,17 +97,31 @@ class DownloadCoordinatorTest {
 
         val session = coordinator.refresh()!!
         session.storage.resolve("1.mp3").writeBytes(ByteArray(32))
+        session.readAlongCache.write(
+            1,
+            CachedReadAlong(
+                response = ReadAlongResponse(
+                    chapter = ReadAlongChapter(id = 1, fictionId = 7),
+                    text = "Private narration",
+                    paragraphs = listOf(listOf(0.0, 17.0)),
+                ),
+            ),
+        )
         val root = session.storage.root
+        val readAlongRoot = session.readAlongCache.root
 
         store.clearToken()
         // `clearToken` keeps login hints, but those are not authority to open account-protected
         // metadata. The live stack goes away while its bytes stay on disk.
         assertTrue(root.resolve("1.mp3").isFile, "signing out deleted a download")
         assertNull(coordinator.refresh(), "signed-out hints exposed the account's download index")
+        assertNull(coordinator.readAlongCacheOrNull(), "signed-out hints exposed narration text")
+        assertTrue(readAlongRoot.resolve("chapter-1.json").isFile, "signing out deleted rebuildable text")
 
         store.save(signedIn())
         assertEquals(root.path, coordinator.refresh()!!.storage.root.path)
         assertTrue(coordinator.refresh()!!.storage.resolve("1.mp3").isFile)
+        assertEquals("Private narration", coordinator.readAlongCacheOrNull()?.read(1)?.response?.text)
         coordinator.close()
     }
 

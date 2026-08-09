@@ -17,6 +17,7 @@ import dk.perspektiva.ttsroad.desktop.ParsedFixtures
 import dk.perspektiva.ttsroad.desktop.testLibraryCache
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionEnd
@@ -70,6 +71,7 @@ class ScreensUiTest {
         // ~/.config/TTSRoad files the production stores default to.
         playbackPreferences = InMemoryPlaybackPreferencesStore(),
         playbackHistory = InMemoryPlaybackHistoryStore(),
+        readerPreferencesFactory = { _, _ -> InMemoryReaderPreferencesStore() },
         downloadCoordinatorFactory = ::testDownloads,
     )
 
@@ -170,6 +172,7 @@ class ScreensUiTest {
             // ~/.config/TTSRoad files the production stores default to.
             playbackPreferences = InMemoryPlaybackPreferencesStore(),
             playbackHistory = InMemoryPlaybackHistoryStore(),
+            readerPreferencesFactory = { _, _ -> InMemoryReaderPreferencesStore() },
             downloadCoordinatorFactory = ::testDownloads,
         )
         compose.setContent { TtsRoadTheme { App(app) } }
@@ -248,6 +251,7 @@ class ScreensUiTest {
             // ~/.config/TTSRoad files the production stores default to.
             playbackPreferences = InMemoryPlaybackPreferencesStore(),
             playbackHistory = InMemoryPlaybackHistoryStore(),
+            readerPreferencesFactory = { _, _ -> InMemoryReaderPreferencesStore() },
             downloadCoordinatorFactory = ::testDownloads,
         )
         compose.setContent { TtsRoadTheme { App(app) } }

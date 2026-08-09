@@ -117,6 +117,15 @@ interface TtsRoadRepository {
 
     suspend fun chapters(fictionId: Int, playableOnly: Boolean = false): ChaptersResponse
 
+    /** Conditional reader document request; 404 is a normal [ReadAlongFetchResult.NotFound]. */
+    suspend fun readAlong(chapterId: Int, ifNoneMatch: String? = null): ReadAlongFetchResult
+
+    /** Null means this older server has no account-preferences endpoint. */
+    suspend fun readerPreferences(): ReaderPreferencesResponse?
+
+    /** Null means this older server has no account-preferences endpoint. */
+    suspend fun updateReaderPreferences(request: ReaderPreferencesPatch): ReaderPreferencesResponse?
+
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse
 
     suspend fun saveProgress(
@@ -304,6 +313,26 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse =
         withAuthorizedApi { it.chapters(fictionId = fictionId, playableOnly = playableOnly) }
+
+    override suspend fun readAlong(chapterId: Int, ifNoneMatch: String?): ReadAlongFetchResult =
+        withAuthorizedApi { api ->
+            val response = api.readAlong(chapterId, ifNoneMatch)
+            when {
+                response.code() == 304 -> ReadAlongFetchResult.NotModified
+                response.code() == 404 -> ReadAlongFetchResult.NotFound
+                response.isSuccessful -> {
+                    val body = response.body() ?: error("The server returned an empty read-along document")
+                    ReadAlongFetchResult.Modified(body, response.headers()["ETag"])
+                }
+                else -> throw HttpException(response)
+            }
+        }
+
+    override suspend fun readerPreferences(): ReaderPreferencesResponse? =
+        ifEndpointExists { it.readerPreferences() }
+
+    override suspend fun updateReaderPreferences(request: ReaderPreferencesPatch): ReaderPreferencesResponse? =
+        ifEndpointExists { it.updateReaderPreferences(request) }
 
     override suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
         withAuthorizedApi { it.markPlayback(PlaybackMarkRequest(chapterIds, played)) }

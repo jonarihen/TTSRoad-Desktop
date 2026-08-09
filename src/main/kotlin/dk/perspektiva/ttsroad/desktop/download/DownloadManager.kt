@@ -171,8 +171,35 @@ class DownloadManager(
         active.forEach { it.cancel() }
         active.joinAll()
         jobs.clear()
+        val before = index.entries.value
         val freed = runCatching { storage.deleteAll() }.getOrDefault(0L)
-        index.clear()
+        val remaining = storage.audioFileBytes()
+        if (remaining.isEmpty()) {
+            index.clear()
+        } else {
+            // A locked or permission-denied file is still a user-requested download. Preserve its
+            // title and state instead of clearing the row and orphaning opaque bytes on disk.
+            for (entry in before) {
+                val completedBytes = remaining[entry.fileName]
+                val partialBytes = remaining[entry.fileName + DownloadStorage.PartSuffix]
+                if (completedBytes == null && partialBytes == null) {
+                    index.remove(entry.chapterId)
+                } else {
+                    index.put(
+                        entry.copy(
+                            state = if (completedBytes != null) DownloadState.Downloaded else DownloadState.Failed,
+                            bytesDownloaded = completedBytes ?: partialBytes ?: 0L,
+                            failureMessage = if (completedBytes != null) {
+                                entry.failureMessage
+                            } else {
+                                "Could not remove the local file"
+                            },
+                            updatedAtMs = clock(),
+                        ),
+                    )
+                }
+            }
+        }
         return freed
     }
 
@@ -225,7 +252,8 @@ class DownloadManager(
                 // slow-transfer UI responsive. Success below always persists the exact final size.
                 val nowNanos = progressClockNanos()
                 val movedBackwards = soFar < lastPublishedBytes
-                val byteThresholdReached = soFar - lastPublishedBytes >= progressBytesThreshold
+                val byteThresholdReached = !movedBackwards &&
+                    soFar - lastPublishedBytes >= progressBytesThreshold
                 val timeThresholdReached = nowNanos - lastPublishedAtNanos >= progressIntervalNanos
                 if (!movedBackwards && !byteThresholdReached && !timeThresholdReached) return@download
                 val latest = DownloadIndex.find(index.entries.value, id) ?: return@download

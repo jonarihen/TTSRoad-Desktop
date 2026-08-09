@@ -53,6 +53,7 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | App shortcuts — Space, arrows, Ctrl+arrows, Ctrl+L, Ctrl+, plus an F1 list | ✅ |
 | Offline downloads — per chapter, next 10, restart-safe queue, storage controls | ✅ |
 | Bounded streaming cache and previously loaded library browsing while offline | ✅ |
+| Audio-synchronized read-along — offline text, word seek, find, themes and zoom | ✅ |
 | Streaming playback — audio starts before the chapter has downloaded | ✅ Linux |
 | Seeking without decoding from the start of the chapter | ✅ Linux |
 | Variable-rate playback ("speed"), pitch-preserving 0.5×–3.0× | ✅ Linux |
@@ -103,6 +104,8 @@ Listening preferences, the sleep timer, local history, MPRIS and the shortcut ta
 [`docs/adr/0006-listening-preferences-and-desktop-integration.md`](docs/adr/0006-listening-preferences-and-desktop-integration.md).
 Offline namespaces, resumable downloads, streamed-audio retention and disk metadata are in
 [`docs/adr/0007-offline-downloads-and-streaming-cache.md`](docs/adr/0007-offline-downloads-and-streaming-cache.md).
+Read-along parsing, ETag caching, media-time highlighting and account preference sync are in
+[`docs/adr/0008-audio-synchronized-read-along.md`](docs/adr/0008-audio-synchronized-read-along.md).
 
 ## 🚀 Bootstrap
 
@@ -180,6 +183,12 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── Cached.kt                 value + error + isRefreshing + last success, independently
 │   ├── LibraryCache.kt           library/chapter state held above the screens
 │   ├── LibraryDiskCache.kt       account-scoped rebuildable metadata for offline browsing
+│   ├── ReadAlongModels.kt        compact text/cue and account-preference API models
+│   ├── ReadAlongDocument.kt      validated spans + binary highlight/seek/find lookup
+│   ├── ReadAlongSentences.kt     paragraph-bounded sentence segmentation
+│   ├── ReadAlongCache.kt         ETag revalidation + offline fallback
+│   ├── ReadAlongDiskCache.kt     bounded identity-scoped text cache
+│   ├── ReaderPreferences.kt      local fallback + account synchronization
 │   ├── AppDirectories.kt         platform config/data/cache roots
 │   ├── StorageIdentity.kt        stable server/account disk namespace + generated audio names
 │   ├── ChapterLists.kt           filter/sort, bulk id selection, status, played patch + rollback
@@ -225,6 +234,7 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
     ├── SettingsStateHolder.kt    settings panes, device sessions, confirmations
     ├── LibraryScreen.kt          LazyVerticalGrid: hero, shelves, search, fictions
     ├── FictionDetailScreen.kt    LazyColumn: one header item, then chapter rows + bulk controls
+    ├── ReaderScreen.kt           lazy selectable reader, follow/find/zoom/theme controls
     ├── SettingsScreen.kt         two-pane control centre
     ├── ShortcutsDialog.kt        the in-app keyboard reference (F1)
     └── PlayerScreen.kt           full player + NowPlayingBar (stacked when narrow)
@@ -280,9 +290,10 @@ There are three deliberately different kinds of disk state:
   A sequential stream is retained only after clean EOF and the same validation. Seeking abandons
   that cache attempt rather than promoting a file with a hole. The cache is bounded to 1 GiB and
   evicts least-recently-used completed entries.
-- **Library/chapter metadata** is rebuildable cache too. It lets a restart show previously loaded
-  fictions and chapters immediately, with the original last-refresh time and an offline refresh
-  error above retained content. Server-local file paths and backend error details are stripped.
+- **Library/chapter metadata and read-along documents** are rebuildable cache too. They let a
+  restart show previously loaded fictions and chapters immediately and keep previously opened
+  narration readable offline. Read-along text/cues retain their ETag and are bounded separately
+  from audio to 64 MiB / 80 chapters. Server-local paths and backend errors are stripped.
 
 All three use `<stable-server>/<account>/<generated-chapter-id>` namespaces. Capability discovery's
 advertised `server.base_url` is the preferred server identity, so changing from a LAN address to a
@@ -297,6 +308,27 @@ worker to release its handles and removes the partial. Settings measures request
 and keeps **Delete all downloads** separate from **Clear streaming cache**, each behind confirmation.
 Signing out keeps bytes but closes the account's index and fiction titles until that account signs
 in again.
+
+## 📖 Read-along reader
+
+The reader is offered only when capability discovery reports `readalong`. `has_timings` changes the
+mode, not whether useful text exists: timed chapters follow audio; older chapters remain selectable,
+searchable plain narration. The player and each chapter row can open it, and opening a chapter that
+is not playing never highlights it against unrelated audio.
+
+- Compact cue arrays are validated into half-open text spans. Malformed/non-monotonic cues, a
+  mismatched chapter id, or an audio-duration mismatch disable highlighting with an explanation
+  instead of confidently pointing at stale text.
+- Cue, sentence, paragraph and word-seek lookup are binary. Highlighting consumes the playback
+  engine's reported **media position**, so 2× playback needs no wall-clock scaling and cannot drift.
+- Paragraphs are lazy items, never one composable per word. Text stays selectable/copyable, Ctrl+F
+  finds within the chapter, and Page Up/Down plus Home/End work without a pointer.
+- Follow mode holds the active paragraph roughly one-third down. Wheel, drag, or scrollbar input
+  yields until **Back to current**; queue auto-advance loads the next document and restores follow.
+  The next queue chapter is prefetched at 80%.
+- Font size (14–30), line height (1.3–2.4), dark/sepia/light theme, and sentence/word/off highlight
+  are saved locally first and synchronized through `GET/PATCH /api/me/preferences` when supported.
+  An older or offline server leaves the last-known local values usable.
 
 ## 🎚️ Listening preferences, the sleep timer and the desktop
 
@@ -414,9 +446,8 @@ what makes "scroll to the chapter that is playing" arithmetic rather than a gues
 - **Every row action is keyboard-reachable**: play, mark played/unplayed, mark all previous, and
   read-along are always in the semantics tree with a content description, and merely dim when the
   row is not hovered or focused.
-- **Read-along** appears only when the server reports the `readalong` capability *and* the chapter
-  has timings. It currently navigates to the reader placeholder; the reader itself lands in a later
-  phase.
+- **Read-along** appears when the server reports the `readalong` capability. `has_timings` chooses
+  synchronized versus text-only mode; it does not hide narration text from older chapters.
 - The **up-next panel** grows a search box once a queue passes eight chapters. Filtering it never
   reorders or renumbers anything.
 

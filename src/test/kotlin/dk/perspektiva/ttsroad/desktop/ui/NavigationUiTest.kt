@@ -32,9 +32,14 @@ import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
+import dk.perspektiva.ttsroad.desktop.data.ReadAlongChapter
+import dk.perspektiva.ttsroad.desktop.data.ReadAlongFetchResult
+import dk.perspektiva.ttsroad.desktop.data.ReadAlongResponse
+import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
 import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinator
@@ -92,6 +97,7 @@ class NavigationUiTest {
         // ~/.config/TTSRoad files the production stores default to.
         playbackPreferences = InMemoryPlaybackPreferencesStore(),
         playbackHistory = InMemoryPlaybackHistoryStore(),
+        readerPreferencesFactory = { _, _ -> InMemoryReaderPreferencesStore() },
         // See `testLibraryCache`: immediate main dispatch is what makes `waitForIdle` sufficient.
         libraryCacheFactory = { repo, _, now -> LibraryCache(repo, Dispatchers.Main.immediate, now) },
         downloadCoordinatorFactory = { store, client, repo, dispatchers ->
@@ -381,6 +387,36 @@ class NavigationUiTest {
     }
 
     // --- Chapters --------------------------------------------------------------------------------
+
+    @Test
+    fun `a capability-gated chapter row opens the real reader destination`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(bigLibrary(60)),
+            chaptersResult = Result.success(chapters),
+            capabilitiesResult = ServerCapabilities(serverVersion = "1.4.0", readAlong = true),
+            readAlongResult = Result.success(
+                ReadAlongFetchResult.Modified(
+                    ReadAlongResponse(
+                        chapter = ReadAlongChapter(5001, 50, "Chapter One", hasTimings = false),
+                        text = "The real reader is here.",
+                        paragraphs = listOf(listOf(0.0, 24.0)),
+                    ),
+                    "\"reader\"",
+                ),
+            ),
+        )
+        compose.setContent { TtsRoadTheme { App(container(repository)) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag(LibraryGridTestTag).performScrollToNode(hasText("Serial 50"))
+        compose.onNodeWithText("Serial 50").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Read chapter text").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("The real reader is here.").assertIsDisplayed()
+        compose.onNodeWithText("// TEXT ONLY").assertIsDisplayed()
+    }
 
     @Test
     fun `a fiction with many chapters composes only the rows on screen`() {
