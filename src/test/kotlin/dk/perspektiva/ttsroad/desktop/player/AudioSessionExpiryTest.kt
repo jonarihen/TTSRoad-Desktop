@@ -165,6 +165,10 @@ class AudioSessionExpiryTest {
 
         controller.play(chapter, null)
         withTimeout(15_000) { controller.state.first { it.error != null } }
+        // The controller publishes the player error before endSession crosses its IO dispatcher.
+        // Both are promised outcomes, so observe both rather than racing the second assertion
+        // against that dispatcher hand-off.
+        withTimeout(15_000) { repository.sessionEnd.first { it != null } }
 
         assertEquals("This device session expired. Sign in again.", controller.state.value.error)
         assertFalse(controller.state.value.isPlaying)
