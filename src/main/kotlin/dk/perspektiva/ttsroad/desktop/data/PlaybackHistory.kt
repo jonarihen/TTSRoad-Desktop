@@ -143,14 +143,17 @@ class InMemoryPlaybackHistoryStore(
     private val _history = MutableStateFlow(initial)
     override val history: StateFlow<List<PlaybackSnapshot>> = _history.asStateFlow()
 
+    @Synchronized
     override fun record(snapshot: PlaybackSnapshot) {
         _history.value = PlaybackHistory.record(_history.value, snapshot)
     }
 
+    @Synchronized
     override fun dismiss(key: String) {
         _history.value = PlaybackHistory.dismiss(_history.value, key)
     }
 
+    @Synchronized
     override fun clear() {
         _history.value = emptyList()
     }
@@ -176,14 +179,25 @@ class FilePlaybackHistoryStore(
     private val _history = MutableStateFlow(read())
     override val history: StateFlow<List<PlaybackSnapshot>> = _history.asStateFlow()
 
+    /**
+     * Every mutation is read-modify-write, and the readers and writers are on different threads:
+     * the controller records from its own scope while the UI dismisses from the Compose thread.
+     * Unsynchronised, two of them can derive from the same list and the later write wins outright —
+     * which loses a dismissal, because a stale `record` carries `dismissed = false` and the whole
+     * point of the inheritance rule is that a progress save must never undo one. Synchronising the
+     * mutation *and* the file write also keeps the file ordered the same way as the flow.
+     */
+    @Synchronized
     override fun record(snapshot: PlaybackSnapshot) {
         write(PlaybackHistory.record(_history.value, snapshot))
     }
 
+    @Synchronized
     override fun dismiss(key: String) {
         write(PlaybackHistory.dismiss(_history.value, key))
     }
 
+    @Synchronized
     override fun clear() {
         write(emptyList())
     }
