@@ -74,7 +74,9 @@ mapfile -d '' -t desktop_candidates < <(
     fail "payload must contain exactly one ttsroad-TTSRoad.desktop (found ${#desktop_candidates[@]})"
 desktop=${desktop_candidates[0]}
 
-if awk 'substr($1, 9, 1) == "w" { print; found=1 } END { exit found ? 0 : 1 }' \
+# Symlink modes are always rendered as lrwxrwxrwx and are ignored by Linux. Check their targets
+# separately below, and apply the writable-bit policy only to paths whose mode is meaningful.
+if awk 'substr($1, 1, 1) != "l" && substr($1, 9, 1) == "w" { print; found=1 } END { exit found ? 0 : 1 }' \
     "$work_dir/contents.txt"; then
     fail "payload contains a world-writable path"
 fi
@@ -82,6 +84,11 @@ if awk '$2 !~ /^root\/root$/ { print; found=1 } END { exit found ? 0 : 1 }' \
     "$work_dir/contents.txt"; then
     fail "payload contains a path not owned by root:root"
 fi
+
+while IFS= read -r -d '' link; do
+    resolved=$(readlink -f -- "$link") || fail "payload contains a broken symlink: ${link#"$payload"}"
+    [[ $resolved == "$payload"/* ]] || fail "payload symlink escapes package root: ${link#"$payload"}"
+done < <(find "$payload" -type l -print0)
 
 if grep -R -a -F -q -- "$project_dir" "$payload" "$work_dir/control"; then
     fail "payload contains the absolute build path $project_dir"
