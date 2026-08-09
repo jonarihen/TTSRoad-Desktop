@@ -42,16 +42,22 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Bulk marks — all played / all unplayed / all previous, in one request | ✅ |
 | Optimistic marking with rollback and an inline error | ✅ |
 | Searchable up-next panel for long queues | ✅ |
-| Player UI (play/pause, seek, ±30 s, next/previous, up-next queue) | ✅ |
+| Player UI (play/pause, seek, configurable skip, next/previous, up-next queue) | ✅ |
 | **MP3 audio playback** | ✅ |
-| Settings — two-pane control centre (account, devices, about) | ✅ |
+| Settings — two-pane control centre (account, devices, playback, about) | ✅ |
 | Device sessions — list, mark current, revoke one / revoke all others | ✅ |
-| Playback preferences / offline downloads | ❌ |
+| Playback preferences — speed, skip interval, skip silence, volume boost | ✅ |
+| Sleep timer — 5/15/30/45/60 min or end of chapter, with a fade and "+5 min" | ✅ |
+| Local listening history — "Jump back in", dismissible per snapshot | ✅ |
+| MPRIS over D-Bus — Cinnamon applet, lock screen, hardware media keys | ✅ Linux |
+| App shortcuts — Space, arrows, Ctrl+arrows, Ctrl+L, Ctrl+, plus an F1 list | ✅ |
+| Offline downloads | ❌ |
 | Streaming playback — audio starts before the chapter has downloaded | ✅ Linux |
 | Seeking without decoding from the start of the chapter | ✅ Linux |
 | Variable-rate playback ("speed"), pitch-preserving 0.5×–3.0× | ✅ Linux |
+| Skip silence | ✅ with `gst-plugins-bad` |
 
-> **The last three are Linux-only, and the app says so rather than pretending otherwise.** The
+> **The playback rows above are Linux-only, and the app says so rather than pretending otherwise.** The
 > production backend is GStreamer, with `scaletempo` for pitch-preserving rate. Where GStreamer is
 > absent — Windows and macOS by default — the app falls back to the original `javax.sound.sampled`
 > engine, which cannot resample and has no random-access index. Each engine reports its own
@@ -92,6 +98,8 @@ The back stack, the repository-backed cache, lazy lists and the adaptive breakpo
 [`docs/adr/0004-stateful-adaptive-navigation.md`](docs/adr/0004-stateful-adaptive-navigation.md).
 Chapter filtering and ordering, bulk marking, optimistic rollback and current-chapter resolution are in
 [`docs/adr/0005-chapter-browsing-and-bulk-controls.md`](docs/adr/0005-chapter-browsing-and-bulk-controls.md).
+Listening preferences, the sleep timer, local history, MPRIS and the shortcut table are in
+[`docs/adr/0006-listening-preferences-and-desktop-integration.md`](docs/adr/0006-listening-preferences-and-desktop-integration.md).
 
 ## 🚀 Bootstrap
 
@@ -164,6 +172,8 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   └── Shortcuts.kt              the keyboard table and Escape's precedence, as pure functions
 ├── data/
 │   ├── Models.kt                 mobile API models (Moshi)
+│   ├── PlaybackPreferences.kt    speed/skip/silence/boost, machine-local, migrating on read
+│   ├── PlaybackHistory.kt        bounded local snapshots, last-heard and jump-back selection
 │   ├── Cached.kt                 value + error + isRefreshing + last success, independently
 │   ├── LibraryCache.kt           library/chapter state held above the screens
 │   ├── ChapterLists.kt           filter/sort, bulk id selection, status, played patch + rollback
@@ -186,6 +196,9 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── QueuePlaybackController.kt queue, auto-advance, progress, retry ladder, session expiry
 │   ├── PlaybackEngine.kt         backend seam: transport, capabilities, typed failures
 │   ├── GstPlaybackEngine.kt      production backend — GStreamer via gst1-java-core
+│   ├── SleepTimer.kt             the timer as a state machine over an injected clock
+│   ├── MprisState.kt             PlayerUiState → MPRIS, pure and D-Bus-free
+│   ├── MprisService.kt           the session-bus plumbing; optional at runtime
 │   ├── JavaSoundPlaybackEngine.kt fallback where GStreamer is absent (no speed control)
 │   ├── MediaSource.kt            bearer-authenticated range-request byte source
 │   └── AudioEngine.kt            javax.sound.sampled seam used by the fallback engine
@@ -199,6 +212,7 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
     ├── LibraryScreen.kt          LazyVerticalGrid: hero, shelves, search, fictions
     ├── FictionDetailScreen.kt    LazyColumn: one header item, then chapter rows + bulk controls
     ├── SettingsScreen.kt         two-pane control centre
+    ├── ShortcutsDialog.kt        the in-app keyboard reference (F1)
     └── PlayerScreen.kt           full player + NowPlayingBar (stacked when narrow)
 
 src/test/kotlin/dk/perspektiva/ttsroad/desktop/
@@ -207,7 +221,7 @@ src/test/kotlin/dk/perspektiva/ttsroad/desktop/
 ├── data/                         URLs, model parsing, login/429, capability discovery, structured
 │                                 401s, redaction, auth-interceptor origin rules, session migration
 ├── security/                     credential stores (incl. a real Windows Credential Manager round-trip)
-├── player/                       playback state machine + audio 401 handling
+├── player/                       playback state machine, audio 401s, sleep timer, MPRIS mapping
 ├── nav/                          back-stack rules, destination keys, shortcut table
 └── ui/                           state holders, adaptive breakpoints, Compose screen and
                                   navigation tests (retained state, refresh errors, lazy bounds)
@@ -239,6 +253,71 @@ instead of re-decoding from byte zero. Measured on a 32.5 s fixture: first audio
 
 The fallback engine keeps the old behaviour — materialise the chapter, decode with **mp3spi/JLayer**,
 write PCM to a `SourceDataLine`, re-decode from the start to seek, and no speed control.
+
+## 🎚️ Listening preferences, the sleep timer and the desktop
+
+Speed, skip interval, skip silence and volume boost live in `playback.json` next to the session and
+window files — **not** in the session. Signing out does not reset them, and a second account on a
+shared machine does not inherit the first one's. The file has no notion of a user at all.
+
+- **They are applied by the controller, not the player screen.** An auto-advanced chapter and a
+  media-key start use the same values as a chapter you pressed play on, because only the controller
+  sees all three.
+- **A file this build did not write still loads.** Missing keys fall back, unknown enum values fall
+  back to the safe end, and out-of-range numbers are *snapped* rather than defaulted — a stored
+  20-second skip becomes 15, which is closer to what that listener chose than 30 is.
+- **A custom speed survives.** The menu always offers the stored value even when it is not one of
+  this build's presets, so a rate set elsewhere is not silently rounded away on first open.
+- **Boost stops at 2×.** Higher clips quiet narration instead of raising it. Both engines honour
+  gain — including the Java Sound fallback, which scales PCM in its own decode loop with saturation
+  rather than wrapping, because the sleep timer's fade has to work everywhere.
+- **Skip silence needs `gst-plugins-bad`.** Where `removesilence` is absent the control is not
+  drawn, exactly as the speed control is not drawn without GStreamer.
+
+The **sleep timer** offers 5/15/30/45/60 minutes or the end of the current chapter.
+
+- A manual pause **freezes** a countdown; resuming continues it. An hour paused costs it nothing.
+- The last 30 seconds **fade**, and the fade multiplies with the volume boost rather than replacing
+  it — so cancelling restores your boost, not unity.
+- **"+5 min"** appears during the fade, adds to what is left, and brings the volume back as you
+  press it rather than on the next tick.
+- **End of chapter** stops at the boundary and prevents the auto-advance, rather than stopping the
+  next chapter a moment after it has already started.
+- Expiry **pauses**; it does not clear the queue. Resuming in the morning is one keypress.
+
+None of that is timed by a scheduler: the timer is a state machine ticked by the playback loop over
+an injected clock, so a test steps an hour in one line.
+
+**Local history** (`history.json`, 60 entries, one per chapter) backs the "Jump back in" strip. It
+holds ids and titles and *no URL of any kind* — covers are re-resolved from the live library cache.
+Dismissing an entry hides that snapshot, not the day: a later chapter of the same serial comes back
+on its own, and a progress save for a dismissed chapter does not resurrect it.
+
+On Linux the player appears on the session bus over **MPRIS**, so Cinnamon's media applet, the lock
+screen and hardware media keys show the right metadata and control playback. It is pure Java —
+dbus-java over the JDK's own AF_UNIX socket — so it adds no native library to the bundled runtime.
+No session bus (Windows, macOS, a bare SSH session) means no MPRIS and a fully working player, with
+a note in the log rather than a failure.
+
+## ⌨️ Keyboard
+
+| Keys | Action |
+| --- | --- |
+| `Space` | Play or pause |
+| `Left` / `Right` | Skip back or forward by your skip interval |
+| `Ctrl+Left` / `Ctrl+Right` | Previous or next chapter |
+| `Alt+Left` | Back |
+| `Ctrl+L` | Library |
+| `Ctrl+,` | Settings |
+| `F5` / `Ctrl+R` | Refresh the current screen |
+| `Escape` | Close a dialog, or go back |
+| `F1` / `Ctrl+/` | The in-app shortcut list |
+
+**Shortcuts that would type do not fire while you are typing.** That is structural rather than a
+check: the combinations no text field claims are installed on the window's *preview* handler, so F5
+still refreshes from inside the search box, while Space, the arrows and Ctrl+arrow are installed on
+the ordinary handler, which a focused text field has already consumed them from. No global hotkeys
+are registered — media keys reach the app through the desktop's own MPRIS routing instead.
 
 ## 🧭 Navigation, state and window behaviour
 

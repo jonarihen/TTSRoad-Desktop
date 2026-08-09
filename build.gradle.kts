@@ -48,6 +48,14 @@ dependencies {
     implementation(libs.gst1.java.core)
     implementation(libs.jna)
 
+    // MPRIS over D-Bus (docs/adr/0006-listening-preferences-and-desktop-integration.md). Pure
+    // Java: the wire protocol is implemented in dbus-java and the session bus is reached through
+    // the JDK's own AF_UNIX SocketChannel, so this adds no native library to the jlink image.
+    // Everything behind it is optional at runtime — no D-Bus means no MPRIS, not no playback.
+    implementation(libs.dbus.java.core)
+    implementation(libs.dbus.java.transport.native.unixsocket)
+    runtimeOnly(libs.slf4j.nop)
+
     // Pure-JVM MP3 decoding, registered as a javax.sound.sampled SPI. Retained as the fallback
     // engine on machines without GStreamer — Windows and macOS by default — where it keeps the
     // behaviour it has always had, speed control included (i.e. none).
@@ -245,7 +253,18 @@ compose.desktop {
             //   java.naming   — OkHttp's DNS/JNDI usage
             //   jdk.crypto.ec — TLS elliptic-curve suites (https:// servers fail without it)
             //   java.management / jdk.unsupported — Kotlin + Skiko runtime bits
-            modules("java.desktop", "java.naming", "java.management", "jdk.crypto.ec", "jdk.unsupported")
+            //   jdk.security.auth — com.sun.security.auth.module.UnixSystem, which dbus-java's
+            //     unix-socket transport uses to read the uid when connecting to the session bus.
+            //     Reached only by reflection, so inference misses it and MPRIS degrades to "no
+            //     session bus" in the packaged image while working fine from source.
+            modules(
+                "java.desktop",
+                "java.naming",
+                "java.management",
+                "jdk.crypto.ec",
+                "jdk.security.auth",
+                "jdk.unsupported",
+            )
 
             windows {
                 // Without these the MSI installs with no Start menu / desktop entry at all.

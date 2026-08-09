@@ -71,7 +71,7 @@ jobs:
       # test quietly skip and report green.
       - name: Verify the GStreamer elements the engine needs
         run: |
-          for element in appsrc decodebin audioconvert scaletempo audioresample fakesink; do
+          for element in appsrc decodebin audioconvert scaletempo audioresample volume fakesink; do
             gst-inspect-1.0 "$element" > /dev/null || { echo "missing GStreamer element: $element"; exit 1; }
           done
 

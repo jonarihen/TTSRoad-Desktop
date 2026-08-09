@@ -4,6 +4,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -31,6 +32,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed as itemsIndexedInRow
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
@@ -57,11 +59,17 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
+import dk.perspektiva.ttsroad.desktop.data.PlaybackHistory
+import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackSnapshot
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.chapterKeys
 import dk.perspektiva.ttsroad.desktop.data.fictionKeys
@@ -94,10 +102,17 @@ fun LibraryScreen(
     playback: PlaybackController,
     onOpenFiction: (FictionSummary) -> Unit,
     onOpenPlayer: () -> Unit,
+    /**
+     * Local listening history, for the "Jump back in" strip. Defaulted to an in-memory store so a
+     * screen test never reads or writes the real config directory.
+     */
+    history: PlaybackHistoryStore = remember { InMemoryPlaybackHistoryStore() },
     nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     val scope = rememberCoroutineScope()
     val state by cache.library.collectAsState()
+    val snapshots by history.history.collectAsState()
+    val jumpBack = remember(snapshots) { PlaybackHistory.jumpBackChoices(snapshots) }
     // Keyless on purpose: fires once per screen *appearance*, not per recomposition. Reuses cached
     // content and coalesces with a load already in flight, so Back into the library costs nothing.
     LaunchedEffect(Unit) { cache.ensureLibrary() }
@@ -163,9 +178,30 @@ fun LibraryScreen(
                         }
                     }
 
+                    // Local, and therefore true even when the server's own continue-listening is
+                    // stale or unreachable: this is what *this machine* was playing. Dismissing an
+                    // entry hides that snapshot, not "today" — see PlaybackHistory.
+                    if (jumpBack.isNotEmpty()) {
+                        fullWidthItem("jump-back") {
+                            Column {
+                                Spacer(Modifier.height(20.dp))
+                                SectionTitle("02", "Jump back in")
+                                Spacer(Modifier.height(16.dp))
+                                JumpBackShelf(
+                                    snapshots = jumpBack,
+                                    onOpen = { snapshot ->
+                                        library.fictions.firstOrNull { it.id == snapshot.fictionId }
+                                            ?.let(onOpenFiction)
+                                    },
+                                    onDismiss = { history.dismiss(it.key) },
+                                )
+                            }
+                        }
+                    }
+
                     fullWidthItem("fictions-header") {
                         Column {
-                            SectionTitle("02", "Fictions")
+                            SectionTitle("03", "Fictions")
                             Spacer(Modifier.height(16.dp))
                             if (library.fictions.isNotEmpty()) {
                                 OutlinedTextField(
@@ -206,7 +242,7 @@ fun LibraryScreen(
                         fullWidthItem("recent") {
                             Column {
                                 Spacer(Modifier.height(20.dp))
-                                SectionTitle("03", "Recent")
+                                SectionTitle("04", "Recent")
                                 Spacer(Modifier.height(16.dp))
                                 ContinueShelf(library.recentChapters, repository) { chapter ->
                                     scope.launch { playback.play(chapter, chapter.fiction) }
@@ -223,6 +259,74 @@ fun LibraryScreen(
 
 /** Test handle for the library's scroll container. */
 const val LibraryGridTestTag: String = "libraryGrid"
+
+const val JumpBackCardTestTag: String = "jumpBackCard"
+const val JumpBackDismissTestTag: String = "jumpBackDismiss"
+
+/**
+ * The local "jump back in" strip.
+ *
+ * Opens the fiction rather than starting playback: the snapshot holds an id and a title, not a
+ * `ChapterSummary`, and the honest action for "here is where you were" is to take the listener to
+ * the chapter list that already highlights it — not to guess at a payload and start audio.
+ */
+@Composable
+private fun JumpBackShelf(
+    snapshots: List<PlaybackSnapshot>,
+    onOpen: (PlaybackSnapshot) -> Unit,
+    onDismiss: (PlaybackSnapshot) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(GridGap),
+    ) {
+        snapshots.forEach { snapshot ->
+            AarisCard(modifier = Modifier.width(260.dp).testTag(JumpBackCardTestTag)) {
+                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.Top) {
+                        Column(Modifier.weight(1f)) {
+                            MetaText(snapshot.fictionTitle.ifBlank { "Unknown" })
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                snapshot.chapterTitle,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = AarisColor.Ink,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        // Dismissal is per snapshot; a later chapter of the same serial comes back
+                        // on its own, which is the behaviour the issue asks for over "hide today".
+                        Text(
+                            "×",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = AarisColor.Muted,
+                            modifier = Modifier
+                                .testTag(JumpBackDismissTestTag)
+                                .clickable { onDismiss(snapshot) }
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .semantics { contentDescription = "Dismiss ${snapshot.chapterTitle}" }
+                                .padding(horizontal = 6.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    ThinProgress(snapshot.progress, Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Open",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AarisColor.Accent,
+                        modifier = Modifier
+                            .clickable { onOpen(snapshot) }
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .semantics { contentDescription = "Open ${snapshot.fictionTitle}" }
+                            .padding(vertical = 4.dp),
+                    )
+                }
+            }
+        }
+    }
+}
 
 /** Full-width row inside the grid, for heroes, shelves and section headers. */
 private fun LazyGridScope.fullWidthItem(

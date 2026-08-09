@@ -26,7 +26,18 @@ class JavaSoundPlaybackEngine(
     private val engine: AudioEngine = JavaSoundAudioEngine(),
 ) : PlaybackEngine {
 
-    override val capabilities = EngineCapabilities.FixedSpeed
+    /**
+     * No rate control and no silence removal, but gain *is* honoured — see [applyGain].
+     *
+     * That asymmetry is deliberate. Speed needs a resampler this backend does not have, but gain
+     * is a multiply over PCM this loop is already copying, and the sleep timer's fade depends on
+     * it working everywhere.
+     */
+    override val capabilities = EngineCapabilities(
+        variableSpeed = false,
+        volumeBoost = true,
+        skipSilence = false,
+    )
 
     @Volatile private var listener: PlaybackEngineListener? = null
 
@@ -47,6 +58,10 @@ class JavaSoundPlaybackEngine(
     @Volatile private var positionMs: Long = 0
     @Volatile private var wantsPlaying = false
     @Volatile private var seekRequestMs: Long? = null
+
+    /** Boost × fade, as one multiplier. Survives across chapters, like the GStreamer engine's. */
+    @Volatile private var gain: Double = 1.0
+
     private val stopping = AtomicBoolean(false)
 
     override fun prepare(source: MediaSource, startPositionMs: Long) {
@@ -95,6 +110,10 @@ class JavaSoundPlaybackEngine(
 
     /** Always 1.0: this backend has no rate control, and saying so is the point. */
     override fun setRate(rate: Float): Float = 1f
+
+    override fun setGain(gain: Double) {
+        this.gain = gain.coerceIn(EngineCapabilities.GainRange)
+    }
 
     override fun positionMs(): Long = positionMs
 
@@ -180,6 +199,7 @@ class JavaSoundPlaybackEngine(
                     if (!stopping.get()) emit(EngineEvent.Completed)
                     return
                 }
+                applyGain(buffer, n, gain, activeFormat)
                 line.write(buffer, 0, n)
                 bytesPlayed += n
                 positionMs = bytesToMs(bytesPlayed, activeFormat)
@@ -210,6 +230,37 @@ class JavaSoundPlaybackEngine(
         return target
     }
 
+    /**
+     * Scales [length] bytes of PCM in place by [gain], saturating instead of wrapping.
+     *
+     * Saturation is the whole reason this is hand-written rather than a `MASTER_GAIN` control:
+     * an overflowing 16-bit sample wraps from full positive to full negative, which is not "loud",
+     * it is a click on every peak. `MASTER_GAIN` also has a device-dependent range that is
+     * frequently absent altogether, so a fade built on it would silently do nothing on some
+     * machines — the one outcome the sleep timer cannot have.
+     *
+     * Anything that is not 16-bit signed PCM is left alone. [JavaSoundAudioEngine] always decodes
+     * to that, but [AudioEngine] is a seam and a substitute is not required to.
+     */
+    private fun applyGain(buffer: ByteArray, length: Int, gain: Double, format: AudioFormat) {
+        if (gain == 1.0) return
+        if (format.sampleSizeInBits != 16 || format.encoding != AudioFormat.Encoding.PCM_SIGNED) return
+
+        val bigEndian = format.isBigEndian
+        var i = 0
+        while (i + 1 < length) {
+            val lowIndex = if (bigEndian) i + 1 else i
+            val highIndex = if (bigEndian) i else i + 1
+            // The high byte keeps Byte.toInt()'s sign extension, so the shift rebuilds a signed
+            // 16-bit value without a separate sign fix-up.
+            val sample = (buffer[highIndex].toInt() shl 8) or (buffer[lowIndex].toInt() and 0xFF)
+            val scaled = (sample * gain).toInt().coerceIn(MIN_SAMPLE, MAX_SAMPLE)
+            buffer[lowIndex] = (scaled and 0xFF).toByte()
+            buffer[highIndex] = ((scaled shr 8) and 0xFF).toByte()
+            i += 2
+        }
+    }
+
     private fun durationOf(stream: AudioInputStream): Long {
         val frames = stream.frameLength
         if (frames <= 0) return 0
@@ -233,5 +284,7 @@ class JavaSoundPlaybackEngine(
     private companion object {
         const val PAUSE_POLL_MILLIS = 80L
         const val STOP_JOIN_MILLIS = 2_000L
+        const val MIN_SAMPLE = -32_768
+        const val MAX_SAMPLE = 32_767
     }
 }

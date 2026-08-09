@@ -15,6 +15,8 @@ import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
 import dk.perspektiva.ttsroad.desktop.testLibraryCache
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionEnd
@@ -44,7 +46,11 @@ class ScreensUiTest {
     ) = AppContainer(
         sessionStore = InMemorySessionStore(session),
         repositoryFactory = { _, _, _ -> repository },
-        playbackFactory = { _, _, _, _ -> playback },
+        playbackFactory = { _, _, _, _, _, _ -> playback },
+        // In-memory, so rendering a screen in a test never touches the real
+        // ~/.config/TTSRoad files the production stores default to.
+        playbackPreferences = InMemoryPlaybackPreferencesStore(),
+        playbackHistory = InMemoryPlaybackHistoryStore(),
     )
 
     // --- App: the login gate --------------------------------------------------------------
@@ -139,7 +145,11 @@ class ScreensUiTest {
         val app = AppContainer(
             sessionStore = store,
             repositoryFactory = { _, _, _ -> repository },
-            playbackFactory = { _, _, _, _ -> playback },
+            playbackFactory = { _, _, _, _, _, _ -> playback },
+            // In-memory, so rendering a screen in a test never touches the real
+            // ~/.config/TTSRoad files the production stores default to.
+            playbackPreferences = InMemoryPlaybackPreferencesStore(),
+            playbackHistory = InMemoryPlaybackHistoryStore(),
         )
         compose.setContent { TtsRoadTheme { App(app) } }
         compose.waitForIdle()
@@ -212,7 +222,11 @@ class ScreensUiTest {
         val app = AppContainer(
             sessionStore = store,
             repositoryFactory = { _, _, _ -> repository },
-            playbackFactory = { _, _, _, _ -> FakePlaybackController() },
+            playbackFactory = { _, _, _, _, _, _ -> FakePlaybackController() },
+            // In-memory, so rendering a screen in a test never touches the real
+            // ~/.config/TTSRoad files the production stores default to.
+            playbackPreferences = InMemoryPlaybackPreferencesStore(),
+            playbackHistory = InMemoryPlaybackHistoryStore(),
         )
         compose.setContent { TtsRoadTheme { App(app) } }
         compose.waitForIdle()

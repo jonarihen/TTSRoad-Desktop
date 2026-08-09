@@ -47,9 +47,20 @@ class GstPlaybackEngine private constructor(
      * stand in for.
      */
     private val sinkElement: String,
+    /**
+     * Whether `removesilence` could be created here. It lives in `gst-plugins-bad`, which a great
+     * many installs — including this repository's CI — do not carry, so it is probed once at
+     * construction and reported as a capability rather than assumed.
+     */
+    canSkipSilence: Boolean = false,
 ) : PlaybackEngine {
 
-    override val capabilities = EngineCapabilities(variableSpeed = true, speedRange = 0.5f..3.0f)
+    override val capabilities = EngineCapabilities(
+        variableSpeed = true,
+        speedRange = 0.5f..3.0f,
+        volumeBoost = true,
+        skipSilence = canSkipSilence,
+    )
 
     @Volatile private var listener: PlaybackEngineListener? = null
 
@@ -65,8 +76,16 @@ class GstPlaybackEngine private constructor(
     private var pipeline: Pipeline? = null
     private var stream: MediaStream? = null
 
+    /** The `volume` element of the live pipeline, so a gain change does not need a rebuild. */
+    private var volumeElement: Element? = null
+
     /** Survives across chapters: a listener who chose 1.5× means it for the next chapter too. */
     @Volatile private var rate: Float = 1f
+
+    /** Ditto for gain and skip-silence — both are preferences, not properties of a chapter. */
+    @Volatile private var gain: Double = 1.0
+
+    @Volatile private var skipSilence: Boolean = false
 
     /**
      * Once a read or the bus has reported a failure, the end-of-stream that follows is a
@@ -148,6 +167,23 @@ class GstPlaybackEngine private constructor(
         return applied
     }
 
+    override fun setGain(gain: Double) {
+        val clamped = gain.coerceIn(EngineCapabilities.GainRange)
+        this.gain = clamped
+        // Applied live. The `volume` element takes a linear multiplier, which is what the fade
+        // ramp and the boost ladder both already are, so there is no dB conversion to get wrong.
+        synchronized(lock) { volumeElement }?.let { element ->
+            runCatching { element.set("volume", clamped) }
+        }
+    }
+
+    override fun setSkipSilence(enabled: Boolean) {
+        // Deliberately not applied to the live pipeline: inserting or removing an element under a
+        // playing stream means a state change and a re-link, and the audible glitch is worse than
+        // the toggle taking effect at the next chapter. Documented on the interface.
+        skipSilence = enabled && capabilities.skipSilence
+    }
+
     override fun positionMs(): Long {
         val current = synchronized(lock) { pipeline } ?: return 0
         return current.queryPosition(Format.TIME).takeIf { it > 0 }?.div(NANOS_PER_MILLI) ?: 0
@@ -194,13 +230,33 @@ class GstPlaybackEngine private constructor(
         val tempo = ElementFactory.make("scaletempo", "tempo")
         val convertOut = ElementFactory.make("audioconvert", "convert-out")
         val resample = ElementFactory.make("audioresample", "resample")
+        val volume = ElementFactory.make("volume", "volume").apply {
+            runCatching { set("volume", gain) }
+        }
         // autoaudiosink resolves to pulsesink on Mint, which is also what PipeWire presents, so
         // PipeWire and PulseAudio are one code path. It also re-resolves the default device.
         val sink = ElementFactory.make(sinkElement, "sink")
 
-        pipeline.addMany(src, decode, convertIn, tempo, convertOut, resample, sink)
+        // Silence removal sits *before* scaletempo: dropping buffers changes the timeline, and
+        // doing it after the tempo scaler would make the rate apply to a stream whose length has
+        // already changed underneath it. Absent unless the install has the element and the
+        // listener asked for it.
+        val silence = if (skipSilence && capabilities.skipSilence) makeSilenceRemover() else null
+
+        val chain = buildList {
+            add(convertIn)
+            silence?.let(::add)
+            add(tempo)
+            add(convertOut)
+            add(resample)
+            add(volume)
+            add(sink)
+        }.toTypedArray()
+
+        pipeline.addMany(src, decode, *chain)
         src.link(decode)
-        Element.linkMany(convertIn, tempo, convertOut, resample, sink)
+        Element.linkMany(*chain)
+        synchronized(lock) { volumeElement = volume }
         // decodebin cannot expose its audio pad until it has sniffed the container.
         decode.connect(
             Element.PAD_ADDED { _, pad ->
@@ -240,6 +296,27 @@ class GstPlaybackEngine private constructor(
         )
         return pipeline
     }
+
+    /**
+     * `removesilence`, tuned so it drops dead air rather than the pauses that carry meaning.
+     *
+     * Every property is set defensively. The element's properties have changed across
+     * `plugins-bad` releases, and an engine that refuses to build because one tuning knob was
+     * renamed would take the whole chapter down with it — the default for any property that does
+     * not exist here is the element's own, which is serviceable.
+     */
+    private fun makeSilenceRemover(): Element? = runCatching {
+        ElementFactory.make(SKIP_SILENCE_ELEMENT, "silence").apply {
+            // The only property that matters: without it the element measures silence and
+            // announces it on the bus, but passes every buffer through unchanged.
+            set("remove", true)
+            // A tenth of a second below -50 dB is dead air. A shorter window would clip the stops
+            // between sentences, which is what makes badly-tuned silence removal sound rushed.
+            runCatching { set("threshold", SILENCE_THRESHOLD_DB) }
+            runCatching { set("minimum-silence-time", SILENCE_MIN_NANOS) }
+            runCatching { set("squash", true) }
+        }
+    }.getOrNull()
 
     private fun feed(src: AppSrc, stream: MediaStream, buffer: ByteArray, requested: Int) {
         try {
@@ -282,6 +359,9 @@ class GstPlaybackEngine private constructor(
             val s = stream
             pipeline = null
             stream = null
+            // Belongs to the pipeline being disposed; holding it would hand `setGain` a pointer
+            // into freed native memory.
+            volumeElement = null
             p to s
         }
         oldPipeline?.let {
@@ -303,10 +383,19 @@ class GstPlaybackEngine private constructor(
         private const val READ_CHUNK_BYTES = 64 * 1024
         private const val APPSRC_MAX_BYTES = 2L * 1024 * 1024
 
+        private const val SILENCE_THRESHOLD_DB = -50
+        private const val SILENCE_MIN_NANOS = 100_000_000L
+
         /** Every element the pipeline names. A missing one means fall back, not crash. */
         private val REQUIRED_ELEMENTS = listOf(
-            "appsrc", "decodebin", "audioconvert", "scaletempo", "audioresample",
+            "appsrc", "decodebin", "audioconvert", "scaletempo", "audioresample", "volume",
         )
+
+        /**
+         * The optional one. In `gst-plugins-bad`, so its absence is the normal case and gates the
+         * [EngineCapabilities.skipSilence] flag rather than the engine.
+         */
+        private const val SKIP_SILENCE_ELEMENT = "removesilence"
 
         @Volatile private var initialised: Boolean? = null
 
@@ -321,7 +410,10 @@ class GstPlaybackEngine private constructor(
         fun createOrNull(sinkElement: String = "autoaudiosink"): GstPlaybackEngine? = runCatching {
             if (!ensureInitialised()) return@runCatching null
             if (!hasEveryElement(REQUIRED_ELEMENTS + sinkElement)) return@runCatching null
-            GstPlaybackEngine(sinkElement)
+            GstPlaybackEngine(
+                sinkElement = sinkElement,
+                canSkipSilence = hasEveryElement(listOf(SKIP_SILENCE_ELEMENT)),
+            )
         }.getOrNull()
 
         /** Whether this machine can run the GStreamer backend at all. */

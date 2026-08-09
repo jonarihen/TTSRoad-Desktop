@@ -24,10 +24,14 @@ import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
 import dk.perspektiva.ttsroad.desktop.ServerFixtures
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionState
+import dk.perspektiva.ttsroad.desktop.data.VolumeBoost
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import org.junit.Rule
@@ -71,11 +75,27 @@ class SettingsScreenUiTest {
         repository: FakeRepository,
         session: SessionState = signedIn,
         capabilities: ServerCapabilities = capable,
+        // What the *engine* can do. The playback pane draws a control only where the backend can
+        // honour it, so these two flags decide which half of that pane is under test.
+        preferences: InMemoryPlaybackPreferencesStore = InMemoryPlaybackPreferencesStore(),
+        canChangeSpeed: Boolean = true,
+        canSkipSilence: Boolean = true,
     ) {
         val store = InMemorySessionStore(session)
         repository.capabilitiesResult = capabilities
         runBlocking { repository.refreshCurrentCapabilities(forceRefresh = true) }
-        compose.setContent { TtsRoadTheme { SettingsScreen(store, repository, nowMs = { now }) } }
+        compose.setContent {
+            TtsRoadTheme {
+                SettingsScreen(
+                    store,
+                    repository,
+                    preferences = preferences,
+                    canChangeSpeed = canChangeSpeed,
+                    canSkipSilence = canSkipSilence,
+                    nowMs = { now },
+                )
+            }
+        }
         compose.waitForIdle()
     }
 
@@ -191,19 +211,102 @@ class SettingsScreenUiTest {
         compose.onNodeWithText("Pixel 9").assertIsDisplayed()
     }
 
-    // --- Panes for phases that do not exist yet ----------------------------------------------
+    // MetaText uppercases what it renders, so matches against it are case-insensitive here
+    // rather than asserting on the presentation.
+    // --- Playback pane -------------------------------------------------------------------------
 
-    @Test
-    fun `the playback pane says it is unavailable instead of showing dead controls`() {
-        setContent(FakeRepository())
-
+    private fun openPlayback() {
         navEntry("PLAYBACK").performClick()
         compose.waitForIdle()
-
-        compose.onNodeWithText("NOT AVAILABLE YET").assertIsDisplayed()
-        compose.onNodeWithText("Playback preferences are not part of this build.", substring = true)
-            .assertIsDisplayed()
     }
+
+    @Test
+    fun `the playback pane offers the speed presets including 1_25x`() {
+        setContent(FakeRepository())
+        openPlayback()
+
+        compose.onNodeWithText("1.25×").assertExists()
+        compose.onNodeWithText("30 s", ignoreCase = true).assertExists()
+    }
+
+    @Test
+    fun `choosing a skip interval stores it`() {
+        val preferences = InMemoryPlaybackPreferencesStore()
+        setContent(FakeRepository(), preferences = preferences)
+        openPlayback()
+
+        compose.onNodeWithText("15 s", ignoreCase = true).performScrollTo().performClick()
+        compose.waitForIdle()
+
+        assertEquals(15, preferences.preferences.value.skipIntervalSeconds)
+    }
+
+    @Test
+    fun `choosing a speed stores it`() {
+        val preferences = InMemoryPlaybackPreferencesStore()
+        setContent(FakeRepository(), preferences = preferences)
+        openPlayback()
+
+        compose.onNodeWithText("1.5×").performScrollTo().performClick()
+        compose.waitForIdle()
+
+        assertEquals(1.5f, preferences.preferences.value.speed)
+    }
+
+    @Test
+    fun `a custom speed from another build is still offered`() {
+        // The stored value is not one of this build's presets; it must not be rounded away.
+        val preferences = InMemoryPlaybackPreferencesStore(PlaybackPreferences(speed = 1.35f))
+        setContent(FakeRepository(), preferences = preferences)
+        openPlayback()
+
+        compose.onNodeWithText("1.35×").assertExists()
+    }
+
+    @Test
+    fun `an engine that cannot resample gets no speed control at all`() {
+        // The Phase 5 rule, applied to Settings: no control rather than one that does nothing.
+        setContent(FakeRepository(), canChangeSpeed = false)
+        openPlayback()
+
+        compose.onNodeWithText("1.25×").assertDoesNotExist()
+        compose.onNodeWithText("cannot resample", substring = true, ignoreCase = true).assertExists()
+    }
+
+    @Test
+    fun `an engine without removesilence gets no skip-silence toggle`() {
+        setContent(FakeRepository(), canSkipSilence = false)
+        openPlayback()
+
+        compose.onNodeWithText("Not available on this computer", ignoreCase = true).assertExists()
+        compose.onNodeWithText("gst-plugins-bad", substring = true, ignoreCase = true).assertExists()
+    }
+
+    @Test
+    fun `skip silence is off by default and can be turned on`() {
+        val preferences = InMemoryPlaybackPreferencesStore()
+        setContent(FakeRepository(), preferences = preferences)
+        openPlayback()
+
+        assertFalse(preferences.preferences.value.skipSilence)
+        compose.onNodeWithContentDescription("SKIP SILENCE").performScrollTo().performClick()
+        compose.waitForIdle()
+        assertTrue(preferences.preferences.value.skipSilence)
+    }
+
+    @Test
+    fun `choosing a volume boost stores it`() {
+        val preferences = InMemoryPlaybackPreferencesStore()
+        setContent(FakeRepository(), preferences = preferences)
+        openPlayback()
+
+        compose.onNodeWithText("Medium", ignoreCase = true).performScrollTo().performClick()
+        compose.waitForIdle()
+
+        assertEquals(VolumeBoost.Medium, preferences.preferences.value.volumeBoost)
+    }
+
+    // --- Panes for phases that do not exist yet ----------------------------------------------
 
     @Test
     fun `the offline pane promises nothing and says signing out deletes nothing`() {

@@ -18,8 +18,17 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Switch
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -52,10 +61,14 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.BuildInfo
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
+import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.data.VolumeBoost
 import dk.perspektiva.ttsroad.desktop.data.formatExpiresIn
 import dk.perspektiva.ttsroad.desktop.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.desktop.data.redactSecrets
@@ -81,6 +94,20 @@ fun SettingsScreen(
      * in step — the app uses it to swap the top back-stack entry between Settings and Devices.
      */
     onSectionSelected: (SettingsSection) -> Unit = {},
+    /**
+     * Listening settings. Defaulted to an in-memory store so a screen test — and a preview — never
+     * writes to the real config directory just by rendering the Playback pane.
+     */
+    preferences: PlaybackPreferencesStore = remember { InMemoryPlaybackPreferencesStore() },
+    /**
+     * What the *engine* can do, passed down rather than read here.
+     *
+     * The pane draws a speed or skip-silence control only where the backend can honour it, which
+     * is the same rule the player screen follows — and taking the two flags as parameters keeps
+     * Settings independent of the playback controller.
+     */
+    canChangeSpeed: Boolean = false,
+    canSkipSilence: Boolean = false,
     // Injected so "expires in 42 days" can be asserted without the test depending on wall time.
     nowMs: () -> Long = System::currentTimeMillis,
 ) {
@@ -118,7 +145,7 @@ fun SettingsScreen(
                     when (ui.section) {
                         SettingsSection.Account -> AccountPane(ui, session, capabilities, sessionStore, holder, selectSection, nowMs)
                         SettingsSection.Devices -> DevicesPane(ui, session, holder, nowMs)
-                        SettingsSection.Playback -> PlaybackPane()
+                        SettingsSection.Playback -> PlaybackPane(preferences, canChangeSpeed, canSkipSilence)
                         SettingsSection.Offline -> OfflinePane()
                         SettingsSection.About -> AboutPane(session, capabilities, sessionStore)
                     }
@@ -490,13 +517,173 @@ private fun DeviceDetail(label: String, value: String) {
  * nothing is worse than an honest empty pane, because the user cannot tell it did not work.
  */
 @Composable
-private fun PlaybackPane() {
-    PaneTitle("Playback", "Not available yet")
-    InfoCard(
-        "Playback preferences are not part of this build. Skip interval, playback speed, " +
-            "auto-marking a finished chapter and a sleep timer arrive with the playback-preferences " +
-            "phase; until then the player uses fixed 30-second skips at normal speed.",
-    )
+private fun PlaybackPane(
+    preferences: PlaybackPreferencesStore,
+    canChangeSpeed: Boolean,
+    canSkipSilence: Boolean,
+) {
+    val prefs by preferences.preferences.collectAsState()
+
+    PaneTitle("Playback", "Kept on this computer, not on your account")
+
+    SettingsCard {
+        if (canChangeSpeed) {
+            ChoiceRow(
+                label = "SPEED",
+                // The offered list carries the stored value even when it is not a preset, so a
+                // rate set by another build stays selectable instead of vanishing on first open.
+                options = PlaybackPreferences.speedOptions(prefs.speed),
+                selected = prefs.speed,
+                labelOf = ::formatSpeed,
+                onSelect = { value -> preferences.update { it.copy(speed = value) } },
+            )
+        } else {
+            SettingRow("SPEED", "Fixed at ${formatSpeed(1f)}")
+            MetaText(
+                "The audio backend on this computer cannot resample, so speed is not offered " +
+                    "rather than offered and ignored. Installing GStreamer enables it.",
+            )
+        }
+
+        RowDivider()
+
+        ChoiceRow(
+            label = "SKIP INTERVAL",
+            options = PlaybackPreferences.SkipIntervals,
+            selected = prefs.skipIntervalSeconds,
+            labelOf = { "$it s" },
+            onSelect = { value -> preferences.update { it.copy(skipIntervalSeconds = value) } },
+        )
+
+        RowDivider()
+
+        ChoiceRow(
+            label = "VOLUME BOOST",
+            options = VolumeBoost.entries.toList(),
+            selected = prefs.volumeBoost,
+            labelOf = { it.label },
+            onSelect = { value -> preferences.update { it.copy(volumeBoost = value) } },
+        )
+        MetaText("Boost stops at ${formatSpeed(VolumeBoost.High.gain.toFloat())} — louder than that clips quiet narration instead of raising it.")
+
+        RowDivider()
+
+        if (canSkipSilence) {
+            ToggleRow(
+                label = "SKIP SILENCE",
+                description = "Drops dead air between sentences. Off by default, to match the " +
+                    "mobile app and keep chapter timings where the server put them.",
+                checked = prefs.skipSilence,
+                onCheckedChange = { value -> preferences.update { it.copy(skipSilence = value) } },
+            )
+        } else {
+            SettingRow("SKIP SILENCE", "Not available on this computer")
+            MetaText(
+                "Silence removal needs the GStreamer \"removesilence\" element, which ships in " +
+                    "gst-plugins-bad. It is not installed here, so the control is not shown.",
+            )
+        }
+    }
+}
+
+/** `1.25×`, `1.0×` — one decimal unless the value needs two. */
+private fun formatSpeed(speed: Float): String {
+    val rounded = kotlin.math.round(speed * 100) / 100f
+    val text = if (kotlin.math.abs(rounded * 10 - kotlin.math.round(rounded * 10)) < 0.01f) {
+        String.format(java.util.Locale.ROOT, "%.1f", rounded)
+    } else {
+        String.format(java.util.Locale.ROOT, "%.2f", rounded)
+    }
+    return "$text×"
+}
+
+/**
+ * A labelled row of mutually exclusive choices.
+ *
+ * `selectableGroup` plus `Role.RadioButton` on each entry is what makes this announce as one
+ * choice with N options rather than as N unrelated buttons, and it is why these are not plain
+ * clickable boxes.
+ */
+@Composable
+private fun <T> ChoiceRow(
+    label: String,
+    options: List<T>,
+    selected: T,
+    labelOf: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        MetaText(label)
+        Row(
+            // Nine speeds do not fit a narrow settings pane; scrolling beats wrapping into a grid
+            // whose rows change height as the option list changes.
+            Modifier.horizontalScroll(rememberScrollState()).selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            options.forEach { option ->
+                ChoiceChip(
+                    label = labelOf(option),
+                    selected = option == selected,
+                    onClick = { onSelect(option) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    Box(
+        Modifier
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .background(if (selected) AarisColor.BgHover else Color.Transparent)
+            // The AARIS look has no ripple, so focus has to be drawn explicitly or a keyboard-only
+            // user cannot see where they are.
+            .border(
+                1.dp,
+                when {
+                    focused -> AarisColor.Accent
+                    selected -> AarisColor.Ink
+                    hovered -> AarisColor.Muted
+                    else -> AarisColor.Line
+                },
+            )
+            .selectable(
+                selected = selected,
+                interactionSource = interaction,
+                indication = null,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        MetaText(label, color = if (selected || hovered || focused) AarisColor.Ink else AarisColor.Muted)
+    }
+}
+
+@Composable
+private fun ToggleRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            MetaText(label)
+            Text(description, style = MaterialTheme.typography.bodyMedium, color = AarisColor.Muted)
+        }
+        Spacer(Modifier.width(16.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.semantics { contentDescription = label },
+        )
+    }
 }
 
 @Composable

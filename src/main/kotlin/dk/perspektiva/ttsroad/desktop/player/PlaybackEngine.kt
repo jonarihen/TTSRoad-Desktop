@@ -13,6 +13,22 @@ import dk.perspektiva.ttsroad.desktop.data.SessionEnd
 data class EngineCapabilities(
     val variableSpeed: Boolean,
     val speedRange: ClosedFloatingPointRange<Float> = 1f..1f,
+    /**
+     * Whether a gain **above** unity is honoured.
+     *
+     * Attenuation is not gated on this and every backend must support it, because the sleep
+     * timer's fade is an attenuation: a timer that cut the audio off abruptly on the fallback
+     * engine and faded it on the production one would be a worse bug than no boost at all.
+     */
+    val volumeBoost: Boolean = false,
+    /**
+     * Whether silent passages can be dropped.
+     *
+     * Gated because it needs a GStreamer element (`removesilence`) that ships in `plugins-bad` and
+     * is absent from most installs, this repository's CI included. The UI draws the control only
+     * where the backend can honour it — the same rule that already governs the speed control.
+     */
+    val skipSilence: Boolean = false,
 ) {
     /** Nearest speed this engine can actually deliver — what the UI should display. */
     fun coerceSpeed(speed: Float): Float =
@@ -21,6 +37,9 @@ data class EngineCapabilities(
     companion object {
         /** A backend with no rate control, e.g. the `SourceDataLine` fallback. */
         val FixedSpeed = EngineCapabilities(variableSpeed = false)
+
+        /** The widest gain any backend applies, boost and fade included. */
+        val GainRange: ClosedFloatingPointRange<Double> = 0.0..2.0
     }
 }
 
@@ -117,6 +136,28 @@ interface PlaybackEngine : AutoCloseable {
      * it displays is what is being played.
      */
     fun setRate(rate: Float): Float
+
+    /**
+     * Sets the output gain, where 1.0 is unmodified.
+     *
+     * One number for both the volume-boost preference and the sleep timer's fade, multiplied by
+     * the caller — two independent volume controls fighting over one element is how a fade ends up
+     * being undone by a preference change mid-fade.
+     *
+     * Values below 1.0 must be honoured by every backend; values above it only where
+     * [EngineCapabilities.volumeBoost] is set. Implementations clamp rather than reject, and must
+     * tolerate being called before [prepare].
+     */
+    fun setGain(gain: Double) = Unit
+
+    /**
+     * Enables or disables dropping silent passages.
+     *
+     * A no-op where [EngineCapabilities.skipSilence] is false. Takes effect on the next [prepare]
+     * rather than mid-chapter: the element sits in the pipeline or it does not, and rebuilding the
+     * graph under a playing stream to honour a toggle is not worth the glitch.
+     */
+    fun setSkipSilence(enabled: Boolean) = Unit
 
     /** Current position. Cheap enough to poll; never blocks on I/O. */
     fun positionMs(): Long

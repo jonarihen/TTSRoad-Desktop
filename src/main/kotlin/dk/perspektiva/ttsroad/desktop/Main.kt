@@ -16,6 +16,7 @@ import dk.perspektiva.ttsroad.desktop.ui.TtsRoadTheme
 import java.awt.Dimension
 import java.awt.Frame
 import java.awt.GraphicsEnvironment
+import java.awt.event.WindowEvent
 import java.util.ServiceLoader
 import java.util.concurrent.atomic.AtomicReference
 import javax.sound.sampled.spi.AudioFileReader
@@ -43,6 +44,28 @@ private fun verifyMp3SpiIsRegistered() {
         System.err.println("FATAL: the MP3 AudioFileReader SPI is not registered in this runtime image")
         exitProcess(1)
     }
+}
+
+/**
+ * The classes MPRIS needs that live outside the modules jlink infers.
+ *
+ * `com.sun.security.auth.module.UnixSystem` is in `jdk.security.auth` and is reached only by
+ * reflection from dbus-java's unix-socket transport, so leaving that module out of the jlink list
+ * produces the worst possible failure mode: the app starts, plays audio, and reports "no MPRIS
+ * integration on this desktop" — indistinguishable from a machine that genuinely has no session
+ * bus. Checked here rather than by connecting, because CI has no session bus and "no bus" must stay
+ * a passing configuration while "no module" must not.
+ *
+ * Linux only: this is where MPRIS applies, and the class does not exist on Windows runtimes.
+ */
+private fun verifyMprisRuntimeModulesArePresent() {
+    if (!System.getProperty("os.name").orEmpty().contains("linux", ignoreCase = true)) return
+    val required = "com.sun.security.auth.module.UnixSystem"
+    runCatching { Class.forName(required) }.onFailure {
+        System.err.println("FATAL: $required is missing from this runtime image (jdk.security.auth)")
+        exitProcess(1)
+    }
+    println("MPRIS runtime modules present: $required")
 }
 
 /**
@@ -100,6 +123,19 @@ fun main(args: Array<String>) {
             // would grow or shrink the window by the display's scale factor on every restart.
             LaunchedEffect(Unit) {
                 frame.set(window)
+                // The window exists now, so Raise and Quit have something to act on. Skipped
+                // under --smoke-test: claiming a bus name in CI would leave a player advertised
+                // for the two seconds before the process exits, for no coverage in return.
+                if (!smokeTest) {
+                    container.startMpris(
+                        onRaise = {
+                            window.toFront()
+                            window.requestFocus()
+                            if (window.extendedState == Frame.ICONIFIED) window.extendedState = Frame.NORMAL
+                        },
+                        onQuit = { window.dispatchEvent(WindowEvent(window, WindowEvent.WINDOW_CLOSING)) },
+                    )
+                }
                 window.minimumSize = Dimension(WindowPlacements.MinWidth, WindowPlacements.MinHeight)
                 window.setSize(restored.width, restored.height)
                 val x = restored.x
@@ -115,6 +151,7 @@ fun main(args: Array<String>) {
                 LaunchedEffect(Unit) {
                     delay(2_000)
                     verifyMp3SpiIsRegistered()
+                    verifyMprisRuntimeModulesArePresent()
                     println("${BuildInfo.APP_NAME} ${BuildInfo.VERSION} smoke test OK")
                     container.close()
                     exitApplication()

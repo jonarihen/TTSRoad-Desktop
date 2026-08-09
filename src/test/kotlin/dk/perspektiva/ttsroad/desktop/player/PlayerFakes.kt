@@ -92,6 +92,11 @@ class FakePlaybackEngine(
     val seeks: MutableList<Long> = Collections.synchronizedList(mutableListOf<Long>())
     val requestedRates: MutableList<Float> = Collections.synchronizedList(mutableListOf<Float>())
 
+    /** Gains handed to the engine, in order — boost and the sleep fade multiplied together. */
+    val gains: MutableList<Double> = Collections.synchronizedList(mutableListOf<Double>())
+
+    @Volatile var skipSilenceEnabled: Boolean = false
+
     /** Thrown by `prepare`. Set to a [SessionExpiredException] to model a 401 on the audio path. */
     @Volatile var prepareFailure: Throwable? = null
 
@@ -152,6 +157,14 @@ class FakePlaybackEngine(
     override fun setRate(rate: Float): Float {
         requestedRates += rate
         return capabilities.coerceSpeed(rate)
+    }
+
+    override fun setGain(gain: Double) {
+        gains += gain
+    }
+
+    override fun setSkipSilence(enabled: Boolean) {
+        skipSilenceEnabled = enabled
     }
 
     override fun positionMs(): Long = position

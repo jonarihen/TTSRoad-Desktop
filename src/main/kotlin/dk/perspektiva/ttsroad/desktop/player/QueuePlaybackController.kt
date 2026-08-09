@@ -2,9 +2,15 @@ package dk.perspektiva.ttsroad.desktop.player
 
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackSnapshot
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.describeNetworkFailure
 import dk.perspektiva.ttsroad.desktop.data.playbackOrder
+import dk.perspektiva.ttsroad.desktop.data.skipIntervalMs
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CoroutineDispatcher
@@ -52,13 +58,22 @@ class QueuePlaybackController(
     private val sources: MediaSourceFactory,
     private val engine: PlaybackEngine,
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * Listening settings. Observed here rather than read by the player screen, because the issue's
+     * requirement is that a media-key start and an auto-advanced chapter use the same values as a
+     * chapter the user pressed play on — and only the controller sees all three.
+     */
+    private val preferencesStore: PlaybackPreferencesStore = InMemoryPlaybackPreferencesStore(),
+    private val historyStore: PlaybackHistoryStore = InMemoryPlaybackHistoryStore(),
+    private val sleepTimer: SleepTimer = SleepTimer(),
+    private val clock: () -> Long = System::currentTimeMillis,
     /** Overridable so tests do not wait real seconds for the retry ladder. */
     private val retryDelaysMs: List<Long> = listOf(2_000, 5_000, 15_000),
     private val tickIntervalMs: Long = 250,
     private val progressIntervalMs: Long = 10_000,
 ) : PlaybackController {
 
-    private val _state = MutableStateFlow(PlayerUiState(canChangeSpeed = engine.capabilities.variableSpeed))
+    private val _state = MutableStateFlow(emptyState())
     override val state: StateFlow<PlayerUiState> = _state.asStateFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
@@ -72,7 +87,7 @@ class QueuePlaybackController(
     /** Last position actually reported by the engine — what a save or a retry resumes from. */
     @Volatile private var lastKnownPositionMs = 0L
 
-    @Volatile private var speed = 1f
+    @Volatile private var speed = preferencesStore.preferences.value.speed
 
     /**
      * Engine events, queued for the attempt loop to consume.
@@ -85,7 +100,50 @@ class QueuePlaybackController(
 
     init {
         engine.setListener { event -> engineEvents.add(event) }
+
+        // Applied immediately and on every later change. The first application matters as much as
+        // the rest: the engine has to know the saved speed and gain *before* the first prepare, or
+        // the restored preferences would take effect one chapter late.
+        scope.launch {
+            preferencesStore.preferences.collect { preferences ->
+                speed = preferences.speed
+                val applied = engine.setRate(preferences.speed)
+                engine.setSkipSilence(preferences.skipSilence)
+                applyGain()
+                _state.update {
+                    it.copy(
+                        speed = applied,
+                        skipIntervalMs = preferences.skipIntervalMs,
+                    )
+                }
+            }
+        }
+
+        // The fade is an engine gain, and the gain is boost × fade, so a fade tick has to go
+        // through the same multiplication as a preference change rather than writing the element
+        // directly — otherwise cancelling a fade would reset a boosted listener to unity.
+        scope.launch {
+            sleepTimer.state.collect { timer ->
+                applyGain()
+                _state.update { it.copy(sleepTimer = timer) }
+            }
+        }
     }
+
+    /** Boost and fade multiplied into the single number the engine takes. */
+    private fun applyGain() {
+        val boost = preferencesStore.preferences.value.volumeBoost.gain
+        val fade = sleepTimer.state.value.fadeGain.toDouble()
+        engine.setGain(boost * fade)
+    }
+
+    private fun emptyState() = PlayerUiState(
+        canChangeSpeed = engine.capabilities.variableSpeed,
+        canSkipSilence = engine.capabilities.skipSilence,
+        speed = engine.capabilities.coerceSpeed(preferencesStore.preferences.value.speed),
+        skipIntervalMs = preferencesStore.preferences.value.skipIntervalMs,
+        sleepTimer = sleepTimer.state.value,
+    )
 
     override suspend fun play(chapter: ChapterSummary, fiction: FictionSummary?) {
         if (chapter.audio == null) {
@@ -124,12 +182,17 @@ class QueuePlaybackController(
         if (current.isPlaying) {
             engine.pause()
             _state.update { it.copy(isPlaying = false) }
+            // A manual pause freezes a countdown; a listener who stops to answer the door should
+            // not come back to a timer that ran out while nothing was playing.
+            sleepTimer.onPlaybackPaused()
             // Pausing is a natural place to lose a session or a laptop lid, so it is one of the
             // moments issue #4 requires a save at.
             saveCurrentProgress()
+            recordHistory()
         } else {
             engine.play()
             _state.update { it.copy(isPlaying = true) }
+            sleepTimer.onPlaybackResumed()
         }
     }
 
@@ -143,6 +206,10 @@ class QueuePlaybackController(
     }
 
     override fun skipBy(deltaMs: Long) = seekTo(_state.value.positionMs + deltaMs)
+
+    override fun skipForward() = skipBy(preferencesStore.preferences.value.skipIntervalMs)
+
+    override fun skipBackward() = skipBy(-preferencesStore.preferences.value.skipIntervalMs)
 
     override fun skipToNextChapter() {
         val next = queueIndex + 1
@@ -165,11 +232,21 @@ class QueuePlaybackController(
     }
 
     override fun setSpeed(speed: Float) {
-        // The engine gets the last word, and the UI shows what it said — an engine that cannot
-        // resample answers 1.0 and the display stays honest.
-        val applied = engine.setRate(speed)
-        this.speed = applied
-        _state.update { it.copy(speed = applied) }
+        // Persisted rather than held: the preference is the source of truth, and the collector in
+        // `init` is what pushes it to the engine and to the UI state. Writing the engine here too
+        // would mean two paths to the same setting, one of which does not survive a restart.
+        //
+        // An engine that cannot resample still stores the wish — a listener who set 1.5× on a
+        // machine without GStreamer and later installs it should find 1.5× waiting.
+        preferencesStore.update { it.copy(speed = speed) }
+    }
+
+    override fun setSleepTimer(mode: SleepTimerMode) {
+        sleepTimer.arm(mode)
+    }
+
+    override fun extendSleepTimer() {
+        sleepTimer.extendBy(SleepTimer.ExtensionMinutes)
     }
 
     override fun retry() {
@@ -190,6 +267,9 @@ class QueuePlaybackController(
         // not wait for it. The save below reads `lastKnownPositionMs`, which the job has already
         // published, so it does not need the job to finish first.
         playJob?.cancel()
+        // Local and synchronous, so it happens whether or not the server is reachable — the whole
+        // point of a local history is that closing the lid on a dead network still remembers.
+        recordHistory()
         runBlocking {
             withTimeoutOrNull(RELEASE_TIMEOUT_MS) { saveProgressNow() }
         }
@@ -204,13 +284,17 @@ class QueuePlaybackController(
         playJob?.cancelAndJoin()
         playJob = null
         saveProgressNow()
+        recordHistory()
         runCatching { engine.stop() }
         if (clearQueue) {
             queue = emptyList()
             queueFiction = null
             queueIndex = 0
             lastKnownPositionMs = 0
-            _state.value = PlayerUiState(canChangeSpeed = engine.capabilities.variableSpeed)
+            // A stop is also the end of any sleep timer: the thing it was counting down to has
+            // already happened, and leaving it armed would silence the *next* chapter.
+            sleepTimer.cancel()
+            _state.value = emptyState()
         }
     }
 
@@ -224,6 +308,7 @@ class QueuePlaybackController(
         playJob?.cancelAndJoin()
         // Leaving the previous chapter is one of the required save points.
         saveProgressNow()
+        recordHistory()
         queueIndex = startIndex
         lastKnownPositionMs = startMs
         publishMetadata(startIndex, startMs)
@@ -242,6 +327,14 @@ class QueuePlaybackController(
                 // Reaching here means the chapter ended on its own.
                 val duration = _state.value.durationMs
                 saveProgress(chapter, duration.takeIf { it > 0 } ?: lastKnownPositionMs, isPlayed = true)
+
+                // Checked before the advance, which is the whole requirement: "end of current
+                // chapter" has to prevent auto-advance, not stop the next one a moment after it
+                // has already started playing.
+                if (sleepTimer.shouldStopAtChapterEnd()) {
+                    _state.update { it.copy(isPlaying = false, positionMs = duration) }
+                    return@launch
+                }
                 if (index == queue.lastIndex) {
                     _state.update { it.copy(isPlaying = false, positionMs = duration) }
                     return@launch
@@ -269,6 +362,16 @@ class QueuePlaybackController(
 
                 // The job was cancelled: a new chapter, a stop, or shutdown superseded this.
                 is AttemptResult.Stopped -> return ChapterOutcome.Stopped
+
+                is AttemptResult.SleptOff -> {
+                    // A pause, not a stop: the queue and the position stay exactly where they are
+                    // so the morning's "resume" is one keypress, not a search for the chapter.
+                    engine.pause()
+                    _state.update { it.copy(isPlaying = false) }
+                    saveProgressNow()
+                    recordHistory()
+                    return ChapterOutcome.Stopped
+                }
 
                 is AttemptResult.SessionExpired -> {
                     _state.update { it.copy(isPlaying = false, error = result.failure.message, canRetry = false) }
@@ -302,6 +405,9 @@ class QueuePlaybackController(
     private sealed interface AttemptResult {
         data object Completed : AttemptResult
         data object Stopped : AttemptResult
+
+        /** The sleep timer ran out mid-chapter. Distinct from [Stopped] so it can pause, not tear down. */
+        data object SleptOff : AttemptResult
         data class Transient(val message: String) : AttemptResult
         data class Fatal(val message: String) : AttemptResult
         data class SessionExpired(val failure: PlaybackFailure.SessionExpired) : AttemptResult
@@ -342,6 +448,11 @@ class QueuePlaybackController(
         while (coroutineContext[Job]?.isActive != false) {
             delay(tickIntervalMs)
             drainEngineEvents()?.let { return it }
+
+            // The timer is driven by this tick rather than by a scheduler of its own, which is
+            // what makes the fade and the expiry deterministic in tests: no wall-clock race, and
+            // the fade gain is recomputed on exactly the cadence the position is.
+            if (sleepTimer.tick() == SleepTimerEvent.Expired) return AttemptResult.SleptOff
 
             val position = engine.positionMs()
             if (position > 0) lastKnownPositionMs = position
@@ -399,6 +510,12 @@ class QueuePlaybackController(
         positionMs = positionMs,
         speed = engine.capabilities.coerceSpeed(speed),
         canChangeSpeed = engine.capabilities.variableSpeed,
+        canSkipSilence = engine.capabilities.skipSilence,
+        // Rebuilt from the live values rather than copied from the previous state: this function
+        // constructs a whole PlayerUiState, so anything not named here would silently revert to a
+        // default every time the chapter changed.
+        skipIntervalMs = preferencesStore.preferences.value.skipIntervalMs,
+        sleepTimer = sleepTimer.state.value,
         queue = queue.map { QueueItem(it.resolvedChapterId, it.resolvedTitle, it.resolvedDisplayNumber) },
         currentIndex = index,
         hasNext = index < queue.lastIndex,
@@ -414,6 +531,36 @@ class QueuePlaybackController(
      */
     private fun fictionIdOf(chapter: ChapterSummary, fiction: FictionSummary?): Int =
         fiction?.id?.takeIf { it > 0 } ?: chapter.resolvedFictionId
+
+    /**
+     * Files a local "you were here" snapshot for the chapter currently loaded.
+     *
+     * Called at transitions — pause, chapter change, sleep, stop, shutdown — and deliberately
+     * *not* on the progress tick. Recording every ten seconds would be a write amplification for
+     * no extra information, and, more importantly, it would undo a dismissal within one tick of
+     * the user making it.
+     */
+    private fun recordHistory() {
+        val chapter = queue.getOrNull(queueIndex) ?: return
+        val current = _state.value
+        if (!current.hasMedia) return
+        val fictionId = chapter.resolvedFictionId
+        if (fictionId <= 0) return
+
+        historyStore.record(
+            PlaybackSnapshot(
+                fictionId = fictionId,
+                chapterId = chapter.resolvedChapterId,
+                // Titles only. Nothing here reconstructs the server, the audio object or the
+                // account — see PlaybackSnapshot's own note on what this file may hold.
+                fictionTitle = current.fictionTitle ?: chapter.resolvedFictionTitle.orEmpty(),
+                chapterTitle = chapter.resolvedTitle,
+                positionSeconds = lastKnownPositionMs / 1000.0,
+                durationSeconds = current.durationMs / 1000.0,
+                recordedAtMs = clock(),
+            ),
+        )
+    }
 
     /** Fire-and-forget save for the transitions that happen on the UI thread. */
     private fun saveCurrentProgress() {

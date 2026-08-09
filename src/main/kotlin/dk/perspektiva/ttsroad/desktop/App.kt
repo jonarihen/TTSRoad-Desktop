@@ -48,6 +48,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -79,6 +80,7 @@ import dk.perspektiva.ttsroad.desktop.ui.PlayerScreen
 import dk.perspektiva.ttsroad.desktop.ui.SettingsScreen
 import dk.perspektiva.ttsroad.desktop.ui.SettingsSection
 import dk.perspektiva.ttsroad.desktop.ui.SettingsStateHolder
+import dk.perspektiva.ttsroad.desktop.ui.ShortcutsDialog
 import dk.perspektiva.ttsroad.desktop.ui.WindowSizeClass
 import dk.perspektiva.ttsroad.desktop.ui.hasSession
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
@@ -129,12 +131,65 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     // silently dismiss an invisible dialog instead of going back.
     //
     // Returns whether the key did anything, so an Escape that means nothing is not swallowed here.
+    var showShortcuts by remember { mutableStateOf(false) }
+
     fun dismissOrGoBack(): Boolean {
+        // The shortcuts dialog is owned here rather than by a screen, so it is the first thing
+        // Escape closes — ahead of a settings confirmation that may also be open behind it.
+        if (showShortcuts) {
+            showShortcuts = false
+            return true
+        }
         val ownsOverlay = nav.current == Destination.Settings || nav.current == Destination.Devices
         return when (escapeAction(settings.hasOpenOverlay && ownsOverlay, nav.canGoBack)) {
             EscapeAction.CloseOverlay -> settings.dismissTopOverlay()
             EscapeAction.GoBack -> nav.back()
             EscapeAction.None -> false
+        }
+    }
+
+    // Each branch reports whether it actually did something: a Back, an Escape or a transport key
+    // with nothing to act on must fall through rather than be swallowed at the root.
+    fun handleShortcut(shortcut: AppShortcut?): Boolean {
+        // Transport shortcuts need something loaded. Without this guard, Space on the login screen
+        // would report itself handled and never reach the button under the cursor.
+        fun whenPlaying(action: () -> Unit): Boolean {
+            if (!playerState.hasMedia) return false
+            action()
+            return true
+        }
+        return when (shortcut) {
+            AppShortcut.Back -> nav.back()
+
+            AppShortcut.Refresh -> {
+                refreshCurrentScreen()
+                true
+            }
+
+            AppShortcut.Dismiss -> dismissOrGoBack()
+
+            AppShortcut.PlayPause -> whenPlaying(playback::togglePlayPause)
+            AppShortcut.SeekBackward -> whenPlaying(playback::skipBackward)
+            AppShortcut.SeekForward -> whenPlaying(playback::skipForward)
+            AppShortcut.PreviousChapter -> whenPlaying(playback::skipToPreviousChapter)
+            AppShortcut.NextChapter -> whenPlaying(playback::skipToNextChapter)
+
+            AppShortcut.OpenLibrary -> {
+                nav.open(Destination.Library)
+                true
+            }
+
+            AppShortcut.OpenSettings -> {
+                nav.open(Destination.Settings)
+                true
+            }
+
+            AppShortcut.ShowShortcuts -> {
+                showShortcuts = true
+                true
+            }
+
+            null -> false
         }
     }
 
@@ -163,23 +218,21 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             .background(AarisColor.Bg)
             .focusRequester(rootFocus)
             .focusable()
-            // A *preview* handler, so the window shortcuts work even while a text field has focus:
-            // F5 in the library's search box still refreshes.
-            .onPreviewKeyEvent { event ->
-                // Each branch reports whether it actually did something: a Back or an Escape that
-                // has nothing to act on must fall through rather than be swallowed at the root.
-                when (shortcutFor(event)) {
-                    AppShortcut.Back -> nav.back()
-
-                    AppShortcut.Refresh -> {
-                        refreshCurrentScreen()
-                        true
-                    }
-
-                    AppShortcut.Dismiss -> dismissOrGoBack()
-
-                    null -> false
-                }
+            // Two handlers, and the split is what makes "shortcuts do not fire while typing"
+            // structural rather than a check somebody has to remember.
+            //
+            // The *preview* pass runs before the focused component, so it is limited to the
+            // combinations no text field claims — F5 in the library's search box still refreshes.
+            // Passing `textInputFocused = true` is how that limit is expressed: it asks the table
+            // for exactly the shortcuts that are safe mid-word.
+            .onPreviewKeyEvent { event -> handleShortcut(shortcutFor(event, textInputFocused = true)) }
+            // The ordinary pass runs only if nothing else consumed the key. A focused text field
+            // has already taken Space, the arrows and Ctrl+arrow for editing by the time this
+            // runs, so the transport shortcuts simply never see them — no focus tracking needed.
+            .onKeyEvent { event ->
+                val shortcut = shortcutFor(event, textInputFocused = false)
+                // Anything the preview pass already had a chance at must not run twice.
+                if (shortcut == null || shortcut.firesWhileTyping) false else handleShortcut(shortcut)
             },
     ) {
         // Keyboard shortcuts are delivered to the focus owner and previewed on the way down, so
@@ -223,6 +276,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     cache = cache,
                                     repository = repository,
                                     playback = playback,
+                                    history = container.playbackHistory,
                                     onOpenFiction = { nav.open(Destination.Fiction(it)) },
                                     onOpenPlayer = { nav.open(Destination.Player) },
                                 )
@@ -246,6 +300,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                 Destination.Player -> PlayerScreen(
                                     playback = playback,
                                     sizeClass = sizeClass,
+                                    preferences = container.playbackPreferences,
                                     onBack = { nav.back() },
                                 )
 
@@ -253,6 +308,12 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     sessionStore = sessionStore,
                                     repository = repository,
                                     holder = settings,
+                                    preferences = container.playbackPreferences,
+                                    // Read off the player state rather than the engine, so the
+                                    // Settings pane and the player agree about what the backend
+                                    // can do by construction.
+                                    canChangeSpeed = playerState.canChangeSpeed,
+                                    canSkipSilence = playerState.canSkipSilence,
                                     // Keeps the destination and the open pane in step, so the
                                     // Devices deep link and the in-screen pane list are the same
                                     // thing rather than two competing notions of "where am I".
@@ -280,6 +341,10 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             }
         }
     }
+
+    // Outside the login branch on purpose: F1 is a reasonable thing to press on the sign-in
+    // screen, and the list is useful there too.
+    if (showShortcuts) ShortcutsDialog(onDismiss = { showShortcuts = false })
 
     // The Devices destination is a deep link into the settings screen: entering it selects the
     // pane, so a future "manage sessions" link from anywhere lands on the right place.

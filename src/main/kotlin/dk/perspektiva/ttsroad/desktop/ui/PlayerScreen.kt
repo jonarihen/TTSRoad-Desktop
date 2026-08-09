@@ -22,13 +22,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Replay30
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -53,12 +59,20 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import dk.perspektiva.ttsroad.desktop.player.PlayerUiState
+import dk.perspektiva.ttsroad.desktop.player.SleepTimerMode
+import dk.perspektiva.ttsroad.desktop.player.SleepTimerState
+import dk.perspektiva.ttsroad.desktop.player.formatRemaining
 
 /** Whether the mini-player should be visible: something has been loaded (or tried to load). */
 val PlayerUiState.hasSession: Boolean
@@ -68,6 +82,12 @@ val PlayerUiState.hasSession: Boolean
 fun PlayerScreen(
     playback: PlaybackController,
     sizeClass: WindowSizeClass = WindowSizeClass.Expanded,
+    /**
+     * Listening settings, for the one control the player owns that is a *preference* rather than
+     * transport state: skip silence. Defaulted to an in-memory store so a screen test never writes
+     * to the real config directory.
+     */
+    preferences: PlaybackPreferencesStore = remember { InMemoryPlaybackPreferencesStore() },
     onBack: () -> Unit,
 ) {
     val s: PlayerUiState by playback.state.collectAsState()
@@ -84,7 +104,7 @@ fun PlayerScreen(
                 Modifier.fillMaxSize().padding(top = 28.dp).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                PlayerMain(s, playback, compact = true, modifier = Modifier.fillMaxWidth())
+                PlayerMain(s, playback, preferences, compact = true, modifier = Modifier.fillMaxWidth())
                 if (hasQueue) {
                     Spacer(Modifier.height(20.dp))
                     QueuePanel(s, playback, Modifier.fillMaxWidth().height(260.dp))
@@ -96,6 +116,7 @@ fun PlayerScreen(
                     PlayerMain(
                         s,
                         playback,
+                        preferences,
                         compact = false,
                         modifier = Modifier.align(Alignment.TopCenter).widthIn(max = NarrowMaxWidth)
                             .fillMaxWidth().fillMaxHeight(),
@@ -115,9 +136,11 @@ fun PlayerScreen(
 private fun PlayerMain(
     s: PlayerUiState,
     playback: PlaybackController,
+    preferences: PlaybackPreferencesStore,
     compact: Boolean,
     modifier: Modifier,
 ) {
+    val prefs by preferences.preferences.collectAsState()
     // Track the drag locally and only seek on release — the MP3 backend re-decodes from the
     // start of the file per seek, so seeking on every drag tick would stutter badly.
     var dragMs by remember { mutableStateOf<Float?>(null) }
@@ -174,9 +197,13 @@ private fun PlayerMain(
             TransportButton(Icons.Default.SkipPrevious, "Previous chapter", enabled = s.hasMedia, size = 48.dp) {
                 playback.skipToPreviousChapter()
             }
-            TransportButton(Icons.Default.Replay30, "Back 30 seconds", enabled = s.hasMedia, size = 48.dp) {
-                playback.skipBy(-30_000)
-            }
+            val skipSeconds = (s.skipIntervalMs / 1000).toInt()
+            TransportButton(
+                rewindIconFor(skipSeconds),
+                "Back $skipSeconds seconds",
+                enabled = s.hasMedia,
+                size = 48.dp,
+            ) { playback.skipBackward() }
             TransportButton(
                 if (s.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 if (s.isPlaying) "Pause" else "Play",
@@ -184,9 +211,12 @@ private fun PlayerMain(
                 size = 64.dp,
                 filled = true,
             ) { playback.togglePlayPause() }
-            TransportButton(Icons.Default.Forward30, "Forward 30 seconds", enabled = s.hasMedia, size = 48.dp) {
-                playback.skipBy(30_000)
-            }
+            TransportButton(
+                forwardIconFor(skipSeconds),
+                "Forward $skipSeconds seconds",
+                enabled = s.hasMedia,
+                size = 48.dp,
+            ) { playback.skipForward() }
             TransportButton(Icons.Default.SkipNext, "Next chapter", enabled = s.hasNext, size = 48.dp) {
                 playback.skipToNextChapter()
             }
@@ -197,6 +227,24 @@ private fun PlayerMain(
             Spacer(Modifier.height(18.dp))
             SpeedControl(current = s.speed, enabled = s.hasMedia) { playback.setSpeed(it) }
         }
+        // Skip-silence belongs next to speed rather than only in Settings: both change how long
+        // the chapter takes, and a listener reaching for one is usually reaching for the other.
+        // Same capability rule — absent entirely where the backend cannot do it.
+        if (s.canSkipSilence) {
+            Spacer(Modifier.height(10.dp))
+            SkipSilenceToggle(
+                checked = prefs.skipSilence,
+                enabled = s.hasMedia,
+                onToggle = { value -> preferences.update { it.copy(skipSilence = value) } },
+            )
+        }
+        Spacer(Modifier.height(18.dp))
+        SleepTimerControl(
+            state = s.sleepTimer,
+            enabled = s.hasMedia,
+            onArm = playback::setSleepTimer,
+            onExtend = playback::extendSleepTimer,
+        )
         Spacer(Modifier.height(12.dp))
         val error = s.error
         when {
@@ -261,6 +309,129 @@ private fun SpeedControl(current: Float, enabled: Boolean, onSelect: (Float) -> 
 private fun formatSpeed(speed: Float): String {
     val text = if (speed % 1f == 0f) speed.toInt().toString() else speed.toString().trimEnd('0').trimEnd('.')
     return "${text}x"
+}
+
+/**
+ * The transport icon matching the configured interval, where Material has one.
+ *
+ * 15, 45 and 60 have no numbered icon in the set, and a `Replay30` glyph on a button that skips 45
+ * seconds is a worse answer than an unnumbered one — the content description carries the number
+ * either way, so nothing is lost for a screen reader.
+ */
+private fun rewindIconFor(seconds: Int): ImageVector = when (seconds) {
+    10 -> Icons.Default.Replay10
+    30 -> Icons.Default.Replay30
+    else -> Icons.Default.FastRewind
+}
+
+private fun forwardIconFor(seconds: Int): ImageVector = when (seconds) {
+    10 -> Icons.Default.Forward10
+    30 -> Icons.Default.Forward30
+    else -> Icons.Default.FastForward
+}
+
+const val SleepTimerChipTestTag = "player-sleep-chip"
+const val SleepExtendTestTag = "player-sleep-extend"
+const val SkipSilenceTestTag = "player-skip-silence"
+
+/**
+ * The sleep timer row: the offered modes, the countdown, and "+5 min" while fading.
+ *
+ * The extension only appears during the fade, which is when it is actually needed — a permanently
+ * visible "+5 min" next to an unarmed timer is a button with no meaning.
+ */
+@Composable
+private fun SleepTimerControl(
+    state: SleepTimerState,
+    enabled: Boolean,
+    onArm: (SleepTimerMode) -> Unit,
+    onExtend: () -> Unit,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MetaText("Sleep", color = AarisColor.Dim)
+        SleepChip("Off", selected = !state.isArmed, enabled = enabled) { onArm(SleepTimerMode.Off) }
+        SleepTimerMode.OfferedMinutes.forEach { minutes ->
+            SleepChip(
+                label = "${minutes}m",
+                // Compared against the *initial* duration, which extending does not change — so a
+                // timer pushed out by "+5 min" still shows which choice it started from.
+                selected = state.mode == SleepTimerMode.Duration(minutes),
+                enabled = enabled,
+            ) { onArm(SleepTimerMode.Duration(minutes)) }
+        }
+        SleepChip(
+            label = "Chapter",
+            selected = state.mode == SleepTimerMode.EndOfChapter,
+            enabled = enabled,
+        ) { onArm(SleepTimerMode.EndOfChapter) }
+
+        if (state.isArmed && state.remainingMs > 0) {
+            MetaText(
+                text = formatRemaining(state.remainingMs),
+                color = if (state.isFading) AarisColor.Warning else AarisColor.Accent,
+            )
+        }
+        if (state.isFading) {
+            Text(
+                "+5 min",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AarisColor.Accent,
+                modifier = Modifier
+                    .testTag(SleepExtendTestTag)
+                    .clickable { onExtend() }
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .semantics { contentDescription = "Add five minutes to the sleep timer" }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SleepChip(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.bodyMedium,
+        color = when {
+            !enabled -> AarisColor.Dim
+            selected -> AarisColor.Accent
+            else -> AarisColor.Muted
+        },
+        modifier = Modifier
+            .testTag(SleepTimerChipTestTag)
+            .selectable(
+                selected = selected,
+                enabled = enabled,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    )
+}
+
+@Composable
+private fun SkipSilenceToggle(checked: Boolean, enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MetaText("Silence", color = AarisColor.Dim)
+        Text(
+            text = if (checked) "Skipping" else "Keeping",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (!enabled) AarisColor.Dim else if (checked) AarisColor.Accent else AarisColor.Muted,
+            modifier = Modifier
+                .testTag(SkipSilenceTestTag)
+                .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onToggle)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .semantics { contentDescription = "Skip silence" }
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+    }
 }
 
 /**
