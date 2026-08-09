@@ -133,14 +133,17 @@ class InMemoryDownloadIndexStore(
     private val _entries = MutableStateFlow(initial)
     override val entries: StateFlow<List<DownloadEntry>> = _entries.asStateFlow()
 
+    @Synchronized
     override fun put(entry: DownloadEntry) {
         _entries.value = DownloadIndex.put(_entries.value, entry)
     }
 
+    @Synchronized
     override fun remove(chapterId: Int) {
         _entries.value = DownloadIndex.remove(_entries.value, chapterId)
     }
 
+    @Synchronized
     override fun clear() {
         _entries.value = emptyList()
     }
@@ -194,14 +197,23 @@ class FileDownloadIndexStore(
     private val _entries = MutableStateFlow(load())
     override val entries: StateFlow<List<DownloadEntry>> = _entries.asStateFlow()
 
+    /**
+     * Synchronised for the same reason the history store is: every mutation is read-modify-write,
+     * and here there are more writers than anywhere else in the app — one per concurrent download
+     * worker, plus the Compose thread queueing and cancelling. Two workers reporting progress from
+     * the same base list would each drop the other's row, and "transactional" would mean nothing.
+     */
+    @Synchronized
     override fun put(entry: DownloadEntry) {
         write(DownloadIndex.put(_entries.value, entry))
     }
 
+    @Synchronized
     override fun remove(chapterId: Int) {
         write(DownloadIndex.remove(_entries.value, chapterId))
     }
 
+    @Synchronized
     override fun clear() {
         write(emptyList())
     }
