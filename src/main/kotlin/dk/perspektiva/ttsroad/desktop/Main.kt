@@ -107,9 +107,12 @@ fun main(args: Array<String>) {
 
     val logFile = AppLog.configurePersistent()
     val crashReported = AtomicBoolean(false)
-    Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-        reportFatalCrash(crashReported, logFile, thread, error)
-    }
+    Thread.setDefaultUncaughtExceptionHandler(
+        terminatingUncaughtExceptionHandler(
+            report = { thread, error -> reportFatalCrash(crashReported, logFile, thread, error) },
+            terminate = ::exitProcess,
+        ),
+    )
 
     val smokeTest = args.contains(SmokeTestFlag) ||
         System.getenv(SmokeTestEnvironment).equals("1", ignoreCase = true)
@@ -118,6 +121,22 @@ fun main(args: Array<String>) {
     } catch (error: Throwable) {
         reportFatalCrash(crashReported, logFile, Thread.currentThread(), error)
         exitProcess(1)
+    }
+}
+
+/**
+ * A background-thread crash is process-fatal: after the report completes (including dismissal of
+ * the desktop dialog), terminate rather than leaving Compose and possibly-corrupt shared state
+ * running. The callbacks keep the ordering and the hard-termination fallback unit-testable.
+ */
+internal fun terminatingUncaughtExceptionHandler(
+    report: (Thread, Throwable) -> Unit,
+    terminate: (Int) -> Unit,
+): Thread.UncaughtExceptionHandler = Thread.UncaughtExceptionHandler { thread, error ->
+    try {
+        report(thread, error)
+    } finally {
+        terminate(1)
     }
 }
 

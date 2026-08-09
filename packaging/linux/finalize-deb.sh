@@ -30,9 +30,17 @@ rebuilt="$work_directory/$(basename -- "$package")"
 mkdir -p "$payload"
 dpkg-deb --raw-extract "$package" "$payload"
 control="$payload/DEBIAN/control"
-desktop="$payload/opt/TTSRoad/lib/ttsroad-TTSRoad.desktop"
 [[ -f $control ]] || fail "package has no DEBIAN/control"
-[[ -f $desktop ]] || fail "package has no ttsroad-TTSRoad.desktop"
+
+# Jpackage owns where the desktop-integration source lives inside its package payload. Keep the
+# public filename stable for MPRIS, but do not couple this Debian-specific finishing pass to a
+# private Jpackage directory layout that can move between JDK updates.
+mapfile -d '' -t desktop_candidates < <(
+    find "$payload" -type f -name 'ttsroad-TTSRoad.desktop' -print0
+)
+[[ ${#desktop_candidates[@]} -eq 1 ]] ||
+    fail "package must contain exactly one ttsroad-TTSRoad.desktop (found ${#desktop_candidates[@]})"
+desktop=${desktop_candidates[0]}
 
 sed -i 's/^Section:.*/Section: sound/' "$control"
 if grep -q '^Recommends:' "$control"; then

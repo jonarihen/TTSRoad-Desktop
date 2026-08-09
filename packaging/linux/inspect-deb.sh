@@ -63,9 +63,15 @@ require_payload() {
 require_payload /opt/TTSRoad/bin/TTSRoad
 require_payload /opt/TTSRoad/lib/runtime/release
 require_payload /opt/TTSRoad/lib/runtime/lib/modules
-require_payload /opt/TTSRoad/lib/ttsroad-TTSRoad.desktop
 require_payload /opt/TTSRoad/lib/TTSRoad.png
 require_payload /usr/share/doc/ttsroad/copyright
+
+mapfile -d '' -t desktop_candidates < <(
+    find "$payload" -type f -name 'ttsroad-TTSRoad.desktop' -print0
+)
+[[ ${#desktop_candidates[@]} -eq 1 ]] ||
+    fail "payload must contain exactly one ttsroad-TTSRoad.desktop (found ${#desktop_candidates[@]})"
+desktop=${desktop_candidates[0]}
 
 if awk 'substr($1, 9, 1) == "w" { print; found=1 } END { exit found ? 0 : 1 }' \
     "$work_dir/contents.txt"; then
@@ -88,7 +94,6 @@ if grep -R -a -E -q -- 'secret-tool|XDG_(CONFIG|DATA|CACHE|STATE)_HOME|/home/' \
     fail "package maintainer metadata/scripts attempt to inspect or delete per-user state"
 fi
 
-desktop="$payload/opt/TTSRoad/lib/ttsroad-TTSRoad.desktop"
 grep -Fxq 'Name=TTSRoad' "$desktop" || fail "desktop entry has the wrong display name"
 grep -Fxq 'Categories=AudioVideo;Audio;' "$desktop" || fail "desktop entry has the wrong categories"
 grep -Fxq 'StartupWMClass=dk-perspektiva-ttsroad-desktop-MainKt' "$desktop" ||
