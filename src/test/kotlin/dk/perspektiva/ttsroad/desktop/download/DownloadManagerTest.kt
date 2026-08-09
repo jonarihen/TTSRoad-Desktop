@@ -38,6 +38,17 @@ class DownloadManagerTest {
     private lateinit var storage: DownloadStorage
     private lateinit var index: InMemoryDownloadIndexStore
 
+    private class CountingDownloadIndexStore(
+        private val delegate: DownloadIndexStore,
+    ) : DownloadIndexStore by delegate {
+        val puts = mutableListOf<DownloadEntry>()
+
+        override fun put(entry: DownloadEntry) {
+            puts += entry
+            delegate.put(entry)
+        }
+    }
+
     private fun mp3Bytes(size: Int = 4096): ByteArray =
         ByteArray(size).also {
             it[0] = 'I'.code.toByte(); it[1] = 'D'.code.toByte(); it[2] = '3'.code.toByte()
@@ -79,14 +90,28 @@ class DownloadManagerTest {
         server.close()
     }
 
-    private fun manager(retryDelaysMs: List<Long> = emptyList()): DownloadManager {
+    private fun manager(
+        retryDelaysMs: List<Long> = emptyList(),
+        indexStore: DownloadIndexStore = index,
+        progressBytesThreshold: Long = DownloadManager.DefaultProgressBytesThreshold,
+        progressIntervalNanos: Long = DownloadManager.DefaultProgressIntervalNanos,
+        progressClockNanos: () -> Long = System::nanoTime,
+    ): DownloadManager {
         val repository = object : FakeRepository(serverUrl = server.url("/").toString()) {
             override fun authHeaderValue(): String? = sessionStore.current().authorizationHeader
             override fun resolveUrl(url: String): String =
                 if (url.startsWith("http")) url else server.url("/").toString().trimEnd('/') + url
         }
         val downloader = ChapterDownloader(authedClient(sessionStore), repository, storage)
-        return DownloadManager(downloader, storage, index, retryDelaysMs = retryDelaysMs)
+        return DownloadManager(
+            downloader,
+            storage,
+            indexStore,
+            retryDelaysMs = retryDelaysMs,
+            progressBytesThreshold = progressBytesThreshold,
+            progressIntervalNanos = progressIntervalNanos,
+            progressClockNanos = progressClockNanos,
+        )
             .also { manager = it }
     }
 
@@ -122,6 +147,28 @@ class DownloadManagerTest {
         assertEquals(audio.size.toLong(), entry.bytesDownloaded)
         assertTrue(entry.isOffline)
         assertTrue(storage.resolve("1.mp3").isFile)
+    }
+
+    @Test
+    fun `large downloads throttle index progress writes and still persist the exact final size`() = runBlocking {
+        val audio = mp3Bytes(8 * 1024 * 1024 + 123)
+        val counting = CountingDownloadIndexStore(index)
+        server.enqueue(audioResponse(audio))
+
+        manager(
+            indexStore = counting,
+            progressIntervalNanos = Long.MAX_VALUE,
+            progressClockNanos = { 0L },
+        ).download(chapter(1, audio.size.toLong()), "A Serial")
+        awaitState(1, DownloadState.Downloaded)
+
+        val progressWrites = counting.puts.filter {
+            it.state == DownloadState.Downloading && it.bytesDownloaded > 0
+        }
+        assertTrue(progressWrites.size <= 9, "one write per network chunk returned: ${progressWrites.size}")
+        assertTrue(progressWrites.isNotEmpty(), "the progress bar received no intermediate update")
+        assertEquals(audio.size.toLong(), counting.puts.last().bytesDownloaded)
+        assertEquals(DownloadState.Downloaded, counting.puts.last().state)
     }
 
     @Test

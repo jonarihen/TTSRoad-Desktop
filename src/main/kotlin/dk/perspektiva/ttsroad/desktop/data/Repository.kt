@@ -195,6 +195,7 @@ class RetrofitTtsRoadRepository(
                     isAdmin = response.user.isAdmin,
                     serverName = response.server?.name ?: "TTSRoad",
                     serverVersion = response.server?.version,
+                    advertisedBaseUrl = response.server?.baseUrl?.trim()?.takeIf { it.isNotEmpty() },
                     deviceId = response.deviceId,
                     expiresAt = response.expiresAt,
                 ),

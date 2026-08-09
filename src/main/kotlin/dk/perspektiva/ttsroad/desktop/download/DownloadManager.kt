@@ -36,8 +36,16 @@ class DownloadManager(
     private val clock: () -> Long = System::currentTimeMillis,
     /** Overridable so tests do not wait real seconds for the backoff ladder. */
     private val retryDelaysMs: List<Long> = listOf(2_000, 10_000, 30_000),
+    private val progressBytesThreshold: Long = DefaultProgressBytesThreshold,
+    private val progressIntervalNanos: Long = DefaultProgressIntervalNanos,
+    private val progressClockNanos: () -> Long = System::nanoTime,
     maxConcurrent: Int = DefaultConcurrency,
 ) : AutoCloseable {
+
+    init {
+        require(progressBytesThreshold > 0) { "progressBytesThreshold must be positive" }
+        require(progressIntervalNanos > 0) { "progressIntervalNanos must be positive" }
+    }
 
     val entries = index.entries
 
@@ -203,18 +211,28 @@ class DownloadManager(
                 updatedAtMs = clock(),
             )
             index.put(entry)
+            var lastPublishedBytes = entry.bytesDownloaded
+            var lastPublishedAtNanos = progressClockNanos()
 
             val result = downloader.download(
                 audioUrl = url,
                 fileName = entry.fileName,
                 expectedBytes = entry.totalBytes,
             ) { soFar, total ->
-                // Throttled by the caller's tolerance rather than by a timer: the index write is
-                // cheap in memory, and the file write below it coalesces because equal states are
-                // dropped. Reporting every chunk is what makes a large chapter's bar move smoothly.
+                // FileDownloadIndexStore atomically rewrites the complete index. Publishing every
+                // 64 KiB read would therefore turn a 100 MiB chapter into roughly 1,600 metadata
+                // rewrites. A byte threshold keeps fast transfers bounded; a time threshold keeps
+                // slow-transfer UI responsive. Success below always persists the exact final size.
+                val nowNanos = progressClockNanos()
+                val movedBackwards = soFar < lastPublishedBytes
+                val byteThresholdReached = soFar - lastPublishedBytes >= progressBytesThreshold
+                val timeThresholdReached = nowNanos - lastPublishedAtNanos >= progressIntervalNanos
+                if (!movedBackwards && !byteThresholdReached && !timeThresholdReached) return@download
                 val latest = DownloadIndex.find(index.entries.value, id) ?: return@download
                 if (latest.state == DownloadState.Downloading) {
                     index.put(latest.copy(bytesDownloaded = soFar, totalBytes = if (total > 0) total else latest.totalBytes))
+                    lastPublishedBytes = soFar
+                    lastPublishedAtNanos = nowNanos
                 }
             }
 
@@ -268,5 +286,11 @@ class DownloadManager(
          * matters most is the one feeding the audio the user is listening to right now.
          */
         const val DefaultConcurrency: Int = 2
+
+        /** At most one progress write per MiB on a fast transfer. */
+        const val DefaultProgressBytesThreshold: Long = 1L * 1024 * 1024
+
+        /** At most two progress writes per second on a slow transfer. */
+        const val DefaultProgressIntervalNanos: Long = 500_000_000L
     }
 }

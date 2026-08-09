@@ -26,6 +26,8 @@ data class SessionState(
     val serverName: String = "TTSRoad",
     /** From the login response's `server.version`; null against a server too old to send it. */
     val serverVersion: String? = null,
+    /** Stable storage identity advertised as `server.base_url`; never used as a request address. */
+    val advertisedBaseUrl: String? = null,
     /** `MobileApiToken.id` for this device — the id the device-management API uses. */
     val deviceId: Int? = null,
     /** Server-side token expiry, ISO-8601. Informational: expiry is discovered via 401, not polled. */
@@ -51,6 +53,9 @@ interface SessionStore {
     val session: StateFlow<SessionState>
     fun current(): SessionState
     fun save(state: SessionState)
+
+    /** Persists the server's non-secret storage identity without rewriting its credential. */
+    fun rememberAdvertisedBaseUrl(baseUrl: String)
 
     /**
      * Signs the user out locally and destroys the credential.
@@ -84,6 +89,13 @@ class InMemorySessionStore(initial: SessionState = SessionState()) : SessionStor
         _session.value = state
     }
 
+    override fun rememberAdvertisedBaseUrl(baseUrl: String) {
+        val stableValue = baseUrl.trim().takeIf { it.isNotEmpty() } ?: return
+        if (_session.value.advertisedBaseUrl != stableValue) {
+            _session.value = _session.value.copy(advertisedBaseUrl = stableValue)
+        }
+    }
+
     override fun clearToken() {
         clearTokenCalls++
         _session.value = _session.value.copy(
@@ -106,6 +118,7 @@ private data class PersistedSettings(
     val serverUrl: String = "",
     val serverName: String = "TTSRoad",
     val serverVersion: String? = null,
+    val advertisedBaseUrl: String? = null,
     val username: String? = null,
     val credentialKey: String? = null,
 )
@@ -164,20 +177,32 @@ class FileSessionStore(
         }
         persistedKey = storedKey
         _session.value = state
-        write(
-            PersistedSettings(
-                serverUrl = state.serverUrl,
-                serverName = state.serverName,
-                serverVersion = state.serverVersion,
-                username = state.username,
-                credentialKey = storedKey,
-            ),
-        )
+        write(state.toPersistedSettings(storedKey))
+    }
+
+    override fun rememberAdvertisedBaseUrl(baseUrl: String) {
+        val stableValue = baseUrl.trim().takeIf { it.isNotEmpty() } ?: return
+        val current = _session.value
+        if (current.advertisedBaseUrl == stableValue) return
+        val next = current.copy(advertisedBaseUrl = stableValue)
+        _session.value = next
+        // This is a settings-only update. Calling save(next) would needlessly rewrite the OS
+        // keyring and could turn a transient keyring failure into a session that cannot restart.
+        write(next.toPersistedSettings(persistedKey))
     }
 
     override fun clearToken() {
         save(current().copy(token = null, isAdmin = false, deviceId = null, expiresAt = null))
     }
+
+    private fun SessionState.toPersistedSettings(key: String?): PersistedSettings = PersistedSettings(
+        serverUrl = serverUrl,
+        serverName = serverName,
+        serverVersion = serverVersion,
+        advertisedBaseUrl = advertisedBaseUrl,
+        username = username,
+        credentialKey = key,
+    )
 
     private fun write(settings: PersistedSettings) {
         runCatching { SecureFiles.writeAtomically(file, settingsAdapter.toJson(settings)) }
@@ -195,6 +220,7 @@ class FileSessionStore(
             serverUrl = raw["serverUrl"] as? String ?: "",
             serverName = raw["serverName"] as? String ?: "TTSRoad",
             serverVersion = raw["serverVersion"] as? String,
+            advertisedBaseUrl = raw["advertisedBaseUrl"] as? String,
             username = raw["username"] as? String,
             credentialKey = raw["credentialKey"] as? String,
         )
@@ -202,6 +228,7 @@ class FileSessionStore(
             serverUrl = settings.serverUrl,
             serverName = settings.serverName,
             serverVersion = settings.serverVersion,
+            advertisedBaseUrl = settings.advertisedBaseUrl,
             username = settings.username,
         )
 

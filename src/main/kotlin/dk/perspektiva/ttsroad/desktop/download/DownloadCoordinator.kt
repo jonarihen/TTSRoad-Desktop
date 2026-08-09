@@ -176,9 +176,9 @@ class DownloadCoordinator(
         if (!session.isLoggedIn || session.serverUrl.isBlank()) return null
         return StorageIdentity.of(
             connectUrl = session.serverUrl,
-            // The advertised identity would be better still and is what StorageIdentity prefers;
-            // it is threaded in from capability discovery by the caller that has it.
-            advertisedBaseUrl = advertisedBaseUrl,
+            // Runtime discovery wins, while the persisted login/discovery value preserves the
+            // exact same namespace when startup capability discovery cannot reach the server.
+            advertisedBaseUrl = advertisedBaseUrl ?: session.advertisedBaseUrl,
             username = session.username,
         )
     }
@@ -193,8 +193,16 @@ class DownloadCoordinator(
     @Volatile
     var advertisedBaseUrl: String? = null
         set(value) {
-            val changed = field != value
-            field = value
+            val stableValue = value?.trim()?.takeIf { it.isNotEmpty() }
+            val session = sessionStore.current()
+            // Capability discovery may be the first endpoint to report base_url. Keep that
+            // non-secret identity hint beside the session so an offline restart can find the
+            // downloads created under it. A failed discovery reports null and must not erase it.
+            if (stableValue != null && session.isLoggedIn && session.advertisedBaseUrl != stableValue) {
+                sessionStore.rememberAdvertisedBaseUrl(stableValue)
+            }
+            val changed = field != stableValue
+            field = stableValue
             // A late-arriving base_url renames the namespace, so the stack has to be rebuilt
             // against it rather than left on the address-derived fallback.
             if (changed) runCatching { refresh() }

@@ -1,8 +1,11 @@
 package dk.perspektiva.ttsroad.desktop.download
 
 import dk.perspektiva.ttsroad.desktop.FakeRepository
+import dk.perspektiva.ttsroad.desktop.data.FileSessionStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.SessionState
+import dk.perspektiva.ttsroad.desktop.data.SessionStore
+import dk.perspektiva.ttsroad.desktop.security.InMemoryCredentialStore
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -24,7 +27,7 @@ class DownloadCoordinatorTest {
     @TempDir
     lateinit var tempDir: File
 
-    private fun coordinator(sessionStore: InMemorySessionStore) = DownloadCoordinator(
+    private fun coordinator(sessionStore: SessionStore) = DownloadCoordinator(
         sessionStore = sessionStore,
         client = OkHttpClient(),
         repository = FakeRepository(),
@@ -122,6 +125,31 @@ class DownloadCoordinatorTest {
         assertEquals(viaLan.path, viaPublic.path)
         coordinator.close()
         other.close()
+    }
+
+    @Test
+    fun `advertised identity survives an offline restart and reopens the same namespace`() {
+        val settingsFile = File(tempDir, "config/session.json")
+        val credentials = InMemoryCredentialStore()
+        val onlineStore = FileSessionStore(settingsFile, credentials)
+        onlineStore.save(signedIn(server = "http://192.168.1.10:8000/"))
+        val online = coordinator(onlineStore)
+
+        // Discovery succeeds during this run and is then unavailable on the next one.
+        online.advertisedBaseUrl = "https://ttsroad.example/"
+        val original = online.refresh()!!.storage
+        original.resolve("1.mp3").writeBytes(ByteArray(32))
+        online.close()
+
+        val offlineStore = FileSessionStore(settingsFile, credentials)
+        val offline = coordinator(offlineStore)
+        // No advertisedBaseUrl setter call: this is startup while capability discovery is offline.
+        val reopened = offline.refresh()!!.storage
+
+        assertEquals(original.root.path, reopened.root.path)
+        assertTrue(reopened.resolve("1.mp3").isFile)
+        assertEquals("https://ttsroad.example/", offlineStore.current().advertisedBaseUrl)
+        offline.close()
     }
 
     @Test
