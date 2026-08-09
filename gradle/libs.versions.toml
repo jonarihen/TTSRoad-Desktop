@@ -35,11 +35,20 @@ mp3spi = "1.9.5.4"
 jlayer = "1.0.1.4"
 tritonus = "0.3.7.4"
 
-# --- Phase 5 playback-engine prototype (not in the shipped app yet) -------------------------
-# GStreamer bindings evaluated in docs/adr/0002-playback-engine.md. gst1-java-core's POM asks
-# for JNA as the open range [5.2.0,6.0); we pin it so the build stays reproducible.
+# --- Playback engine ------------------------------------------------------------------------
+# GStreamer bindings, chosen in docs/adr/0002-playback-engine.md. gst1-java-core's POM asks for
+# JNA as the open range [5.2.0,6.0); we pin it so the build stays reproducible.
 gst1JavaCore = "1.4.0"
 jna = "5.19.1"
+
+# --- MPRIS / D-Bus (Linux desktop integration) ----------------------------------------------
+# dbus-java 5.x talks the D-Bus wire protocol in pure Java and reaches the session bus through
+# the JDK's own AF_UNIX socket support, so there is no JNI and no libdbus to package. See
+# docs/adr/0006-listening-preferences-and-desktop-integration.md.
+dbusJava = "5.2.0"
+# dbus-java logs through SLF4J. Version-locked to what dbus-java resolves, because an api/provider
+# mismatch is exactly the case SLF4J reports by printing to stderr — which is what we are avoiding.
+slf4j = "2.0.17"
 
 # --- Test ----------------------------------------------------------------------------------
 junit = "6.1.2"
@@ -72,10 +81,20 @@ soundlibs-mp3spi = { module = "com.googlecode.soundlibs:mp3spi", version.ref = "
 soundlibs-jlayer = { module = "com.googlecode.soundlibs:jlayer", version.ref = "jlayer" }
 soundlibs-tritonusShare = { module = "com.googlecode.soundlibs:tritonus-share", version.ref = "tritonus" }
 
-# GStreamer bindings — used ONLY by the `prototype` source set, never by `main`.
+# GStreamer bindings.
 # jna-platform is deliberately absent: gst1-java-core's only compile dependency is `jna`.
 gst1-java-core = { module = "org.freedesktop.gstreamer:gst1-java-core", version.ref = "gst1JavaCore" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+
+# D-Bus, for the MPRIS media-player interface Cinnamon's applet and the media keys speak.
+# The unix-socket transport is the JDK-native one (SocketChannel over AF_UNIX, JDK 16+), which is
+# why this costs no native library of its own.
+dbus-java-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbusJava" }
+dbus-java-transport-native-unixsocket = { module = "com.github.hypfvieh:dbus-java-transport-native-unixsocket", version.ref = "dbusJava" }
+# The no-op SLF4J provider. Without *a* provider, SLF4J 2 prints "No SLF4J providers were found"
+# to stderr on first use; a desktop app should not narrate its own dependency wiring to the user,
+# and D-Bus problems are reported through AppLog where they can actually say something useful.
+slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 
 # Cover images.
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }

@@ -77,9 +77,11 @@ explicitly *not* — an outage is not a revocation. `data/SessionEnd.kt` holds t
 
 Two invariants worth preserving:
 
-- **Capabilities gate the UI.** Each engine reports `EngineCapabilities`; the speed control is drawn
-  only when the backend can honour it. The predecessor API accepted a speed number that no backend
-  acted on — don't reintroduce a control the engine ignores.
+- **Capabilities gate the UI.** Each engine reports `EngineCapabilities`; the speed and skip-silence
+  controls are drawn only when the backend can honour them (`variableSpeed`, `skipSilence`). The
+  predecessor API accepted a speed number that no backend acted on — don't reintroduce a control the
+  engine ignores. Gain is the deliberate exception: *every* backend must honour attenuation, because
+  the sleep timer's fade is an attenuation.
 - **Failures are typed.** `PlaybackFailure` is `SessionExpired` / `Transient` / `Fatal`, and the
   three are handled differently: end the session, retry on a timer, don't retry. Engine events go
   through a synchronous listener rather than a hot flow, so a failure raised inside `prepare` cannot
@@ -88,6 +90,46 @@ Two invariants worth preserving:
 Chapter MP3s are bearer-protected and pushed *into* GStreamer (`appsrc`) rather than fetched by it,
 via `HttpMediaSource` on the shared client — that is how the auth interceptor and its origin rule
 apply to audio.
+
+### Listening preferences, the sleep timer and history
+
+- `data/PlaybackPreferences.kt` — speed, skip interval, skip silence, volume boost, in
+  `playback.json`. **Machine-local, not session data**: signing out must not reset them and a second
+  account must not inherit them, so the store has no reference to a session at all. The on-disk type
+  is separate and fully nullable, so a file from another build loads degraded rather than throwing;
+  out-of-range values are *snapped*, not defaulted. The offered speed list always includes the
+  stored value even when it isn't a preset.
+- **The controller applies preferences, not the player screen.** `QueuePlaybackController` collects
+  the store and pushes rate/gain/skip-silence to the engine, so an auto-advanced chapter and a
+  media-key start use the same values as one the user pressed play on. `setSpeed` writes the
+  *preference*; the collector is the only thing that touches the engine.
+- `player/SleepTimer.kt` — a state machine over an injected clock, ticked by the controller's
+  existing 250 ms loop. No coroutine, no `delay`: determinism under a fake clock is an acceptance
+  criterion. Fade gain is published as a multiplier and combined with the volume boost in one place,
+  so cancelling a fade restores the boost rather than unity. End-of-chapter is checked *before* the
+  auto-advance and disarms itself.
+- `data/PlaybackHistory.kt` — bounded to 60 entries, one per chapter. The snapshot type has **no URL
+  field of any kind**; covers are re-resolved from the library cache by fiction id. Dismissal is
+  per snapshot and is *inherited* when the same chapter is re-recorded, or the next progress save
+  would undo it. History is written at transitions only, never on the progress tick.
+
+### MPRIS
+
+`player/MprisState.kt` is pure Kotlin with no D-Bus type in it — that's where the audiobook mapping
+lives (chapter as title, serial as album *and* artist) and it's what the tests target.
+`player/MprisService.kt` is the plumbing. `createOrNull` catches `Throwable` (a missing transport
+provider is a `ServiceConfigurationError`) and returning null is a normal outcome: no session bus
+means no MPRIS and a fully working player. `Position` is never announced via `PropertiesChanged` —
+the spec excludes it; discontinuities go out as `Seeked`. `AppContainer.startMpris` is called from
+`Main` rather than the constructor because Raise/Quit need the window.
+
+### Keyboard shortcuts
+
+`nav/Shortcuts.kt` is a pure matcher plus an `AppShortcut.firesWhileTyping` classification. `App`
+installs it on **two** handlers, and that split is what makes typing safety structural: shortcuts no
+text field claims go on `onPreviewKeyEvent` (so F5 works inside the search box), and the editing keys
+— Space, arrows, Ctrl+arrow — go on `onKeyEvent`, which a focused text field has already consumed
+them from. Don't replace this with focus tracking. No global hotkeys are registered.
 
 ### Navigation and state
 
@@ -137,9 +179,13 @@ last known answer rather than downgrading; `api_version` is never a proxy for a 
 - **`src/prototype/`** is a separate source set that `main` never sees, so an unaccepted evaluation
   can't reach the shipped app or its jlink image. `check` compiles it; running it needs a real
   GStreamer install: `./gradlew runPlaybackPrototype`.
-- **jlink module list** in `build.gradle.kts` (`java.desktop`, `java.naming`, `jdk.crypto.ec`, …) is
-  load-bearing — module inference misses these, and dropping one breaks the packaged app at runtime
-  rather than at build time. The `--smoke-test` launch is what catches it.
+- **jlink module list** in `build.gradle.kts` (`java.desktop`, `java.naming`, `jdk.crypto.ec`,
+  `jdk.security.auth`, …) is load-bearing — module inference misses these, and dropping one breaks
+  the packaged app at runtime rather than at build time. The `--smoke-test` launch is what catches
+  it, and it only catches what it *asserts*: each such module needs a check there, because the
+  failures are silent by nature. `jdk.security.auth` is the MPRIS one — without it dbus-java cannot
+  read the uid, and the packaged app reports "no MPRIS integration" exactly as a machine with no
+  session bus would.
 - **`--enable-native-access=ALL-UNNAMED`** is applied to run, test and the packaged app; Skiko,
   the Windows credential store and JNA all use restricted methods on JDK 25.
 
@@ -160,9 +206,9 @@ can't quietly skip its way to green.
 
 `docs/adr/` records the reasoning and rejected alternatives behind the build baseline (0001),
 credential storage and capability discovery (0002), the playback engine (0002-playback-engine),
-device sessions and Settings (0003), navigation (0004), and chapter browsing (0005). Read the
-relevant one before changing any of the invariants above — they exist because the alternative was
-tried or measured.
+device sessions and Settings (0003), navigation (0004), chapter browsing (0005), and listening
+preferences / sleep timer / MPRIS / shortcuts (0006). Read the relevant one before changing any of
+the invariants above — they exist because the alternative was tried or measured.
 
 ## CI
 

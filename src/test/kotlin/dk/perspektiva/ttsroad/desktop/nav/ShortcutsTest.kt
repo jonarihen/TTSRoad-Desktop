@@ -4,6 +4,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 
 class ShortcutsTest {
@@ -17,10 +18,13 @@ class ShortcutsTest {
     }
 
     @Test
-    fun `left on its own is not Back`() {
-        // Otherwise the arrow key would navigate out of a screen while a slider or a text field is
-        // being driven from the keyboard.
-        assertNull(shortcutFor(Key.DirectionLeft, KeyEventType.KeyDown))
+    fun `left on its own seeks rather than navigating back`() {
+        // Back has to keep its modifier: an arrow key that leaves the screen would fire every time
+        // someone nudged the scrubber from the keyboard.
+        assertEquals(
+            AppShortcut.SeekBackward,
+            shortcutFor(Key.DirectionLeft, KeyEventType.KeyDown),
+        )
     }
 
     @Test
@@ -54,6 +58,107 @@ class ShortcutsTest {
         assertNull(shortcutFor(Key.F5, KeyEventType.KeyUp))
         assertNull(shortcutFor(Key.Escape, KeyEventType.KeyUp))
         assertNull(shortcutFor(Key.DirectionLeft, KeyEventType.KeyUp, alt = true))
+    }
+
+    // --- Transport and navigation shortcuts -----------------------------------------------------
+
+    @Test
+    fun `space is play-pause`() {
+        assertEquals(AppShortcut.PlayPause, shortcutFor(Key.Spacebar, KeyEventType.KeyDown))
+    }
+
+    @Test
+    fun `bare arrows seek and ctrl-arrows change chapter`() {
+        assertEquals(AppShortcut.SeekForward, shortcutFor(Key.DirectionRight, KeyEventType.KeyDown))
+        assertEquals(
+            AppShortcut.PreviousChapter,
+            shortcutFor(Key.DirectionLeft, KeyEventType.KeyDown, ctrl = true),
+        )
+        assertEquals(
+            AppShortcut.NextChapter,
+            shortcutFor(Key.DirectionRight, KeyEventType.KeyDown, ctrl = true),
+        )
+    }
+
+    @Test
+    fun `alt-left stays Back even though ctrl-left is a chapter`() {
+        // The two are one keystroke apart, so the ordering inside the matcher is load-bearing.
+        assertEquals(AppShortcut.Back, shortcutFor(Key.DirectionLeft, KeyEventType.KeyDown, alt = true))
+    }
+
+    @Test
+    fun `ctrl-L opens the library and ctrl-comma opens settings`() {
+        assertEquals(AppShortcut.OpenLibrary, shortcutFor(Key.L, KeyEventType.KeyDown, ctrl = true))
+        assertEquals(AppShortcut.OpenSettings, shortcutFor(Key.Comma, KeyEventType.KeyDown, ctrl = true))
+    }
+
+    @Test
+    fun `F1 and ctrl-slash both open the shortcut list`() {
+        assertEquals(AppShortcut.ShowShortcuts, shortcutFor(Key.F1, KeyEventType.KeyDown))
+        assertEquals(AppShortcut.ShowShortcuts, shortcutFor(Key.Slash, KeyEventType.KeyDown, ctrl = true))
+    }
+
+    @Test
+    fun `the keyboard transport row maps to the same actions`() {
+        assertEquals(AppShortcut.PlayPause, shortcutFor(Key.MediaPlayPause, KeyEventType.KeyDown))
+        assertEquals(AppShortcut.NextChapter, shortcutFor(Key.MediaNext, KeyEventType.KeyDown))
+        assertEquals(AppShortcut.PreviousChapter, shortcutFor(Key.MediaPrevious, KeyEventType.KeyDown))
+    }
+
+    // --- Typing safety --------------------------------------------------------------------------
+
+    @Test
+    fun `editing keys do not fire while a text field has focus`() {
+        // The requirement in one place: a space in the search box types a space.
+        assertNull(shortcutFor(Key.Spacebar, KeyEventType.KeyDown, textInputFocused = true))
+        assertNull(shortcutFor(Key.DirectionLeft, KeyEventType.KeyDown, textInputFocused = true))
+        assertNull(shortcutFor(Key.DirectionRight, KeyEventType.KeyDown, textInputFocused = true))
+        // Ctrl+arrow is word navigation in a text field, so it is suppressed too.
+        assertNull(
+            shortcutFor(Key.DirectionLeft, KeyEventType.KeyDown, ctrl = true, textInputFocused = true),
+        )
+    }
+
+    @Test
+    fun `window shortcuts still work while typing`() {
+        assertEquals(
+            AppShortcut.Refresh,
+            shortcutFor(Key.F5, KeyEventType.KeyDown, textInputFocused = true),
+        )
+        assertEquals(
+            AppShortcut.Dismiss,
+            shortcutFor(Key.Escape, KeyEventType.KeyDown, textInputFocused = true),
+        )
+        assertEquals(
+            AppShortcut.OpenLibrary,
+            shortcutFor(Key.L, KeyEventType.KeyDown, ctrl = true, textInputFocused = true),
+        )
+    }
+
+    @Test
+    fun `every shortcut declares whether it is safe mid-word`() {
+        // Guards the two-handler split in `App`: a new shortcut has to answer this question, and
+        // the answer has to match whether the key is one a text field claims.
+        val editingKeys = setOf(
+            AppShortcut.PlayPause,
+            AppShortcut.SeekBackward,
+            AppShortcut.SeekForward,
+            AppShortcut.PreviousChapter,
+            AppShortcut.NextChapter,
+        )
+        AppShortcut.entries.forEach { shortcut ->
+            assertEquals(
+                shortcut !in editingKeys,
+                shortcut.firesWhileTyping,
+                "$shortcut is classified on the wrong side of the typing guard",
+            )
+        }
+    }
+
+    @Test
+    fun `the help table is not empty and every row is filled in`() {
+        assertTrue(ShortcutHelpTable.isNotEmpty())
+        assertTrue(ShortcutHelpTable.all { it.keys.isNotBlank() && it.action.isNotBlank() })
     }
 
     // --- Escape precedence --------------------------------------------------------------------

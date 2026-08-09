@@ -1,0 +1,212 @@
+package dk.perspektiva.ttsroad.desktop.data
+
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.squareup.moshi.Types
+import dk.perspektiva.ttsroad.desktop.security.SecureFiles
+import java.io.File
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * One "you were here" record.
+ *
+ * There is deliberately no URL field of any kind — not the server, not the audio object, not the
+ * cover. This file sits unencrypted in the user's config directory and outlives the session that
+ * wrote it, so the rule is that it holds *identifiers and titles the user typed or the server
+ * named*, and nothing that could reconstruct where the content lives or who was signed in. Covers
+ * are re-resolved from the live library cache by [fictionId] at display time.
+ *
+ * [dismissed] is a property of this snapshot, not of a day. Hiding "continue chapter 12" must not
+ * also hide chapter 13 tomorrow, and must not un-hide chapter 12 tomorrow either.
+ */
+data class PlaybackSnapshot(
+    val fictionId: Int,
+    val chapterId: Int,
+    val fictionTitle: String,
+    val chapterTitle: String,
+    val positionSeconds: Double,
+    val durationSeconds: Double,
+    val recordedAtMs: Long,
+    val dismissed: Boolean = false,
+) {
+    /**
+     * Identity for thinning and for dismissal.
+     *
+     * A chapter, not a playback session: listening to chapter 12 twice is one thing to offer to
+     * resume, and a dismissal of it should survive the position moving.
+     */
+    val key: String get() = "$fictionId:$chapterId"
+
+    /** How far in, 0..1. Zero when the duration is unknown, so a bar cannot render nonsense. */
+    val progress: Float
+        get() = if (durationSeconds <= 0.0) 0f
+        else (positionSeconds / durationSeconds).coerceIn(0.0, 1.0).toFloat()
+}
+
+/**
+ * Local listening history: what to offer as "last heard", and what the jump-back list shows.
+ *
+ * Bounded by construction — [PlaybackHistory.MaxEntries] entries, one per chapter, newest first —
+ * because this is written on every pause and every chapter change for the life of the install. An
+ * unbounded list would be a slow leak that only shows up on the machines of the people who use the
+ * app most.
+ */
+object PlaybackHistory {
+    /**
+     * How many chapters are remembered.
+     *
+     * Enough to cover several serials in flight; small enough that the file stays a few kilobytes
+     * and the whole thing can be read synchronously at startup.
+     */
+    const val MaxEntries: Int = 60
+
+    /** How many distinct fictions the jump-back surface offers at once. */
+    const val JumpBackChoices: Int = 4
+
+    /**
+     * A chapter this far in is not worth offering to resume.
+     *
+     * At 96% the playback controller has already marked it played, so "continue" would mean
+     * "replay the last few seconds and then auto-advance", which is not what the listener wants
+     * from a card that says *continue*.
+     */
+    const val ResumableCeiling: Float = 0.96f
+
+    /**
+     * Adds or updates [snapshot], then thins.
+     *
+     * Rules, in order:
+     * 1. An existing entry for the same chapter is replaced, not appended — listening for an hour
+     *    leaves one record of that chapter, at the furthest point reached.
+     * 2. The replacement **inherits the old entry's dismissal**. Otherwise the next progress save
+     *    would silently undo a dismissal the user had just made.
+     * 3. Newest first, capped at [MaxEntries].
+     */
+    fun record(existing: List<PlaybackSnapshot>, snapshot: PlaybackSnapshot): List<PlaybackSnapshot> {
+        val previous = existing.firstOrNull { it.key == snapshot.key }
+        val merged = snapshot.copy(dismissed = previous?.dismissed ?: snapshot.dismissed)
+        return (listOf(merged) + existing.filterNot { it.key == merged.key })
+            .sortedByDescending { it.recordedAtMs }
+            .take(MaxEntries)
+    }
+
+    /** Marks one chapter's snapshot dismissed. A later snapshot of a *different* chapter is unaffected. */
+    fun dismiss(existing: List<PlaybackSnapshot>, key: String): List<PlaybackSnapshot> =
+        existing.map { if (it.key == key) it.copy(dismissed = true) else it }
+
+    /**
+     * The single thing to offer as "last heard", or null.
+     *
+     * Skips dismissed entries and ones that are effectively finished, so the card is always an
+     * offer the listener can act on rather than one they have to dismiss again.
+     */
+    fun lastHeard(existing: List<PlaybackSnapshot>): PlaybackSnapshot? =
+        existing.filter { it.isResumable }.maxByOrNull { it.recordedAtMs }
+
+    /**
+     * Up to [limit] things to jump back to, newest first, at most one per fiction.
+     *
+     * One per fiction because the alternative — the raw list — fills with consecutive chapters of
+     * whatever serial was last playing, which is the one thing the listener does not need help
+     * finding.
+     */
+    fun jumpBackChoices(
+        existing: List<PlaybackSnapshot>,
+        limit: Int = JumpBackChoices,
+    ): List<PlaybackSnapshot> =
+        existing.filter { it.isResumable }
+            .sortedByDescending { it.recordedAtMs }
+            .distinctBy { it.fictionId }
+            .take(limit)
+
+    private val PlaybackSnapshot.isResumable: Boolean
+        get() = !dismissed && progress < ResumableCeiling
+}
+
+/** Seam so tests never touch the real user config directory. */
+interface PlaybackHistoryStore {
+    val history: StateFlow<List<PlaybackSnapshot>>
+
+    fun record(snapshot: PlaybackSnapshot)
+
+    fun dismiss(key: String)
+
+    fun clear()
+}
+
+/** In-memory store for tests and for a session with nowhere safe to write. */
+class InMemoryPlaybackHistoryStore(
+    initial: List<PlaybackSnapshot> = emptyList(),
+) : PlaybackHistoryStore {
+    private val _history = MutableStateFlow(initial)
+    override val history: StateFlow<List<PlaybackSnapshot>> = _history.asStateFlow()
+
+    override fun record(snapshot: PlaybackSnapshot) {
+        _history.value = PlaybackHistory.record(_history.value, snapshot)
+    }
+
+    override fun dismiss(key: String) {
+        _history.value = PlaybackHistory.dismiss(_history.value, key)
+    }
+
+    override fun clear() {
+        _history.value = emptyList()
+    }
+}
+
+/**
+ * `history.json` beside the other settings, written owner-only through [SecureFiles].
+ *
+ * Owner-only despite holding no secret: fiction and chapter titles are a reading history, which is
+ * the sort of thing that should not be world-readable on a shared machine just because it is not a
+ * password.
+ */
+class FilePlaybackHistoryStore(
+    private val file: File = defaultFile(),
+) : PlaybackHistoryStore {
+    private val adapter = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+        .adapter<List<PlaybackSnapshot>>(
+            Types.newParameterizedType(List::class.java, PlaybackSnapshot::class.java),
+        )
+
+    private val _history = MutableStateFlow(read())
+    override val history: StateFlow<List<PlaybackSnapshot>> = _history.asStateFlow()
+
+    override fun record(snapshot: PlaybackSnapshot) {
+        write(PlaybackHistory.record(_history.value, snapshot))
+    }
+
+    override fun dismiss(key: String) {
+        write(PlaybackHistory.dismiss(_history.value, key))
+    }
+
+    override fun clear() {
+        write(emptyList())
+    }
+
+    private fun write(next: List<PlaybackSnapshot>) {
+        if (next == _history.value) return
+        _history.value = next
+        runCatching { SecureFiles.writeAtomically(file, adapter.toJson(next)) }
+            .onFailure { AppLog.warn("could not write the playback history file", it) }
+    }
+
+    private fun read(): List<PlaybackSnapshot> =
+        runCatching { if (file.isFile) adapter.fromJson(file.readText()) else null }
+            .onFailure { AppLog.warn("could not read the playback history file", it) }
+            .getOrNull()
+            // Trim on the way in as well: a file from a build with a larger cap must not make this
+            // build's list unbounded just because it was written before the cap came down.
+            ?.sortedByDescending { it.recordedAtMs }
+            ?.distinctBy { it.key }
+            ?.take(PlaybackHistory.MaxEntries)
+            ?: emptyList()
+
+    companion object {
+        fun defaultFile(): File = FileSessionStore.configDir().resolve("history.json")
+    }
+}

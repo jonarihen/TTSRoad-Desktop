@@ -205,8 +205,12 @@ class QueuePlaybackControllerTest {
 
         controller.setSpeed(3.0f)
 
-        assertEquals(2.0f, controller.state.value.speed)
-        assertEquals(listOf(3.0f), engine.requestedRates.toList())
+        // Asynchronous since Phase 6: `setSpeed` writes the preference, and the collector in the
+        // controller is what pushes it to the engine and back into the state. The assertion is
+        // unchanged — the UI shows the rate the engine accepted, never the wish.
+        controller.await("the clamped rate to be published") { it.speed == 2.0f }
+        // 3.0 was asked for and 2.0 came back; the request itself is not pre-clamped by the caller.
+        assertTrue(engine.requestedRates.contains(3.0f), "the engine was never asked for 3.0x")
         controller.release()
     }
 

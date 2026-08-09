@@ -41,6 +41,15 @@ data class PlayerUiState(
      * from showing a control that did nothing was not drawing one at all.
      */
     val canChangeSpeed: Boolean = false,
+    /**
+     * Whether this backend can drop silent passages.
+     *
+     * Same rule as [canChangeSpeed]: the control is drawn only where the engine can honour it.
+     */
+    val canSkipSilence: Boolean = false,
+    /** The skip preference, resolved to milliseconds, so the transport buttons can label themselves. */
+    val skipIntervalMs: Long = 30_000L,
+    val sleepTimer: SleepTimerState = SleepTimerState(),
     val error: String? = null,
     /** Set when playback stopped for a reason another attempt could plausibly fix. */
     val canRetry: Boolean = false,
@@ -87,6 +96,17 @@ interface PlaybackController {
 
     fun skipBy(deltaMs: Long)
 
+    /**
+     * Skips by the listener's configured interval.
+     *
+     * The interval lives here rather than in the button that calls it, so the player, the
+     * now-playing bar, the keyboard shortcut and a media key all move by the same amount without
+     * each having to read the preference for itself.
+     */
+    fun skipForward() = skipBy(DefaultSkipMs)
+
+    fun skipBackward() = skipBy(-DefaultSkipMs)
+
     fun skipToNextChapter()
 
     fun skipToPreviousChapter()
@@ -95,6 +115,17 @@ interface PlaybackController {
 
     /** Requests a playback rate. What the backend actually applied appears in [state]. */
     fun setSpeed(speed: Float)
+
+    /** Arms, re-arms or (with [SleepTimerMode.Off]) cancels the sleep timer. */
+    fun setSleepTimer(mode: SleepTimerMode) = Unit
+
+    /**
+     * The "+5 min" action, which is mainly reached during the fade.
+     *
+     * Separate from [setSleepTimer] because re-arming would restart from the chosen duration; this
+     * adds to whatever is left, which is what a listener who is still awake actually wants.
+     */
+    fun extendSleepTimer() = Unit
 
     /** Retries the current chapter after the automatic attempts have been exhausted. */
     fun retry() = Unit
@@ -106,4 +137,14 @@ interface PlaybackController {
      * window closes; the default no-op keeps test fakes from having to care.
      */
     fun release() = Unit
+
+    companion object {
+        /**
+         * Fallback for the interface's default [skipForward]/[skipBackward].
+         *
+         * Only reached by implementations that do not override them — the test fakes. The real
+         * controller reads the listener's preference.
+         */
+        const val DefaultSkipMs: Long = 30_000L
+    }
 }

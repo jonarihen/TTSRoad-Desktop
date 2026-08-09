@@ -30,6 +30,8 @@ import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
@@ -80,7 +82,11 @@ class NavigationUiTest {
             SessionState(serverUrl = "https://x/", token = "t", username = "admin", serverName = "Perspektiva"),
         ),
         repositoryFactory = { _, _, _ -> repository },
-        playbackFactory = { _, _, _, _ -> playback },
+        playbackFactory = { _, _, _, _, _, _ -> playback },
+        // In-memory, so rendering a screen in a test never touches the real
+        // ~/.config/TTSRoad files the production stores default to.
+        playbackPreferences = InMemoryPlaybackPreferencesStore(),
+        playbackHistory = InMemoryPlaybackHistoryStore(),
         // See `testLibraryCache`: immediate main dispatch is what makes `waitForIdle` sufficient.
         libraryCacheFactory = { repo, _, now -> LibraryCache(repo, Dispatchers.Main.immediate, now) },
     )

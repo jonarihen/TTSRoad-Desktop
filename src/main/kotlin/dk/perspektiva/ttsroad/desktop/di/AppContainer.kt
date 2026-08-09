@@ -1,8 +1,12 @@
 package dk.perspektiva.ttsroad.desktop.di
 
+import dk.perspektiva.ttsroad.desktop.data.FilePlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.FilePlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.FileSessionStore
 import dk.perspektiva.ttsroad.desktop.data.FileWindowPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
+import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadAuthInterceptor
@@ -12,6 +16,7 @@ import dk.perspektiva.ttsroad.desktop.player.GstPlaybackEngine
 import dk.perspektiva.ttsroad.desktop.player.HttpMediaSource
 import dk.perspektiva.ttsroad.desktop.player.JavaSoundPlaybackEngine
 import dk.perspektiva.ttsroad.desktop.player.MediaSourceFactory
+import dk.perspektiva.ttsroad.desktop.player.MprisService
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import dk.perspektiva.ttsroad.desktop.player.PlaybackEngine
 import dk.perspektiva.ttsroad.desktop.player.QueuePlaybackController
@@ -19,7 +24,10 @@ import dk.perspektiva.ttsroad.desktop.security.CredentialStore
 import dk.perspektiva.ttsroad.desktop.security.CredentialStores
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import okhttp3.OkHttpClient
 
 /**
@@ -66,8 +74,24 @@ class AppContainer(
     // A machine with no GStreamer must still get a working app, just without speed control.
     audioEngineFactory: () -> PlaybackEngine =
         { GstPlaybackEngine.createOrNull() ?: JavaSoundPlaybackEngine() },
-    playbackFactory: (TtsRoadRepository, MediaSourceFactory, PlaybackEngine, AppDispatchers) -> PlaybackController =
-        { repo, mediaSources, engine, d -> QueuePlaybackController(repo, mediaSources, engine, d.io) },
+    /**
+     * Listening settings, persisted per machine rather than per account — see
+     * [dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences]. A store rather than a path, so a
+     * test never writes into the user's config directory.
+     */
+    val playbackPreferences: PlaybackPreferencesStore = FilePlaybackPreferencesStore(),
+    val playbackHistory: PlaybackHistoryStore = FilePlaybackHistoryStore(),
+    playbackFactory: (
+        TtsRoadRepository,
+        MediaSourceFactory,
+        PlaybackEngine,
+        AppDispatchers,
+        PlaybackPreferencesStore,
+        PlaybackHistoryStore,
+    ) -> PlaybackController =
+        { repo, mediaSources, engine, d, prefs, history ->
+            QueuePlaybackController(repo, mediaSources, engine, d.io, prefs, history)
+        },
     libraryCacheFactory: (TtsRoadRepository, AppDispatchers, () -> Long) -> LibraryCache =
         { repo, d, now -> LibraryCache(repo, d.main, now) },
     // A store rather than a file path, so a test never writes into the user's config directory.
@@ -77,7 +101,36 @@ class AppContainer(
     val repository: TtsRoadRepository = repositoryFactory(sessionStore, httpClient, dispatchers)
     val mediaSources: MediaSourceFactory = mediaSourceFactory(httpClient, repository)
     val audioEngine: PlaybackEngine = audioEngineFactory()
-    val playback: PlaybackController = playbackFactory(repository, mediaSources, audioEngine, dispatchers)
+    val playback: PlaybackController =
+        playbackFactory(repository, mediaSources, audioEngine, dispatchers, playbackPreferences, playbackHistory)
+
+    /**
+     * The scope MPRIS publishes from. Its own, not the controller's: the bus mirror has to keep
+     * running while a chapter is between jobs, and it is torn down here rather than by whatever
+     * happens to cancel a playback job.
+     */
+    private val mprisScope = CoroutineScope(SupervisorJob() + dispatchers.io)
+
+    @Volatile private var mpris: MprisService? = null
+
+    /**
+     * Puts the player on the session bus, if there is one.
+     *
+     * Called from `main` rather than from the constructor because Raise and Quit need the window,
+     * which does not exist yet when the container is built. A machine with no D-Bus — every
+     * Windows and macOS machine, and a good many Linux ones — silently gets no MPRIS and a fully
+     * working player; see [MprisService.createOrNull].
+     */
+    fun startMpris(onRaise: () -> Unit, onQuit: () -> Unit) {
+        if (mpris != null) return
+        mpris = MprisService.createOrNull(
+            controller = playback,
+            preferences = playbackPreferences,
+            scope = mprisScope,
+            onRaise = onRaise,
+            onQuit = onQuit,
+        )
+    }
 
     /**
      * Library and chapter data, held here rather than inside a screen.
@@ -93,6 +146,11 @@ class AppContainer(
 
     /** Called when the main window closes; without it the playback job and temp file outlive it. */
     override fun close() {
+        // Off the bus before the transport it mirrors goes away, so a panel applet never holds a
+        // name that answers with a half-released player.
+        runCatching { mpris?.close() }
+        mpris = null
+        mprisScope.cancel()
         playback.release()
         libraryCache.close()
         httpClient.dispatcher.executorService.shutdown()
