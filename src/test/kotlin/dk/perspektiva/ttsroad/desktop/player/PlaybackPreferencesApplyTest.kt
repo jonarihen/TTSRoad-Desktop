@@ -298,6 +298,39 @@ class PlaybackPreferencesApplyTest {
     }
 
     @Test
+    fun `starting another chapter unfreezes a timer armed while paused`() = runBlocking {
+        // Only togglePlayPause used to resume a frozen countdown, but audio also starts when a new
+        // chapter begins or a failed one is retried. Without unfreezing there, the timer sat still
+        // while playback ran on indefinitely — the display frozen and the sleep never arriving.
+        val engine = FakePlaybackEngine()
+        val clock = FakeClock()
+        val timer = SleepTimer(clock)
+        val playback = controller(engine, sleepTimer = timer, clock = clock)
+
+        playback.playQueue(listOf(chapter(1), chapter(2)), startChapterId = 1, fiction = null)
+        playback.await("playback to start") { it.hasMedia && it.isPlaying }
+
+        playback.togglePlayPause()
+        playback.await("the pause to land") { !it.isPlaying }
+        playback.setSleepTimer(SleepTimerMode.Duration(30))
+        // Read from the timer rather than the published state: the controller mirrors it through a
+        // collector, which has not necessarily run yet on this line.
+        assertEquals(30 * 60_000L, timer.state.value.remainingMs)
+
+        // Starting a different chapter is a resume as far as the timer is concerned.
+        playback.skipToNextChapter()
+        playback.await("the next chapter to play") { it.isPlaying && it.currentIndex == 1 }
+
+        clock.nowMs += 10 * 60_000L
+        delay(100)
+        assertEquals(
+            20 * 60_000L,
+            playback.state.value.sleepTimer.remainingMs,
+            "the timer stayed frozen while a new chapter played",
+        )
+    }
+
+    @Test
     fun `stopping disarms the timer so the next chapter is not silenced`() = runBlocking {
         val engine = FakePlaybackEngine()
         val playback = controller(engine)

@@ -67,6 +67,11 @@ class QueuePlaybackController(
     private val historyStore: PlaybackHistoryStore = InMemoryPlaybackHistoryStore(),
     private val sleepTimer: SleepTimer = SleepTimer(),
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * Which account a history snapshot belongs to. Read at record time rather than at construction,
+     * because a sign-out and a sign-in as somebody else happen without rebuilding this controller.
+     */
+    private val ownerKey: () -> String = { "" },
     /** Overridable so tests do not wait real seconds for the retry ladder. */
     private val retryDelaysMs: List<Long> = listOf(2_000, 5_000, 15_000),
     private val tickIntervalMs: Long = 250,
@@ -463,6 +468,10 @@ class QueuePlaybackController(
         drainEngineEvents()?.let { return it }
 
         engine.play()
+        // Audio is starting here, not only in togglePlayPause, so this is where a frozen countdown
+        // has to start running again. Without it, a timer armed while paused stays frozen while a
+        // newly-started or retried chapter plays on indefinitely. A no-op when nothing is frozen.
+        sleepTimer.onPlaybackResumed()
         // A successful attempt clears whatever the previous one complained about.
         _state.update {
             it.copy(
@@ -588,6 +597,7 @@ class QueuePlaybackController(
                 positionSeconds = lastKnownPositionMs / 1000.0,
                 durationSeconds = current.durationMs / 1000.0,
                 recordedAtMs = clock(),
+                ownerKey = ownerKey(),
             ),
         )
     }

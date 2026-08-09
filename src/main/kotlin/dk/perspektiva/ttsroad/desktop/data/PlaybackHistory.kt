@@ -30,14 +30,26 @@ data class PlaybackSnapshot(
     val durationSeconds: Double,
     val recordedAtMs: Long,
     val dismissed: Boolean = false,
+    /**
+     * Which signed-in account this snapshot belongs to — see [PlaybackHistory.ownerKeyFor].
+     *
+     * The file is machine-local and outlives every session, but its *contents* are not: fiction and
+     * chapter titles are the second user's business only if they are the second user's titles.
+     * Without this, signing out and signing in as somebody else on the same desktop showed them the
+     * previous account's reading history in the "Jump back in" strip. It is a hash, so it scopes
+     * without naming the server or the person.
+     */
+    val ownerKey: String = "",
 ) {
     /**
      * Identity for thinning and for dismissal.
      *
-     * A chapter, not a playback session: listening to chapter 12 twice is one thing to offer to
-     * resume, and a dismissal of it should survive the position moving.
+     * A chapter *of one account's library*, not a playback session: listening to chapter 12 twice
+     * is one thing to offer to resume, and a dismissal of it should survive the position moving.
+     * The owner is part of it because fiction ids are only unique within a server, so two accounts
+     * can hold the same id for different content.
      */
-    val key: String get() = "$fictionId:$chapterId"
+    val key: String get() = "$ownerKey:$fictionId:$chapterId"
 
     /** How far in, 0..1. Zero when the duration is unknown, so a bar cannot render nonsense. */
     val progress: Float
@@ -97,13 +109,32 @@ object PlaybackHistory {
         existing.map { if (it.key == key) it.copy(dismissed = true) else it }
 
     /**
-     * The single thing to offer as "last heard", or null.
+     * The owner key for a session: a hash of the server and the account.
+     *
+     * Hashed rather than stored plainly so the file scopes history without also becoming a record
+     * of which servers this machine talks to and under what name — the same reasoning that keeps
+     * URLs out of [PlaybackSnapshot] entirely.
+     */
+    fun ownerKeyFor(serverUrl: String, username: String?): String {
+        val identity = "${serverUrl.trim().trimEnd('/').lowercase()}|${username?.trim()?.lowercase().orEmpty()}"
+        return java.security.MessageDigest.getInstance("SHA-256")
+            .digest(identity.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+            .take(32)
+    }
+
+    /**
+     * The single thing to offer as "last heard" to [ownerKey], or null.
      *
      * Skips dismissed entries and ones that are effectively finished, so the card is always an
      * offer the listener can act on rather than one they have to dismiss again.
+     *
+     * A snapshot written before this build carries no owner and is therefore shown to nobody. That
+     * is deliberate: losing the strip once is a far better outcome than showing one account's
+     * reading history to the next person who signs in on the same desktop.
      */
-    fun lastHeard(existing: List<PlaybackSnapshot>): PlaybackSnapshot? =
-        existing.filter { it.isResumable }.maxByOrNull { it.recordedAtMs }
+    fun lastHeard(existing: List<PlaybackSnapshot>, ownerKey: String): PlaybackSnapshot? =
+        existing.filter { it.isOwnedBy(ownerKey) && it.isResumable }.maxByOrNull { it.recordedAtMs }
 
     /**
      * Up to [limit] things to jump back to, newest first, at most one per fiction.
@@ -114,15 +145,20 @@ object PlaybackHistory {
      */
     fun jumpBackChoices(
         existing: List<PlaybackSnapshot>,
+        ownerKey: String,
         limit: Int = JumpBackChoices,
     ): List<PlaybackSnapshot> =
-        existing.filter { it.isResumable }
+        existing.filter { it.isOwnedBy(ownerKey) && it.isResumable }
             .sortedByDescending { it.recordedAtMs }
             .distinctBy { it.fictionId }
             .take(limit)
 
     private val PlaybackSnapshot.isResumable: Boolean
         get() = !dismissed && progress < ResumableCeiling
+
+    /** Never true for a blank key on either side, so an unowned snapshot is shown to nobody. */
+    private fun PlaybackSnapshot.isOwnedBy(ownerKey: String): Boolean =
+        ownerKey.isNotBlank() && this.ownerKey == ownerKey
 }
 
 /** Seam so tests never touch the real user config directory. */

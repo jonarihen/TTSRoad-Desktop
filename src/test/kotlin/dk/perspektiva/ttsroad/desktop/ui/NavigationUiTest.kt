@@ -82,7 +82,7 @@ class NavigationUiTest {
             SessionState(serverUrl = "https://x/", token = "t", username = "admin", serverName = "Perspektiva"),
         ),
         repositoryFactory = { _, _, _ -> repository },
-        playbackFactory = { _, _, _, _, _, _ -> playback },
+        playbackFactory = { _, _, _, _, _, _, _ -> playback },
         // In-memory, so rendering a screen in a test never touches the real
         // ~/.config/TTSRoad files the production stores default to.
         playbackPreferences = InMemoryPlaybackPreferencesStore(),

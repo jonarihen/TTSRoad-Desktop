@@ -107,12 +107,19 @@ fun LibraryScreen(
      * screen test never reads or writes the real config directory.
      */
     history: PlaybackHistoryStore = remember { InMemoryPlaybackHistoryStore() },
+    /**
+     * Which account's snapshots may be shown. Blank means "nobody's", which is what a signed-out
+     * screen and a history file from an older build both get — see [PlaybackHistory.jumpBackChoices].
+     */
+    historyOwnerKey: String = "",
     nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     val scope = rememberCoroutineScope()
     val state by cache.library.collectAsState()
     val snapshots by history.history.collectAsState()
-    val jumpBack = remember(snapshots) { PlaybackHistory.jumpBackChoices(snapshots) }
+    val jumpBack = remember(snapshots, historyOwnerKey) {
+        PlaybackHistory.jumpBackChoices(snapshots, historyOwnerKey)
+    }
     // Keyless on purpose: fires once per screen *appearance*, not per recomposition. Reuses cached
     // content and coalesces with a load already in flight, so Back into the library costs nothing.
     LaunchedEffect(Unit) { cache.ensureLibrary() }
