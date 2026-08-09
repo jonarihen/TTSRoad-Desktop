@@ -29,11 +29,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Downloading
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -97,18 +100,52 @@ const val ChapterListTestTag: String = "chapterList"
 private const val ChapterListHeaderItems = 1
 
 /**
- * Whether a chapter is available offline.
+ * Where a chapter stands with the download queue.
  *
- * The offline phase owns this; the chapter row already reserves the slot so that landing it is a
- * change to one function rather than to the row's layout. [Unavailable] renders nothing at all —
- * shipping a greyed-out download button that cannot be pressed would be worse than shipping none.
+ * [Unavailable] renders nothing at all — shipping a greyed-out download button that cannot be
+ * pressed would be worse than shipping none — and is what a signed-out session or a machine with no
+ * writable data directory reports.
  */
 enum class ChapterDownloadState {
     Unavailable,
     NotDownloaded,
+    Queued,
     Downloading,
     Downloaded,
+    Failed,
+    Removing,
 }
+
+/**
+ * One chapter's download state as the row draws it.
+ *
+ * [progress] is null when the server never reported a size: a determinate bar filling from a total
+ * this app invented would be a lie, so those rows show an indeterminate one instead.
+ */
+data class ChapterDownloadUi(
+    val state: ChapterDownloadState = ChapterDownloadState.Unavailable,
+    val progress: Float? = null,
+    val failureMessage: String? = null,
+)
+
+/**
+ * What the chapter list can ask the download queue to do.
+ *
+ * Bundled rather than passed as six separate lambdas so the screen's signature stays readable and
+ * so a caller cannot wire half of them. Every action defaults to a no-op, which — combined with
+ * `available = false` — is what makes the whole feature absent rather than broken on a build or a
+ * session that has no download storage.
+ */
+data class ChapterDownloadsUi(
+    val available: Boolean = false,
+    val stateFor: (ChapterSummary) -> ChapterDownloadUi = { ChapterDownloadUi() },
+    val onDownload: (ChapterSummary) -> Unit = {},
+    val onCancel: (ChapterSummary) -> Unit = {},
+    val onDelete: (ChapterSummary) -> Unit = {},
+    val onRetry: (ChapterSummary) -> Unit = {},
+    /** "Download next 10", counted from the resume position rather than from the top of the list. */
+    val onDownloadNext: () -> Unit = {},
+)
 
 /**
  * One fiction and its chapters.
@@ -126,7 +163,7 @@ fun FictionDetailScreen(
     playback: PlaybackController,
     onBack: () -> Unit,
     onOpenReader: (ChapterSummary) -> Unit = {},
-    downloadStateFor: (ChapterSummary) -> ChapterDownloadState = { ChapterDownloadState.Unavailable },
+    downloads: ChapterDownloadsUi = ChapterDownloadsUi(),
     nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     val scope = rememberCoroutineScope()
@@ -250,6 +287,8 @@ fun FictionDetailScreen(
                                 onOptions = { cache.setChapterOptions(fiction.id, it) },
                                 onMarkAllPlayed = { mark(playedAllIds, played = true) },
                                 onMarkAllUnplayed = { mark(unplayedAllIds, played = false) },
+                                downloadsAvailable = downloads.available,
+                                onDownloadNext = downloads.onDownloadNext,
                             )
                             Spacer(Modifier.height(8.dp))
                         }
@@ -283,7 +322,7 @@ fun FictionDetailScreen(
                         isPlaying = player.isPlaying,
                         canMarkPrevious = (canonicalIndex[chapter.resolvedChapterId] ?: 0) > 0,
                         readAlongAvailable = capabilities.readAlong && chapter.hasTimings,
-                        downloadState = downloadStateFor(chapter),
+                        download = downloads.stateFor(chapter),
                         onPlay = { play(chapter) },
                         onMarkPlayed = { played -> mark(listOf(chapter.resolvedChapterId), played) },
                         onMarkPrevious = {
@@ -293,6 +332,10 @@ fun FictionDetailScreen(
                             )
                         },
                         onOpenReader = { onOpenReader(chapter) },
+                        onDownload = { downloads.onDownload(chapter) },
+                        onCancelDownload = { downloads.onCancel(chapter) },
+                        onDeleteDownload = { downloads.onDelete(chapter) },
+                        onRetryDownload = { downloads.onRetry(chapter) },
                     )
                     HorizontalDivider(thickness = 1.dp, color = AarisColor.LineSoft)
                 }
@@ -329,6 +372,8 @@ private fun ChapterListControls(
     onOptions: (ChapterListOptions) -> Unit,
     onMarkAllPlayed: () -> Unit,
     onMarkAllUnplayed: () -> Unit,
+    downloadsAvailable: Boolean,
+    onDownloadNext: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -349,6 +394,15 @@ private fun ChapterListControls(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BulkAction("Mark all played", enabled = canMarkPlayed, onClick = onMarkAllPlayed)
             BulkAction("Mark all unplayed", enabled = canMarkUnplayed, onClick = onMarkAllUnplayed)
+            // Absent rather than disabled when there is nowhere to download to: a control that can
+            // never be pressed is worse than one that is not there.
+            if (downloadsAvailable) {
+                BulkAction(
+                    "Download next ${dk.perspektiva.ttsroad.desktop.download.DownloadIndex.DefaultBatch}",
+                    enabled = true,
+                    onClick = onDownloadNext,
+                )
+            }
         }
     }
 }
@@ -529,11 +583,15 @@ private fun ChapterListRow(
     isPlaying: Boolean,
     canMarkPrevious: Boolean,
     readAlongAvailable: Boolean,
-    downloadState: ChapterDownloadState,
+    download: ChapterDownloadUi,
     onPlay: () -> Unit,
     onMarkPlayed: (Boolean) -> Unit,
     onMarkPrevious: () -> Unit,
     onOpenReader: () -> Unit,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onDeleteDownload: () -> Unit,
+    onRetryDownload: () -> Unit,
 ) {
     val playable = chapter.hasAudio
     val isPlayed = chapter.isPlayed
@@ -600,7 +658,13 @@ private fun ChapterListRow(
             AarisTag(it)
             Spacer(Modifier.width(8.dp))
         }
-        ChapterDownloadSlot(downloadState)
+        ChapterDownloadSlot(
+            download = download,
+            onDownload = onDownload,
+            onCancel = onCancelDownload,
+            onDelete = onDeleteDownload,
+            onRetry = onRetryDownload,
+        )
         if (readAlongAvailable) {
             RowIconAction(
                 icon = Icons.AutoMirrored.Filled.MenuBook,
@@ -638,24 +702,103 @@ private fun ChapterListRow(
 }
 
 /**
- * Reports offline availability; draws nothing when there is nothing to report.
+ * The row's download control: state and the one action that state affords.
  *
- * Both [ChapterDownloadState.Unavailable] and [ChapterDownloadState.NotDownloaded] are silent, for
- * different reasons: the first means this build cannot download anything, the second means this
- * chapter simply is not downloaded and there is (yet) no action to offer. The *download* control
- * itself belongs to the offline phase; this slot only ever reports state.
+ * Each state offers exactly one action, because a row that shows Download *and* Cancel *and* Delete
+ * is a row nobody can read at a glance. [ChapterDownloadState.Removing] deliberately offers none —
+ * the deletion is already happening and a second press would have nothing to do.
+ *
+ * The whole slot is absent for [ChapterDownloadState.Unavailable], which is what a session with no
+ * download storage reports.
  */
 @Composable
-private fun ChapterDownloadSlot(state: ChapterDownloadState) {
-    val (icon, description) = when (state) {
-        ChapterDownloadState.Unavailable, ChapterDownloadState.NotDownloaded -> return
-        ChapterDownloadState.Downloading -> Icons.Default.Downloading to "Downloading"
-        ChapterDownloadState.Downloaded -> Icons.Default.OfflinePin to "Available offline"
-    }
-    Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
-        Icon(icon, contentDescription = description, tint = AarisColor.Ok, modifier = Modifier.size(18.dp))
+private fun ChapterDownloadSlot(
+    download: ChapterDownloadUi,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    when (download.state) {
+        ChapterDownloadState.Unavailable -> return
+
+        ChapterDownloadState.NotDownloaded ->
+            RowIconAction(Icons.Default.Download, "Download", AarisColor.Muted, onDownload)
+
+        // A queued row has nothing to show but the fact that it is waiting, and the useful action
+        // is the same one an in-flight row offers.
+        ChapterDownloadState.Queued ->
+            RowIconAction(Icons.Default.Downloading, "Queued for download — cancel", AarisColor.Muted, onCancel)
+
+        ChapterDownloadState.Downloading -> DownloadProgressAction(download.progress, onCancel)
+
+        ChapterDownloadState.Downloaded ->
+            RowIconAction(Icons.Default.OfflinePin, "Available offline — delete", AarisColor.Ok, onDelete)
+
+        ChapterDownloadState.Failed ->
+            RowIconAction(
+                Icons.Default.ErrorOutline,
+                // The reason travels in the accessible description rather than a tooltip, so a
+                // screen reader gets it too and a UI test can assert on it.
+                download.failureMessage?.let { "Download failed: $it — retry" } ?: "Download failed — retry",
+                AarisColor.Danger,
+                onRetry,
+            )
+
+        ChapterDownloadState.Removing ->
+            Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp).semantics { contentDescription = "Removing download" },
+                    strokeWidth = 2.dp,
+                    color = AarisColor.Muted,
+                )
+            }
     }
     Spacer(Modifier.width(4.dp))
+}
+
+/**
+ * An in-flight download: a ring showing how far along it is, and a click to cancel.
+ *
+ * Indeterminate when the server never reported a size — a determinate ring filling from a total
+ * this app invented would be worse than an honest spinner.
+ */
+@Composable
+private fun DownloadProgressAction(progress: Float?, onCancel: () -> Unit) {
+    val percent = progress?.let { " ${(it * 100).toInt()}%" }.orEmpty()
+    val interaction = remember { MutableInteractionSource() }
+    val pointerOver by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    val active = pointerOver || focused
+    val description = "Downloading$percent — cancel"
+    Box(
+        Modifier
+            .size(30.dp)
+            .background(if (active) AarisColor.BgHover else Color.Transparent)
+            .border(1.dp, if (focused) AarisColor.Accent else Color.Transparent)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                role = Role.Button,
+                onClick = onCancel,
+            )
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (progress == null) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AarisColor.Accent)
+        } else {
+            CircularProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = AarisColor.Accent,
+                trackColor = AarisColor.BgHover,
+            )
+        }
+    }
 }
 
 /** Borderless icon action used inside list rows. Always present; brightens on hover or focus. */

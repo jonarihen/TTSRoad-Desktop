@@ -26,6 +26,8 @@ data class SessionState(
     val serverName: String = "TTSRoad",
     /** From the login response's `server.version`; null against a server too old to send it. */
     val serverVersion: String? = null,
+    /** Stable storage identity advertised as `server.base_url`; never used as a request address. */
+    val advertisedBaseUrl: String? = null,
     /** `MobileApiToken.id` for this device — the id the device-management API uses. */
     val deviceId: Int? = null,
     /** Server-side token expiry, ISO-8601. Informational: expiry is discovered via 401, not polled. */
@@ -51,6 +53,9 @@ interface SessionStore {
     val session: StateFlow<SessionState>
     fun current(): SessionState
     fun save(state: SessionState)
+
+    /** Persists the server's non-secret storage identity without rewriting its credential. */
+    fun rememberAdvertisedBaseUrl(baseUrl: String)
 
     /**
      * Signs the user out locally and destroys the credential.
@@ -84,6 +89,13 @@ class InMemorySessionStore(initial: SessionState = SessionState()) : SessionStor
         _session.value = state
     }
 
+    override fun rememberAdvertisedBaseUrl(baseUrl: String) {
+        val stableValue = baseUrl.trim().takeIf { it.isNotEmpty() } ?: return
+        if (_session.value.advertisedBaseUrl != stableValue) {
+            _session.value = _session.value.copy(advertisedBaseUrl = stableValue)
+        }
+    }
+
     override fun clearToken() {
         clearTokenCalls++
         _session.value = _session.value.copy(
@@ -106,6 +118,7 @@ private data class PersistedSettings(
     val serverUrl: String = "",
     val serverName: String = "TTSRoad",
     val serverVersion: String? = null,
+    val advertisedBaseUrl: String? = null,
     val username: String? = null,
     val credentialKey: String? = null,
 )
@@ -164,20 +177,32 @@ class FileSessionStore(
         }
         persistedKey = storedKey
         _session.value = state
-        write(
-            PersistedSettings(
-                serverUrl = state.serverUrl,
-                serverName = state.serverName,
-                serverVersion = state.serverVersion,
-                username = state.username,
-                credentialKey = storedKey,
-            ),
-        )
+        write(state.toPersistedSettings(storedKey))
+    }
+
+    override fun rememberAdvertisedBaseUrl(baseUrl: String) {
+        val stableValue = baseUrl.trim().takeIf { it.isNotEmpty() } ?: return
+        val current = _session.value
+        if (current.advertisedBaseUrl == stableValue) return
+        val next = current.copy(advertisedBaseUrl = stableValue)
+        _session.value = next
+        // This is a settings-only update. Calling save(next) would needlessly rewrite the OS
+        // keyring and could turn a transient keyring failure into a session that cannot restart.
+        write(next.toPersistedSettings(persistedKey))
     }
 
     override fun clearToken() {
         save(current().copy(token = null, isAdmin = false, deviceId = null, expiresAt = null))
     }
+
+    private fun SessionState.toPersistedSettings(key: String?): PersistedSettings = PersistedSettings(
+        serverUrl = serverUrl,
+        serverName = serverName,
+        serverVersion = serverVersion,
+        advertisedBaseUrl = advertisedBaseUrl,
+        username = username,
+        credentialKey = key,
+    )
 
     private fun write(settings: PersistedSettings) {
         runCatching { SecureFiles.writeAtomically(file, settingsAdapter.toJson(settings)) }
@@ -195,6 +220,7 @@ class FileSessionStore(
             serverUrl = raw["serverUrl"] as? String ?: "",
             serverName = raw["serverName"] as? String ?: "TTSRoad",
             serverVersion = raw["serverVersion"] as? String,
+            advertisedBaseUrl = raw["advertisedBaseUrl"] as? String,
             username = raw["username"] as? String,
             credentialKey = raw["credentialKey"] as? String,
         )
@@ -202,6 +228,7 @@ class FileSessionStore(
             serverUrl = settings.serverUrl,
             serverName = settings.serverName,
             serverVersion = settings.serverVersion,
+            advertisedBaseUrl = settings.advertisedBaseUrl,
             username = settings.username,
         )
 
@@ -267,29 +294,15 @@ class FileSessionStore(
         /**
          * Per-user config directory, per platform convention.
          *
-         * [osName], [userHome] and [env] are parameters so the path rules — in particular the XDG
-         * Base Directory spec on Linux, where honouring `$XDG_CONFIG_HOME` is the difference
-         * between respecting a user's layout and ignoring it — can be tested without a Linux box.
+         * Delegates to [AppDirectories], which owns the platform rules for all three roots (config,
+         * data, cache) so the downloads added in phase 7 cannot drift from where the session file
+         * lives. Kept here as a named entry point because several stores already resolve their file
+         * through it.
          */
         fun configDir(
             osName: String = System.getProperty("os.name").orEmpty(),
             userHome: String = System.getProperty("user.home").orEmpty(),
             env: (String) -> String? = System::getenv,
-        ): File {
-            val os = osName.lowercase()
-            val base = when {
-                os.contains("win") ->
-                    env("APPDATA")?.takeIf { it.isNotBlank() }?.let { File(it) }
-                        ?: File(userHome, "AppData/Roaming")
-
-                os.contains("mac") || os.contains("darwin") -> File(userHome, "Library/Application Support")
-
-                // XDG Base Directory spec: config goes in $XDG_CONFIG_HOME, and the spec says a
-                // relative value must be ignored rather than resolved against the cwd.
-                else -> env("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() && it.startsWith("/") }?.let { File(it) }
-                    ?: File(userHome, ".config")
-            }
-            return File(base, "TTSRoad")
-        }
+        ): File = AppDirectories.configDir(osName, userHome, env)
     }
 }

@@ -31,6 +31,7 @@ class ServerCapabilitiesTest {
 
         assertEquals("Perspektiva TTSRoad", capabilities.serverName)
         assertEquals("1.4.0", capabilities.serverVersion)
+        assertEquals("https://ttsroad.example.com", capabilities.serverBaseUrl)
         assertTrue(capabilities.readAlong)
         assertTrue(capabilities.deviceManagement)
         assertFalse(capabilities.search)

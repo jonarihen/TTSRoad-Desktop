@@ -88,6 +88,7 @@ class LoginTest {
         assertEquals("admin", session.username)
         assertTrue(session.isAdmin)
         assertEquals("Perspektiva TTSRoad", session.serverName)
+        assertEquals("https://ttsroad.example.com", session.advertisedBaseUrl)
         // The stored server URL is normalized, so every later call hits the same Retrofit instance.
         assertEquals(baseUrl(), session.serverUrl)
     }

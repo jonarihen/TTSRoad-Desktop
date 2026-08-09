@@ -169,7 +169,8 @@ jumps to its real position.
   navigates to the `Reader` destination, which is still the honest placeholder from Phase 3. This
   is the one place in this phase where a control leads somewhere unfinished; it is wired now so
   that the reader phase is a screen swap rather than a change to the chapter list.
-- **The download slot draws nothing.** `ChapterDownloadState` and `downloadStateFor` are a real
+- **The download slot draws nothing (superseded by ADR 0007).** `ChapterDownloadState` and
+  `downloadStateFor` were a real
   seam with a default of `Unavailable`, which renders no pixels. Shipping a greyed-out download
   button that cannot be pressed would have been worse than shipping none.
 - **`player_index` is modelled but not used for ordering.** The client orders by

@@ -60,13 +60,31 @@ object SecureFiles {
      *
      * Returns false when the filesystem supports neither view (some FAT/exFAT mounts), so the
      * caller can decide whether that is fatal.
+     *
+     * For a **directory**, use [restrictDirectoryToOwner]: `rw-------` on a directory removes the
+     * traverse bit, and nothing can then be created or read inside it.
      */
-    fun restrictToOwner(path: Path): Boolean {
+    fun restrictToOwner(path: Path): Boolean = restrict(path, executable = false)
+
+    /**
+     * The directory form of [restrictToOwner]: `rwx------`.
+     *
+     * The execute bit on a directory is *permission to enter it*, not permission to run anything.
+     * Applying the file mask to a directory produces one that cannot be listed or written to — the
+     * app's own writes fail with "Permission denied" while looking, from the outside, like a
+     * corrupted download.
+     */
+    fun restrictDirectoryToOwner(path: Path): Boolean = restrict(path, executable = true)
+
+    private fun restrict(path: Path, executable: Boolean): Boolean {
         val posix = Files.getFileAttributeView(path, PosixFileAttributeView::class.java)
         if (posix != null) {
-            return runCatching {
-                posix.setPermissions(setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))
-            }.isSuccess
+            val permissions = buildSet {
+                add(PosixFilePermission.OWNER_READ)
+                add(PosixFilePermission.OWNER_WRITE)
+                if (executable) add(PosixFilePermission.OWNER_EXECUTE)
+            }
+            return runCatching { posix.setPermissions(permissions) }.isSuccess
         }
 
         val acl = Files.getFileAttributeView(path, AclFileAttributeView::class.java) ?: return false

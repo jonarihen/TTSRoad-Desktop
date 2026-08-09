@@ -55,8 +55,12 @@ class FakeMediaSourceFactory(
 ) : MediaSourceFactory {
     val requested: MutableList<String> = Collections.synchronizedList(mutableListOf<String>())
 
-    override fun create(url: String): MediaSource {
+    /** Chapter ids playback asked for, in order — how the offline lookup is observed. */
+    val requestedChapterIds: MutableList<Int> = Collections.synchronizedList(mutableListOf<Int>())
+
+    override fun create(chapterId: Int, url: String): MediaSource {
         requested += url
+        requestedChapterIds += chapterId
         return FakeMediaSource(url, failWith = failWith)
     }
 }

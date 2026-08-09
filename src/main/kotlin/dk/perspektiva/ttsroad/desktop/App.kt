@@ -83,6 +83,7 @@ import dk.perspektiva.ttsroad.desktop.ui.SettingsStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.ShortcutsDialog
 import dk.perspektiva.ttsroad.desktop.ui.WindowSizeClass
 import dk.perspektiva.ttsroad.desktop.ui.hasSession
+import dk.perspektiva.ttsroad.desktop.ui.rememberChapterDownloads
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.windowSizeClassFor
 
@@ -99,11 +100,20 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     val cache = container.libraryCache
     val session by sessionStore.session.collectAsState()
     val sessionEnd by repository.sessionEnd.collectAsState()
+    val capabilities by repository.currentCapabilities.collectAsState()
     // Hoisted above navigation on purpose: `when (destination)` disposes the screen it leaves, so a
     // holder created inside SettingsScreen would drop the selected pane and the loaded device list
     // every time the user glanced at the library.
     val settings = rememberStateHolder(repository, sessionStore) {
-        SettingsStateHolder(repository, sessionStore)
+        SettingsStateHolder(repository, sessionStore, offlineStorage = container.downloads)
+    }
+
+    // Capability discovery is the only source of the server's stable advertised identity. Feed it
+    // into the download namespace as soon as it arrives; using it only for feature flags would
+    // leave downloads tied to a transient LAN/public address despite the server explicitly naming
+    // itself.
+    LaunchedEffect(capabilities.serverBaseUrl) {
+        container.downloads.advertisedBaseUrl = capabilities.serverBaseUrl
     }
 
     // Retained per-destination UI state: search text, filters and scroll offsets are stored under
@@ -198,6 +208,8 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     // navigation. Without it a revoked token leaves a chapter playing behind the login screen.
     LaunchedEffect(session.isLoggedIn) {
         if (!session.isLoggedIn) {
+            // Close account-protected indexes immediately; retained login hints are not authority.
+            container.downloads.refresh()
             playback.stop()
             nav.resetToRoot()
             // The library belonged to the account that just ended; the next person to sign in on
@@ -207,7 +219,12 @@ fun App(container: AppContainer = remember { AppContainer() }) {
         } else {
             // Cheap, and it is what makes optional UI correct after a restart, where login did
             // not run but a keyring-backed session was restored.
-            repository.refreshCurrentCapabilities()
+            val discovered = repository.refreshCurrentCapabilities()
+            // Discovery has to precede the first namespace open. Opening against the connect URL
+            // and moving to server.base_url a moment later would strand a download made during
+            // startup in an address-derived directory.
+            container.downloads.advertisedBaseUrl = discovered.serverBaseUrl
+            container.downloads.refresh()
         }
     }
 
@@ -288,6 +305,12 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     repository = repository,
                                     playback = playback,
                                     onBack = { nav.back() },
+                                    downloads = rememberChapterDownloads(
+                                        coordinator = container.downloads,
+                                        fiction = destination.fiction,
+                                        chapters = cache.chapters(destination.fiction.id)
+                                            .collectAsState().value.value?.chapters.orEmpty(),
+                                    ),
                                     // Offered only for chapters the *server* holds timings for, so
                                     // the row action cannot appear on a chapter the reader could
                                     // never open.

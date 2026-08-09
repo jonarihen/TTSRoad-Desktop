@@ -62,6 +62,7 @@ class SessionStoreTest {
                 isAdmin = true,
                 serverName = "Perspektiva TTSRoad",
                 serverVersion = "1.4.0",
+                advertisedBaseUrl = "https://stable.example/",
                 deviceId = 42,
                 expiresAt = "2026-11-04T09:12:33Z",
             ),
@@ -80,6 +81,7 @@ class SessionStoreTest {
         assertEquals("https://x/", state.serverUrl)
         assertEquals("Perspektiva TTSRoad", state.serverName)
         assertEquals("1.4.0", state.serverVersion)
+        assertEquals("https://stable.example/", state.advertisedBaseUrl)
         assertEquals("admin", state.username)
     }
 
@@ -92,6 +94,7 @@ class SessionStoreTest {
         isAdmin = true,
         serverName = "Perspektiva TTSRoad",
         serverVersion = "1.4.0",
+        advertisedBaseUrl = "https://stable.example/",
         deviceId = 42,
     )
 
@@ -128,6 +131,7 @@ class SessionStoreTest {
         assertEquals("admin", reloaded.username)
         assertEquals("Perspektiva TTSRoad", reloaded.serverName)
         assertEquals("1.4.0", reloaded.serverVersion)
+        assertEquals("https://stable.example/", reloaded.advertisedBaseUrl)
     }
 
     @Test

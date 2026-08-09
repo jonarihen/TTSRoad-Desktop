@@ -30,6 +30,9 @@ import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.data.VolumeBoost
+import dk.perspektiva.ttsroad.desktop.download.OfflineFictionUsage
+import dk.perspektiva.ttsroad.desktop.download.OfflineStorageController
+import dk.perspektiva.ttsroad.desktop.download.OfflineStorageSummary
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -46,6 +49,34 @@ import org.junit.Test
  */
 @OptIn(ExperimentalTestApi::class)
 class SettingsScreenUiTest {
+
+    private class FakeOfflineStorage(
+        var current: OfflineStorageSummary = OfflineStorageSummary(
+            available = true,
+            downloadBytes = 3L * 1024 * 1024,
+            downloadedChapters = 2,
+            streamingCacheBytes = 512L * 1024,
+            streamingCacheFiles = 1,
+            fictions = listOf(OfflineFictionUsage(7, "A Test Serial", 3L * 1024 * 1024, 2)),
+        ),
+    ) : OfflineStorageController {
+        var deleteCalls = 0
+        var clearCalls = 0
+
+        override fun summary(): OfflineStorageSummary = current
+
+        override suspend fun deleteAllDownloads(): Long {
+            deleteCalls++
+            current = current.copy(downloadBytes = 0, downloadedChapters = 0, fictions = emptyList())
+            return 0
+        }
+
+        override suspend fun clearStreamingCache(): Long {
+            clearCalls++
+            current = current.copy(streamingCacheBytes = 0, streamingCacheFiles = 0)
+            return 0
+        }
+    }
 
     @get:Rule
     val compose = createComposeRule()
@@ -80,6 +111,7 @@ class SettingsScreenUiTest {
         preferences: InMemoryPlaybackPreferencesStore = InMemoryPlaybackPreferencesStore(),
         canChangeSpeed: Boolean = true,
         canSkipSilence: Boolean = true,
+        offline: OfflineStorageController = FakeOfflineStorage(),
     ) {
         val store = InMemorySessionStore(session)
         repository.capabilitiesResult = capabilities
@@ -89,6 +121,7 @@ class SettingsScreenUiTest {
                 SettingsScreen(
                     store,
                     repository,
+                    offlineStorage = offline,
                     preferences = preferences,
                     canChangeSpeed = canChangeSpeed,
                     canSkipSilence = canSkipSilence,
@@ -184,7 +217,7 @@ class SettingsScreenUiTest {
         navEntry("OFFLINE").performKeyInput { pressKey(Key.Enter) }
         compose.waitForIdle()
 
-        compose.onNodeWithText("Offline downloads are not part of this build.", substring = true)
+        compose.onNodeWithText("Requested downloads", ignoreCase = true)
             .assertIsDisplayed()
     }
 
@@ -306,18 +339,45 @@ class SettingsScreenUiTest {
         assertEquals(VolumeBoost.Medium, preferences.preferences.value.volumeBoost)
     }
 
-    // --- Panes for phases that do not exist yet ----------------------------------------------
+    // --- Offline -------------------------------------------------------------------------------
 
     @Test
-    fun `the offline pane promises nothing and says signing out deletes nothing`() {
+    fun `the offline pane reports downloads by fiction separately from streaming cache`() {
         setContent(FakeRepository())
 
         navEntry("OFFLINE").performClick()
         compose.waitForIdle()
 
-        compose.onNodeWithText("signing out cannot delete anything you asked to keep", substring = true)
+        compose.onNodeWithText("3.0 MiB · 2 complete").assertIsDisplayed()
+        compose.onNodeWithText("512 KiB · 1 chapters").assertIsDisplayed()
+        compose.onNodeWithText("A Test Serial", ignoreCase = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Signing out keeps requested downloads", substring = true, ignoreCase = true)
+            .performScrollTo()
             .assertIsDisplayed()
     }
+
+    @Test
+    fun `offline cleanup actions are distinct and confirmed`() {
+        val offline = FakeOfflineStorage()
+        setContent(FakeRepository(), offline = offline)
+        navEntry("OFFLINE").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("CLEAR STREAMING CACHE").performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("CLEAR CACHE").assertHasClickAction().performClick()
+        compose.waitForIdle()
+        assertEquals(1, offline.clearCalls)
+        assertEquals(0, offline.deleteCalls)
+
+        compose.onNodeWithText("DELETE ALL DOWNLOADS").performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("DELETE DOWNLOADS").assertHasClickAction().performClick()
+        compose.waitForIdle()
+        assertEquals(1, offline.deleteCalls)
+    }
+
+    // --- About ---------------------------------------------------------------------------------
 
     @Test
     fun `the about pane shows the build, licences and diagnostics`() {

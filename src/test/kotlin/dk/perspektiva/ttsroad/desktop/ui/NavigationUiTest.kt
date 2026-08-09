@@ -37,12 +37,14 @@ import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
+import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinator
 import dk.perspektiva.ttsroad.desktop.player.PlayerUiState
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 /**
  * The acceptance criteria of the navigation phase, driven through the real `App` composable:
@@ -53,6 +55,9 @@ class NavigationUiTest {
 
     @get:Rule
     val compose = createComposeRule()
+
+    @get:Rule
+    val files = TemporaryFolder()
 
     private fun bigLibrary(count: Int) = LibraryResponse(
         fictions = (1..count).map {
@@ -89,6 +94,16 @@ class NavigationUiTest {
         playbackHistory = InMemoryPlaybackHistoryStore(),
         // See `testLibraryCache`: immediate main dispatch is what makes `waitForIdle` sufficient.
         libraryCacheFactory = { repo, _, now -> LibraryCache(repo, Dispatchers.Main.immediate, now) },
+        downloadCoordinatorFactory = { store, client, repo, dispatchers ->
+            DownloadCoordinator(
+                store,
+                client,
+                repo,
+                dataDir = files.root.resolve("data"),
+                cacheDir = files.root.resolve("cache"),
+                dispatcher = dispatchers.io,
+            )
+        },
     )
 
     // --- Retained browsing context ------------------------------------------------------------

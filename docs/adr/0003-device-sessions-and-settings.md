@@ -82,6 +82,9 @@ session goes, because device rows name other machines on *that* account.
 
 ### 7. Placeholder panes describe the gap instead of faking it
 
+> Phase 7 supersedes the Offline half of this decision; see ADR 0007. The paragraph below records
+> what Phase 2 intentionally shipped, not the current screen.
+
 Playback and Offline render one honest paragraph each and no controls. A switch that looks live and
 changes nothing is worse than an empty pane, because the user cannot tell it did not work. The
 Offline pane also states the thing the issue asks the app to guarantee: nothing is stored for

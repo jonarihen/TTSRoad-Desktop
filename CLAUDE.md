@@ -113,6 +113,29 @@ apply to audio.
   per snapshot and is *inherited* when the same chapter is re-recorded, or the next progress save
   would undo it. History is written at transitions only, never on the progress tick.
 
+### Offline storage
+
+- Config, explicit downloads and rebuildable cache use different platform roots from
+  `data/AppDirectories.kt`. Explicit downloads are data and are never evicted automatically;
+  streamed audio and cached library/chapter responses are cache.
+- Every root uses `StorageIdentity` (`server.base_url` from capability discovery when advertised,
+  canonical connect address only as fallback) plus the case-preserved account name, both hashed.
+  Titles, URLs and server filenames never become path components. A signed-out login hint is not
+  authority: `DownloadCoordinator.current` must be null without a bearer credential, while files
+  remain for the same account's next sign-in.
+- `download/DownloadManager.kt` owns the bounded/restart-safe queue;
+  `ChapterDownloader.kt` owns range resume, free-space checks, validation, fsync and atomic rename.
+  Only `Downloaded` after rename means Offline. Explicit Cancel waits for the worker and removes
+  its partial; an interrupted transfer keeps `.part` for resume. A download 401 ends the session.
+- Playback selection is explicit download → completed streaming cache → authenticated network in
+  `OfflineFirstMediaSourceFactory`, wired once in the container. The streaming cache promotes only
+  a sequential stream at clean EOF, abandons retention on seek, validates it, and evicts LRU files
+  above 1 GiB. Never surface streaming cache as a requested Offline download.
+- `LibraryDiskCache` holds owner-only rebuildable metadata under the same identity. It strips
+  server-local paths/errors, publishes cached content with the original last-refresh time, and
+  refreshes underneath. Settings measures real files, groups downloads by fiction, and keeps
+  confirmed Delete all downloads separate from Clear streaming cache.
+
 ### MPRIS
 
 `player/MprisState.kt` is pure Kotlin with no D-Bus type in it — that's where the audiobook mapping
@@ -208,7 +231,8 @@ can't quietly skip its way to green.
 credential storage and capability discovery (0002), the playback engine (0002-playback-engine),
 device sessions and Settings (0003), navigation (0004), chapter browsing (0005), and listening
 preferences / sleep timer / MPRIS / shortcuts (0006). Read the relevant one before changing any of
-the invariants above — they exist because the alternative was tried or measured.
+the invariants above; offline storage and caching are in 0007. They exist because the alternative
+was tried or measured.
 
 ## CI
 

@@ -34,6 +34,8 @@ data class CapabilityServerInfo(
 data class ServerCapabilities(
     val serverName: String = "TTSRoad",
     val serverVersion: String? = null,
+    /** Stable identity advertised by the server; never used as the address for a request. */
+    val serverBaseUrl: String? = null,
     val apiVersion: Int = 1,
     val readAlong: Boolean = false,
     val search: Boolean = false,
@@ -54,6 +56,7 @@ data class ServerCapabilities(
         fun from(response: CapabilitiesResponse): ServerCapabilities = ServerCapabilities(
             serverName = response.server?.name ?: "TTSRoad",
             serverVersion = response.server?.version,
+            serverBaseUrl = response.server?.baseUrl,
             apiVersion = response.apiVersion,
             readAlong = response.capabilities.flag("readalong"),
             search = response.capabilities.flag("search"),

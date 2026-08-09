@@ -44,14 +44,15 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Searchable up-next panel for long queues | ✅ |
 | Player UI (play/pause, seek, configurable skip, next/previous, up-next queue) | ✅ |
 | **MP3 audio playback** | ✅ |
-| Settings — two-pane control centre (account, devices, playback, about) | ✅ |
+| Settings — two-pane control centre (account, devices, playback, offline, about) | ✅ |
 | Device sessions — list, mark current, revoke one / revoke all others | ✅ |
 | Playback preferences — speed, skip interval, skip silence, volume boost | ✅ |
 | Sleep timer — 5/15/30/45/60 min or end of chapter, with a fade and "+5 min" | ✅ |
 | Local listening history — "Jump back in", dismissible per snapshot | ✅ |
 | MPRIS over D-Bus — Cinnamon applet, lock screen, hardware media keys | ✅ Linux |
 | App shortcuts — Space, arrows, Ctrl+arrows, Ctrl+L, Ctrl+, plus an F1 list | ✅ |
-| Offline downloads | ❌ |
+| Offline downloads — per chapter, next 10, restart-safe queue, storage controls | ✅ |
+| Bounded streaming cache and previously loaded library browsing while offline | ✅ |
 | Streaming playback — audio starts before the chapter has downloaded | ✅ Linux |
 | Seeking without decoding from the start of the chapter | ✅ Linux |
 | Variable-rate playback ("speed"), pitch-preserving 0.5×–3.0× | ✅ Linux |
@@ -100,6 +101,8 @@ Chapter filtering and ordering, bulk marking, optimistic rollback and current-ch
 [`docs/adr/0005-chapter-browsing-and-bulk-controls.md`](docs/adr/0005-chapter-browsing-and-bulk-controls.md).
 Listening preferences, the sleep timer, local history, MPRIS and the shortcut table are in
 [`docs/adr/0006-listening-preferences-and-desktop-integration.md`](docs/adr/0006-listening-preferences-and-desktop-integration.md).
+Offline namespaces, resumable downloads, streamed-audio retention and disk metadata are in
+[`docs/adr/0007-offline-downloads-and-streaming-cache.md`](docs/adr/0007-offline-downloads-and-streaming-cache.md).
 
 ## 🚀 Bootstrap
 
@@ -176,6 +179,9 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── PlaybackHistory.kt        bounded local snapshots, last-heard and jump-back selection
 │   ├── Cached.kt                 value + error + isRefreshing + last success, independently
 │   ├── LibraryCache.kt           library/chapter state held above the screens
+│   ├── LibraryDiskCache.kt       account-scoped rebuildable metadata for offline browsing
+│   ├── AppDirectories.kt         platform config/data/cache roots
+│   ├── StorageIdentity.kt        stable server/account disk namespace + generated audio names
 │   ├── ChapterLists.kt           filter/sort, bulk id selection, status, played patch + rollback
 │   ├── WindowPreferences.kt      persisted placement + clamping to attached displays
 │   ├── TtsRoadApi.kt             Retrofit interface
@@ -202,6 +208,14 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── JavaSoundPlaybackEngine.kt fallback where GStreamer is absent (no speed control)
 │   ├── MediaSource.kt            bearer-authenticated range-request byte source
 │   └── AudioEngine.kt            javax.sound.sampled seam used by the fallback engine
+├── download/
+│   ├── DownloadIndex.kt          transactional, migrating queue/index state
+│   ├── DownloadStorage.kt        owner-only explicit-download root + safe cleanup
+│   ├── ChapterDownloader.kt      range resume, validation, fsync and atomic promotion
+│   ├── DownloadManager.kt        bounded queue, backoff, cancellation and restart recovery
+│   ├── DownloadCoordinator.kt    current-account lifecycle, totals and cleanup seam
+│   ├── StreamingCache.kt         bounded validated cache populated while playback reads
+│   └── OfflineFirstMediaSource.kt explicit download → cache → authenticated network
 └── ui/
     ├── Theme.kt                  AARIS theme tokens
     ├── Components.kt             CoverImage, stale/empty/initial-error states, "how old is this"
@@ -253,6 +267,36 @@ instead of re-decoding from byte zero. Measured on a 32.5 s fixture: first audio
 
 The fallback engine keeps the old behaviour — materialise the chapter, decode with **mp3spi/JLayer**,
 write PCM to a `SourceDataLine`, re-decode from the start to seek, and no speed control.
+
+## 📥 Offline storage
+
+There are three deliberately different kinds of disk state:
+
+- **Requested downloads** live under the platform data directory (`$XDG_DATA_HOME/TTSRoad` on
+  Linux). They are never evicted automatically. A chapter becomes Offline only after a successful
+  response has the expected length (when known), passes an MP3 structure check, is flushed, and is
+  atomically renamed from `.part`.
+- **Streamed audio** lives under the platform cache directory (`$XDG_CACHE_HOME/TTSRoad` on Linux).
+  A sequential stream is retained only after clean EOF and the same validation. Seeking abandons
+  that cache attempt rather than promoting a file with a hole. The cache is bounded to 1 GiB and
+  evicts least-recently-used completed entries.
+- **Library/chapter metadata** is rebuildable cache too. It lets a restart show previously loaded
+  fictions and chapters immediately, with the original last-refresh time and an offline refresh
+  error above retained content. Server-local file paths and backend error details are stripped.
+
+All three use `<stable-server>/<account>/<generated-chapter-id>` namespaces. Capability discovery's
+advertised `server.base_url` is the preferred server identity, so changing from a LAN address to a
+public address does not duplicate a library; scheme/host/path fallback is used for older servers.
+Titles, raw server filenames and URLs never become filesystem names, and cleanup refuses traversal
+or symlinked owned roots.
+
+The chapter row exposes Download, Cancel, Retry and Delete according to its current state. “Download
+next 10” starts at the first unplayed chapter in reading order, regardless of how the list is sorted.
+Interrupted transfers retain `.part` state for safe range resume; an explicit Cancel waits for the
+worker to release its handles and removes the partial. Settings measures requested audio by fiction
+and keeps **Delete all downloads** separate from **Clear streaming cache**, each behind confirmation.
+Signing out keeps bytes but closes the account's index and fiction titles until that account signs
+in again.
 
 ## 🎚️ Listening preferences, the sleep timer and the desktop
 

@@ -81,10 +81,18 @@ class ChapterBrowsingUiTest {
         repository: FakeRepository,
         playback: FakePlaybackController = FakePlaybackController(),
         cache: LibraryCache = testLibraryCache(repository),
+        downloads: ChapterDownloadsUi = ChapterDownloadsUi(),
     ) {
         compose.setContent {
             TtsRoadTheme {
-                FictionDetailScreen(fiction, cache, repository, playback, onBack = {})
+                FictionDetailScreen(
+                    fiction = fiction,
+                    cache = cache,
+                    repository = repository,
+                    playback = playback,
+                    onBack = {},
+                    downloads = downloads,
+                )
             }
         }
         compose.waitForIdle()
@@ -334,6 +342,84 @@ class ChapterBrowsingUiTest {
 
         assertEquals(emptyList(), playback.calls, "a row with no audio must not reach the player")
         compose.onAllNodesWithContentDescription("Play chapter").assertCountEquals(0)
+    }
+
+    // --- Downloads -----------------------------------------------------------------------------
+
+    @Test
+    fun `each download state exposes only its useful row action`() {
+        val chapters = (1..6).map { chapter(it) }
+        val repository = FakeRepository(chaptersResult = Result.success(response(chapters)))
+        val actions = mutableListOf<String>()
+        val states = mapOf(
+            1001 to ChapterDownloadUi(ChapterDownloadState.NotDownloaded),
+            1002 to ChapterDownloadUi(ChapterDownloadState.Queued),
+            1003 to ChapterDownloadUi(ChapterDownloadState.Downloading, progress = 0.25f),
+            1004 to ChapterDownloadUi(ChapterDownloadState.Downloaded),
+            1005 to ChapterDownloadUi(ChapterDownloadState.Failed, failureMessage = "The disk is full"),
+            1006 to ChapterDownloadUi(ChapterDownloadState.Removing),
+        )
+        screen(
+            repository,
+            downloads = ChapterDownloadsUi(
+                available = true,
+                stateFor = { states.getValue(it.resolvedChapterId) },
+                onDownload = { actions += "download:${it.resolvedChapterId}" },
+                onCancel = { actions += "cancel:${it.resolvedChapterId}" },
+                onDelete = { actions += "delete:${it.resolvedChapterId}" },
+                onRetry = { actions += "retry:${it.resolvedChapterId}" },
+            ),
+        )
+
+        compose.onNodeWithContentDescription("Download").assertHasClickAction().performClick()
+        compose.onNodeWithContentDescription("Queued for download — cancel").assertHasClickAction().performClick()
+        compose.onNodeWithContentDescription("Downloading 25% — cancel").assertHasClickAction().performClick()
+        compose.onNodeWithContentDescription("Available offline — delete").assertHasClickAction().performClick()
+        compose.onNodeWithTag(ChapterListTestTag).performScrollToIndex(5)
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Download failed: The disk is full — retry")
+            .assertHasClickAction()
+            .performClick()
+        // Six rows plus the eager header are just taller than the test window. Bring the final
+        // state into the lazy list's composition before asserting it.
+        compose.onNodeWithTag(ChapterListTestTag).performScrollToIndex(6)
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Removing download").assertIsDisplayed()
+
+        compose.runOnIdle {
+            assertEquals(
+                listOf("download:1001", "cancel:1002", "cancel:1003", "delete:1004", "retry:1005"),
+                actions,
+            )
+        }
+    }
+
+    @Test
+    fun `download next is absent without storage and delegates once when available`() {
+        val repository = FakeRepository(chaptersResult = Result.success(response(listOf(chapter(1)))))
+        screen(repository)
+        compose.onAllNodesWithText("DOWNLOAD NEXT 10").assertCountEquals(0)
+
+        var requests = 0
+        compose.setContent {
+            TtsRoadTheme {
+                FictionDetailScreen(
+                    fiction = fiction,
+                    cache = testLibraryCache(repository),
+                    repository = repository,
+                    playback = FakePlaybackController(),
+                    onBack = {},
+                    downloads = ChapterDownloadsUi(
+                        available = true,
+                        onDownloadNext = { requests++ },
+                    ),
+                )
+            }
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("DOWNLOAD NEXT 10").assertHasClickAction().performClick()
+        compose.runOnIdle { assertEquals(1, requests) }
     }
 
     // --- Marking -------------------------------------------------------------------------------

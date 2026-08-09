@@ -6,6 +6,9 @@ import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.currentSessionFirst
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
+import dk.perspektiva.ttsroad.desktop.download.OfflineStorageController
+import dk.perspektiva.ttsroad.desktop.download.OfflineStorageSummary
+import dk.perspektiva.ttsroad.desktop.download.UnavailableOfflineStorageController
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,6 +38,8 @@ sealed interface SettingsConfirmation {
     data class RevokeDevice(val device: DeviceSession) : SettingsConfirmation
     data object RevokeOtherDevices : SettingsConfirmation
     data object SignOut : SettingsConfirmation
+    data object DeleteAllDownloads : SettingsConfirmation
+    data object ClearStreamingCache : SettingsConfirmation
 }
 
 /**
@@ -57,6 +62,17 @@ data class DeviceSessionsUiState(
     val isInitialLoad: Boolean get() = isLoading && loaded == null && error == null && !unsupported
 }
 
+/** Measured offline storage plus the state of a refresh/cleanup operation. */
+data class OfflineStorageUiState(
+    val isLoading: Boolean = false,
+    val isBusy: Boolean = false,
+    val loaded: OfflineStorageSummary? = null,
+    val error: String? = null,
+    val notice: String? = null,
+) {
+    val isInitialLoad: Boolean get() = isLoading && loaded == null && error == null
+}
+
 data class SettingsUiState(
     val section: SettingsSection = SettingsSection.Account,
     val confirmation: SettingsConfirmation? = null,
@@ -64,6 +80,7 @@ data class SettingsUiState(
     /** From `GET /api/mobile/me`; null until it answers, or against a server without the endpoint. */
     val verifiedUser: MobileUser? = null,
     val signingOut: Boolean = false,
+    val offline: OfflineStorageUiState = OfflineStorageUiState(),
 )
 
 /**
@@ -77,12 +94,14 @@ class SettingsStateHolder(
     private val repository: TtsRoadRepository,
     private val sessionStore: SessionStore,
     dispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val offlineStorage: OfflineStorageController = UnavailableOfflineStorageController,
 ) : StateHolder(dispatcher) {
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     private var loadJob: Job? = null
     private var verifyJob: Job? = null
+    private var offlineJob: Job? = null
 
     fun openSection(section: SettingsSection) {
         _state.update { it.copy(section = section) }
@@ -97,6 +116,7 @@ class SettingsStateHolder(
     fun sessionEnded() {
         loadJob?.cancel()
         verifyJob?.cancel()
+        offlineJob?.cancel()
         _state.value = SettingsUiState()
     }
 
@@ -138,6 +158,8 @@ class SettingsStateHolder(
                 verifyAccount()
             }
 
+            SettingsSection.Offline -> refreshOffline()
+
             else -> Unit
         }
     }
@@ -164,6 +186,42 @@ class SettingsStateHolder(
 
     fun askRevokeOtherDevices() {
         _state.update { it.copy(confirmation = SettingsConfirmation.RevokeOtherDevices) }
+    }
+
+    // --- Offline storage -------------------------------------------------------------------
+
+    /** Measures once on first entry; explicit Refresh re-measures files that may change outside us. */
+    fun ensureOfflineLoaded() {
+        val offline = _state.value.offline
+        if (offline.isLoading || offline.loaded != null) return
+        refreshOffline()
+    }
+
+    fun refreshOffline() {
+        offlineJob?.cancel()
+        offlineJob = scope.launch {
+            updateOffline { it.copy(isLoading = true, error = null, notice = null) }
+            runCatching { offlineStorage.summary() }
+                .onSuccess { summary ->
+                    updateOffline { it.copy(isLoading = false, loaded = summary, error = null) }
+                }
+                .onFailure { failure ->
+                    updateOffline {
+                        it.copy(
+                            isLoading = false,
+                            error = userFacingMessage(failure, "Could not measure offline storage"),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun askDeleteAllDownloads() {
+        _state.update { it.copy(confirmation = SettingsConfirmation.DeleteAllDownloads) }
+    }
+
+    fun askClearStreamingCache() {
+        _state.update { it.copy(confirmation = SettingsConfirmation.ClearStreamingCache) }
     }
 
     fun dismissConfirmation() {
@@ -203,6 +261,16 @@ class SettingsStateHolder(
             ) { repository.revokeOtherDevices() }
 
             SettingsConfirmation.SignOut -> signOut()
+            SettingsConfirmation.DeleteAllDownloads -> runOfflineCleanup(
+                success = "Deleted all requested downloads",
+                failure = "Could not delete all downloads",
+                action = offlineStorage::deleteAllDownloads,
+            )
+            SettingsConfirmation.ClearStreamingCache -> runOfflineCleanup(
+                success = "Cleared the streaming cache",
+                failure = "Could not clear the streaming cache",
+                action = offlineStorage::clearStreamingCache,
+            )
         }
     }
 
@@ -292,7 +360,39 @@ class SettingsStateHolder(
         }
     }
 
+    private fun runOfflineCleanup(
+        success: String,
+        failure: String,
+        action: suspend () -> Long,
+    ) {
+        offlineJob?.cancel()
+        offlineJob = scope.launch {
+            updateOffline { it.copy(isBusy = true, error = null, notice = null) }
+            runCatching {
+                action()
+                offlineStorage.summary()
+            }
+                .onSuccess { measured ->
+                    updateOffline { state ->
+                        state.copy(isBusy = false, loaded = measured, notice = success, error = null)
+                    }
+                }
+                .onFailure { error ->
+                    updateOffline { state ->
+                        state.copy(
+                            isBusy = false,
+                            error = userFacingMessage(error, failure),
+                        )
+                    }
+                }
+        }
+    }
+
     private fun updateDevices(block: (DeviceSessionsUiState) -> DeviceSessionsUiState) {
         _state.update { it.copy(devices = block(it.devices)) }
+    }
+
+    private fun updateOffline(block: (OfflineStorageUiState) -> OfflineStorageUiState) {
+        _state.update { it.copy(offline = block(it.offline)) }
     }
 }

@@ -9,6 +9,8 @@ import dk.perspektiva.ttsroad.desktop.data.PlaybackHistory
 import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
+import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinator
+import dk.perspektiva.ttsroad.desktop.download.OfflineFirstMediaSourceFactory
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadAuthInterceptor
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
@@ -69,7 +71,7 @@ class AppContainer(
     repositoryFactory: (SessionStore, OkHttpClient, AppDispatchers) -> TtsRoadRepository =
         { store, client, d -> RetrofitTtsRoadRepository(store, client, d.io, clock) },
     mediaSourceFactory: (OkHttpClient, TtsRoadRepository) -> MediaSourceFactory =
-        { client, repo -> MediaSourceFactory { url -> HttpMediaSource(client, repo, url) } },
+        { client, repo -> MediaSourceFactory { _, url -> HttpMediaSource(client, repo, url) } },
     // GStreamer where it exists, Java Sound where it does not. Resolved once, here, so nothing
     // downstream has to know which backend it got — only what that backend reports it can do.
     // A machine with no GStreamer must still get a working app, just without speed control.
@@ -96,12 +98,38 @@ class AppContainer(
         },
     libraryCacheFactory: (TtsRoadRepository, AppDispatchers, () -> Long) -> LibraryCache =
         { repo, d, now -> LibraryCache(repo, d.main, now) },
+    /**
+     * A factory rather than a value so a test can point downloads at a temp directory — the real
+     * one writes into the user's data directory the moment somebody signs in.
+     */
+    downloadCoordinatorFactory: (SessionStore, OkHttpClient, TtsRoadRepository, AppDispatchers) -> DownloadCoordinator =
+        { session, client, repo, d -> DownloadCoordinator(session, client, repo, dispatcher = d.io) },
     // A store rather than a file path, so a test never writes into the user's config directory.
     windowPreferencesStore: WindowPreferencesStore = FileWindowPreferencesStore(),
 ) : AutoCloseable {
     val httpClient: OkHttpClient = httpClientFactory(sessionStore)
     val repository: TtsRoadRepository = repositoryFactory(sessionStore, httpClient, dispatchers)
-    val mediaSources: MediaSourceFactory = mediaSourceFactory(httpClient, repository)
+
+    /**
+     * Offline downloads for whoever is signed in.
+     *
+     * Above the media sources on purpose: the factory below consults it, so the ordering here is
+     * what makes "a downloaded chapter plays without the server" true for every playback path
+     * rather than only the ones a screen happens to route through.
+     */
+    val downloads: DownloadCoordinator =
+        downloadCoordinatorFactory(sessionStore, httpClient, repository, dispatchers)
+
+    /**
+     * Disk first, network second. The network factory is the injected one, so a test can still
+     * substitute it and a machine with no download directory simply always streams.
+     */
+    val mediaSources: MediaSourceFactory = OfflineFirstMediaSourceFactory(
+        index = downloads::indexOrNull,
+        storage = downloads::storageOrNull,
+        network = mediaSourceFactory(httpClient, repository),
+        streamingCache = downloads::streamingCacheOrNull,
+    )
     val audioEngine: PlaybackEngine = audioEngineFactory()
     /**
      * Which account's history is being written or shown.
@@ -160,6 +188,7 @@ class AppContainer(
      * emptied by `App` when the session ends.
      */
     val libraryCache: LibraryCache = libraryCacheFactory(repository, dispatchers, clock)
+        .attachDiskCache(downloads::libraryCacheOrNull)
 
     /** Remembered window size/position/maximised state. Never holds anything transient or secret. */
     val windowPreferences: WindowPreferencesStore = windowPreferencesStore
@@ -171,6 +200,7 @@ class AppContainer(
         runCatching { mpris?.close() }
         mpris = null
         mprisScope.cancel()
+        runCatching { downloads.close() }
         playback.release()
         libraryCache.close()
         httpClient.dispatcher.executorService.shutdown()

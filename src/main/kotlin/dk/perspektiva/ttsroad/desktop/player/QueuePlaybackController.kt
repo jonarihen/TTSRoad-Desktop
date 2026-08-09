@@ -30,9 +30,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Turns a chapter's audio URL into a byte source. The seam Phase 7's cache replaces. */
+/**
+ * Turns a chapter into a byte source. The seam the offline cache slots into.
+ *
+ * Takes the chapter id as well as the URL because "is this chapter already on disk?" is a question
+ * about the *chapter*, and a downloaded file is named from its id. Answering it by pattern-matching
+ * the URL would tie the cache to whatever path shape the server happens to use today.
+ */
 fun interface MediaSourceFactory {
-    fun create(url: String): MediaSource
+    fun create(chapterId: Int, url: String): MediaSource
 }
 
 /**
@@ -471,7 +477,7 @@ class QueuePlaybackController(
         engineEvents.clear()
 
         try {
-            engine.prepare(sources.create(url), startMs)
+            engine.prepare(sources.create(chapter.resolvedChapterId, url), startMs)
         } catch (e: SessionExpiredException) {
             return AttemptResult.SessionExpired(PlaybackFailure.SessionExpired(e.sessionEnd))
         } catch (e: Exception) {
