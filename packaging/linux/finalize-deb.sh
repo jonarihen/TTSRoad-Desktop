@@ -46,9 +46,10 @@ sed -i 's/^Section:.*/Section: sound/' "$control"
 if grep -q '^Recommends:' "$control"; then
     sed -i 's/^Recommends:.*/Recommends: gstreamer1.0-plugins-bad/' "$control"
 else
-    # Append as a new field. Inserting immediately after Depends could split a wrapped dependency
-    # continuation line and accidentally make those packages part of Recommends.
-    printf 'Recommends: gstreamer1.0-plugins-bad\n' >> "$control"
+    # Insert inside the one package stanza. Appending after jpackage's trailing blank line creates
+    # a second stanza, while inserting immediately after Depends could split its continuation lines.
+    grep -q '^Description:' "$control" || fail "DEBIAN/control has no Description field"
+    sed -i '/^Description:/i Recommends: gstreamer1.0-plugins-bad' "$control"
 fi
 
 if ! grep -q '^GenericName=' "$desktop"; then
