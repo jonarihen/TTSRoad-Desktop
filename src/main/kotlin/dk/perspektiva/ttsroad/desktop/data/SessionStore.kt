@@ -267,29 +267,15 @@ class FileSessionStore(
         /**
          * Per-user config directory, per platform convention.
          *
-         * [osName], [userHome] and [env] are parameters so the path rules — in particular the XDG
-         * Base Directory spec on Linux, where honouring `$XDG_CONFIG_HOME` is the difference
-         * between respecting a user's layout and ignoring it — can be tested without a Linux box.
+         * Delegates to [AppDirectories], which owns the platform rules for all three roots (config,
+         * data, cache) so the downloads added in phase 7 cannot drift from where the session file
+         * lives. Kept here as a named entry point because several stores already resolve their file
+         * through it.
          */
         fun configDir(
             osName: String = System.getProperty("os.name").orEmpty(),
             userHome: String = System.getProperty("user.home").orEmpty(),
             env: (String) -> String? = System::getenv,
-        ): File {
-            val os = osName.lowercase()
-            val base = when {
-                os.contains("win") ->
-                    env("APPDATA")?.takeIf { it.isNotBlank() }?.let { File(it) }
-                        ?: File(userHome, "AppData/Roaming")
-
-                os.contains("mac") || os.contains("darwin") -> File(userHome, "Library/Application Support")
-
-                // XDG Base Directory spec: config goes in $XDG_CONFIG_HOME, and the spec says a
-                // relative value must be ignored rather than resolved against the cwd.
-                else -> env("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() && it.startsWith("/") }?.let { File(it) }
-                    ?: File(userHome, ".config")
-            }
-            return File(base, "TTSRoad")
-        }
+        ): File = AppDirectories.configDir(osName, userHome, env)
     }
 }
