@@ -24,6 +24,7 @@ import java.nio.file.LinkOption
  */
 class DownloadStorage(
     val root: File,
+    private val ownedDirectories: List<File> = listOf(root),
 ) {
 
     /** `downloads.json` for this account, kept beside the audio it describes. */
@@ -38,13 +39,24 @@ class DownloadStorage(
      * applied, which the caller may want to report rather than treat as fatal.
      */
     fun prepare(): Boolean {
-        val created = runCatching { Files.createDirectories(root.toPath()) }
+        // Check before creation so an existing link cannot redirect createDirectories or later
+        // writes. Identity-backed storage supplies downloads/server/account as ownedDirectories.
+        if (ownedDirectories.any { Files.isSymbolicLink(it.toPath()) }) {
+            AppLog.warn("refusing a symlinked download directory")
+            return false
+        }
+        val created = runCatching {
+            ownedDirectories.forEach { Files.createDirectories(it.toPath()) }
+        }
             .onFailure { AppLog.warn("could not create the download directory", it) }
         if (created.isFailure) return false
         // The *directory* form: a download root without its traverse bit cannot be written to at
         // all, and the resulting "Permission denied" looks like a broken download rather than a
         // permission mask this app applied to itself.
-        return SecureFiles.restrictDirectoryToOwner(root.toPath())
+        return ownedDirectories.all { directory ->
+            !Files.isSymbolicLink(directory.toPath()) &&
+                SecureFiles.restrictDirectoryToOwner(directory.toPath())
+        }
     }
 
     /**
@@ -62,6 +74,9 @@ class DownloadStorage(
      */
     fun resolve(name: String): File {
         require(FileDownloadIndexStore.isSafeName(name)) { "unsafe download file name: $name" }
+        require(ownedDirectories.none { Files.isSymbolicLink(it.toPath()) }) {
+            "download directory is a symlink"
+        }
 
         val rootPath = root.toPath().toAbsolutePath().normalize()
         val resolved = rootPath.resolve(name).normalize()
@@ -72,13 +87,18 @@ class DownloadStorage(
     }
 
     /** Deletes one download and any half-finished part beside it. Missing files are not an error. */
-    fun delete(name: String) {
+    fun delete(name: String): Boolean {
+        var deleted = true
         for (candidate in listOf(name, "$name$PartSuffix")) {
             runCatching {
                 val path = resolve(candidate).toPath()
                 Files.deleteIfExists(path)
-            }.onFailure { AppLog.warn("could not delete $candidate", it) }
+            }.onFailure {
+                deleted = false
+                AppLog.warn("could not delete $candidate", it)
+            }
         }
+        return deleted
     }
 
     /**
@@ -89,6 +109,12 @@ class DownloadStorage(
      * home. Returns the number of bytes reclaimed.
      */
     fun deleteAll(): Long {
+        if (ownedDirectories.any { Files.isSymbolicLink(it.toPath()) }) {
+            // The leaf link itself is inside our namespace and safe to unlink; never enumerate
+            // the directory it points at. A linked parent is simply refused.
+            if (Files.isSymbolicLink(root.toPath())) runCatching { Files.deleteIfExists(root.toPath()) }
+            return 0L
+        }
         if (!root.isDirectory) return 0L
         var freed = 0L
         val entries = root.listFiles().orEmpty()
@@ -112,10 +138,18 @@ class DownloadStorage(
     }
 
     /** Bytes actually occupied, measured rather than remembered — what Settings must agree with. */
-    fun bytesOnDisk(): Long =
-        root.listFiles().orEmpty()
-            .filter { it.isFile && !Files.isSymbolicLink(it.toPath()) }
-            .sumOf { it.length() }
+    fun bytesOnDisk(): Long = audioFileBytes().values.sum()
+
+    /** Generated audio/part name to measured size, excluding the small transactional index. */
+    fun audioFileBytes(): Map<String, Long> =
+        if (ownedDirectories.any { Files.isSymbolicLink(it.toPath()) }) emptyMap() else root.listFiles().orEmpty()
+            .filter { file ->
+                file.isFile &&
+                    !Files.isSymbolicLink(file.toPath()) &&
+                    FileDownloadIndexStore.isSafeName(file.name) &&
+                    (file.name.endsWith(".mp3") || file.name.endsWith(".mp3$PartSuffix"))
+            }
+            .associate { it.name to it.length() }
 
     /**
      * Whether there is room for [bytes], keeping a margin.
@@ -159,7 +193,11 @@ class DownloadStorage(
          * token, and so a test can build one from two strings.
          */
         fun forIdentity(identity: StorageIdentity, dataDir: File = AppDirectories.dataDir()): DownloadStorage =
-            DownloadStorage(File(downloadsRoot(dataDir), identity.relativePath))
+            downloadsRoot(dataDir).let { downloads ->
+                val server = File(downloads, identity.serverKey)
+                val account = File(server, identity.accountKey)
+                DownloadStorage(account, listOf(downloads, server, account))
+            }
     }
 }
 

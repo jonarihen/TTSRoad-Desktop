@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.desktop.data
 
 import dk.perspektiva.ttsroad.desktop.FakeRepository
+import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -14,6 +15,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 
 /**
  * The cache is what makes browsing survive navigation, so these tests are about *timing and
@@ -22,6 +24,9 @@ import org.junit.jupiter.api.Test
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class LibraryCacheTest {
+
+    @TempDir
+    lateinit var tempDir: File
 
     private fun library(vararg titles: String) = LibraryResponse(
         fictions = titles.mapIndexed { index, title -> FictionSummary(id = index + 1, title = title) },
@@ -59,6 +64,45 @@ class LibraryCacheTest {
         runCurrent()
 
         assertEquals(1, repository.libraryCalls)
+        cache.close()
+    }
+
+    @Test
+    fun `a restart can browse cached library and chapters while the server is offline`() = runTest {
+        val fiction = FictionSummary(id = 7, title = "Cached serial")
+        val library = LibraryResponse(fictions = listOf(fiction))
+        val chapters = ChaptersResponse(
+            fiction = fiction,
+            total = 1,
+            chapters = listOf(
+                ChapterSummary(
+                    id = 101,
+                    fictionId = 7,
+                    title = "Cached chapter",
+                    audio = AudioInfo(url = "/audio/101.mp3"),
+                ),
+            ),
+        )
+        val disk = LibraryDiskCache(File(tempDir, "metadata"))
+        disk.storeLibrary(library, 1_000)
+        disk.storeChapters(7, chapters, 2_000)
+        val repository = FakeRepository(
+            libraryResult = Result.failure(IllegalStateException("server offline")),
+            chaptersResult = Result.failure(IllegalStateException("server offline")),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler)) { 3_000L }
+            .attachDiskCache { disk }
+
+        cache.ensureLibrary()
+        cache.ensureChapters(7)
+        runCurrent()
+
+        assertEquals("Cached serial", cache.library.value.value?.fictions?.single()?.title)
+        assertEquals(1_000L, cache.library.value.lastSuccessMillis)
+        assertEquals("server offline", cache.library.value.error)
+        assertEquals("Cached chapter", cache.chapters(7).value.value?.chapters?.single()?.title)
+        assertEquals(2_000L, cache.chapters(7).value.lastSuccessMillis)
+        assertEquals("server offline", cache.chapters(7).value.error)
         cache.close()
     }
 

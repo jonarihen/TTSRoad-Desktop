@@ -23,11 +23,13 @@ import dk.perspektiva.ttsroad.desktop.data.SessionEnd
 import dk.perspektiva.ttsroad.desktop.data.SessionEndReason
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
+import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinator
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 /**
  * End-to-end-ish Compose smoke tests for the screens Phase 0 must not break: the login gate, the
@@ -38,6 +40,23 @@ class ScreensUiTest {
 
     @get:Rule
     val compose = createComposeRule()
+
+    @get:Rule
+    val files = TemporaryFolder()
+
+    private fun testDownloads(
+        store: dk.perspektiva.ttsroad.desktop.data.SessionStore,
+        client: okhttp3.OkHttpClient,
+        repository: dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository,
+        dispatchers: dk.perspektiva.ttsroad.desktop.di.AppDispatchers,
+    ) = DownloadCoordinator(
+        store,
+        client,
+        repository,
+        dataDir = files.root.resolve("data"),
+        cacheDir = files.root.resolve("cache"),
+        dispatcher = dispatchers.io,
+    )
 
     private fun container(
         session: SessionState,
@@ -51,6 +70,7 @@ class ScreensUiTest {
         // ~/.config/TTSRoad files the production stores default to.
         playbackPreferences = InMemoryPlaybackPreferencesStore(),
         playbackHistory = InMemoryPlaybackHistoryStore(),
+        downloadCoordinatorFactory = ::testDownloads,
     )
 
     // --- App: the login gate --------------------------------------------------------------
@@ -150,6 +170,7 @@ class ScreensUiTest {
             // ~/.config/TTSRoad files the production stores default to.
             playbackPreferences = InMemoryPlaybackPreferencesStore(),
             playbackHistory = InMemoryPlaybackHistoryStore(),
+            downloadCoordinatorFactory = ::testDownloads,
         )
         compose.setContent { TtsRoadTheme { App(app) } }
         compose.waitForIdle()
@@ -227,6 +248,7 @@ class ScreensUiTest {
             // ~/.config/TTSRoad files the production stores default to.
             playbackPreferences = InMemoryPlaybackPreferencesStore(),
             playbackHistory = InMemoryPlaybackHistoryStore(),
+            downloadCoordinatorFactory = ::testDownloads,
         )
         compose.setContent { TtsRoadTheme { App(app) } }
         compose.waitForIdle()

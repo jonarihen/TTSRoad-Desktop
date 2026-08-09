@@ -128,6 +128,7 @@ class AppContainer(
         index = downloads::indexOrNull,
         storage = downloads::storageOrNull,
         network = mediaSourceFactory(httpClient, repository),
+        streamingCache = downloads::streamingCacheOrNull,
     )
     val audioEngine: PlaybackEngine = audioEngineFactory()
     /**
@@ -187,6 +188,7 @@ class AppContainer(
      * emptied by `App` when the session ends.
      */
     val libraryCache: LibraryCache = libraryCacheFactory(repository, dispatchers, clock)
+        .attachDiskCache(downloads::libraryCacheOrNull)
 
     /** Remembered window size/position/maximised state. Never holds anything transient or secret. */
     val windowPreferences: WindowPreferencesStore = windowPreferencesStore

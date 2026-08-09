@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -28,6 +29,7 @@ class DownloadCoordinatorTest {
         client = OkHttpClient(),
         repository = FakeRepository(),
         dataDir = tempDir,
+        cacheDir = File(tempDir, "cache"),
     )
 
     private fun signedIn(server: String = "https://host.example/", user: String = "alice") =
@@ -92,9 +94,10 @@ class DownloadCoordinatorTest {
         val root = session.storage.root
 
         store.clearToken()
-        // `clearToken` keeps the server hint, which is what the login screen prefills from; the
-        // account is still identified, so the stack stays addressable.
+        // `clearToken` keeps login hints, but those are not authority to open account-protected
+        // metadata. The live stack goes away while its bytes stay on disk.
         assertTrue(root.resolve("1.mp3").isFile, "signing out deleted a download")
+        assertNull(coordinator.refresh(), "signed-out hints exposed the account's download index")
 
         store.save(signedIn())
         assertEquals(root.path, coordinator.refresh()!!.storage.root.path)
@@ -127,6 +130,57 @@ class DownloadCoordinatorTest {
         val session = coordinator.refresh()!!
 
         assertEquals(session.storage.root, session.indexFileParent())
+        coordinator.close()
+    }
+
+    @Test
+    fun `settings totals measure files by fiction and keep cache cleanup separate`() = runBlocking {
+        val coordinator = coordinator(InMemorySessionStore(signedIn()))
+        val session = coordinator.refresh()!!
+        session.storage.resolve("1.mp3").writeBytes(ByteArray(100))
+        session.storage.resolve("2.mp3").writeBytes(ByteArray(200))
+        session.index.put(
+            DownloadEntry(
+                chapterId = 1,
+                fictionId = 7,
+                fictionTitle = "A Serial",
+                chapterTitle = "One",
+                state = DownloadState.Downloaded,
+                bytesDownloaded = 100,
+                fileName = "1.mp3",
+            ),
+        )
+        session.index.put(
+            DownloadEntry(
+                chapterId = 2,
+                fictionId = 7,
+                fictionTitle = "A Serial",
+                chapterTitle = "Two",
+                state = DownloadState.Downloaded,
+                bytesDownloaded = 200,
+                fileName = "2.mp3",
+            ),
+        )
+        val cached = File(session.streamingCache.root, "9.mp3")
+        cached.parentFile.mkdirs()
+        cached.writeBytes(ByteArray(1024).also { bytes ->
+            bytes[0] = 'I'.code.toByte()
+            bytes[1] = 'D'.code.toByte()
+            bytes[2] = '3'.code.toByte()
+        })
+
+        val measured = coordinator.summary()
+        assertEquals(300L, measured.downloadBytes)
+        assertEquals(2, measured.downloadedChapters)
+        assertEquals(OfflineFictionUsage(7, "A Serial", 300, 2), measured.fictions.single())
+        assertEquals(1024L, measured.streamingCacheBytes)
+
+        coordinator.deleteAllDownloads()
+        assertEquals(0L, coordinator.summary().downloadBytes)
+        assertEquals(1024L, coordinator.summary().streamingCacheBytes, "deleting downloads cleared cache too")
+
+        coordinator.clearStreamingCache()
+        assertEquals(0L, coordinator.summary().streamingCacheBytes)
         coordinator.close()
     }
 

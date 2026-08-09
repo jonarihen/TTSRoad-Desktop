@@ -127,7 +127,12 @@ class ChapterDownloader(
 
         client.newCall(request).execute().use { response ->
             if (response.code == 401) {
-                throw SessionExpiredDownloadException(parseSessionEnd(response.body.string()).message)
+                val end = parseSessionEnd(response.body.string())
+                // A download uses the same credential as API and playback calls. Treating this as
+                // a row-local failure would leave a revoked session browsing normally until its
+                // next request happened to notice; end it at the first authoritative 401.
+                repository.endSession(end)
+                throw SessionExpiredDownloadException(end.message)
             }
             if (response.code == 404 || response.code == 410) {
                 throw GoneException("This chapter is no longer on the server")
@@ -148,6 +153,9 @@ class ChapterDownloader(
 
             var written = startAt
             RandomAccessFile(part, "rw").use { file ->
+                if (!SecureFiles.restrictToOwner(part.toPath())) {
+                    throw IOException("Could not make the partial download owner-only")
+                }
                 file.seek(startAt)
                 if (!appending) file.setLength(0)
 

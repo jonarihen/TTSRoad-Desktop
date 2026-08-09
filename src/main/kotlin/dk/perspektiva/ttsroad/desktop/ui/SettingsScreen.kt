@@ -72,6 +72,9 @@ import dk.perspektiva.ttsroad.desktop.data.VolumeBoost
 import dk.perspektiva.ttsroad.desktop.data.formatExpiresIn
 import dk.perspektiva.ttsroad.desktop.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.desktop.data.redactSecrets
+import dk.perspektiva.ttsroad.desktop.download.OfflineStorageSummary
+import dk.perspektiva.ttsroad.desktop.download.OfflineStorageController
+import dk.perspektiva.ttsroad.desktop.download.UnavailableOfflineStorageController
 
 private val NavPaneWidth = 220.dp
 
@@ -86,8 +89,9 @@ private val NavPaneWidth = 220.dp
 fun SettingsScreen(
     sessionStore: SessionStore,
     repository: TtsRoadRepository,
-    holder: SettingsStateHolder = rememberStateHolder(repository, sessionStore) {
-        SettingsStateHolder(repository, sessionStore)
+    offlineStorage: OfflineStorageController = UnavailableOfflineStorageController,
+    holder: SettingsStateHolder = rememberStateHolder(repository, sessionStore, offlineStorage) {
+        SettingsStateHolder(repository, sessionStore, offlineStorage = offlineStorage)
     },
     /**
      * Reported whenever the open pane changes, so the caller can keep its own idea of "where am I"
@@ -119,6 +123,7 @@ fun SettingsScreen(
         when (ui.section) {
             SettingsSection.Account -> holder.verifyAccount()
             SettingsSection.Devices -> holder.ensureDevicesLoaded()
+            SettingsSection.Offline -> holder.ensureOfflineLoaded()
             else -> Unit
         }
     }
@@ -146,7 +151,7 @@ fun SettingsScreen(
                         SettingsSection.Account -> AccountPane(ui, session, capabilities, sessionStore, holder, selectSection, nowMs)
                         SettingsSection.Devices -> DevicesPane(ui, session, holder, nowMs)
                         SettingsSection.Playback -> PlaybackPane(preferences, canChangeSpeed, canSkipSilence)
-                        SettingsSection.Offline -> OfflinePane()
+                        SettingsSection.Offline -> OfflinePane(ui.offline, holder)
                         SettingsSection.About -> AboutPane(session, capabilities, sessionStore)
                     }
                 }
@@ -203,6 +208,20 @@ private fun confirmationCopy(confirmation: SettingsConfirmation): ConfirmationCo
         // Not just "SIGN OUT": the button that opened this dialog says that, and a confirmation
         // whose answer is worded identically to the thing you just pressed is not a confirmation.
         confirmLabel = "SIGN OUT THIS DEVICE",
+    )
+
+    SettingsConfirmation.DeleteAllDownloads -> ConfirmationCopy(
+        title = "DELETE ALL DOWNLOADS",
+        body = "Every chapter you explicitly downloaded for this account will be removed. " +
+            "This cannot be undone; streamed cache data is not affected.",
+        confirmLabel = "DELETE DOWNLOADS",
+    )
+
+    SettingsConfirmation.ClearStreamingCache -> ConfirmationCopy(
+        title = "CLEAR STREAMING CACHE",
+        body = "Rebuildable audio retained while listening will be removed. Your explicit " +
+            "downloads stay available offline.",
+        confirmLabel = "CLEAR CACHE",
     )
 }
 
@@ -687,14 +706,100 @@ private fun ToggleRow(
 }
 
 @Composable
-private fun OfflinePane() {
-    PaneTitle("Offline", "Not available yet")
-    InfoCard(
-        "Offline downloads are not part of this build. Nothing is stored for offline use, so " +
-            "there is no download cache to size or clear here — and signing out cannot delete " +
-            "anything you asked to keep. Chapters are streamed to a temporary file that is removed " +
-            "when playback moves on.",
+private fun OfflinePane(state: OfflineStorageUiState, holder: SettingsStateHolder) {
+    PaneTitle("Offline", "Requested downloads and rebuildable streaming data")
+
+    state.error?.let { error ->
+        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+        OutlinedButton(
+            onClick = holder::refreshOffline,
+            enabled = !state.isLoading && !state.isBusy,
+            shape = RectangleShape,
+        ) { Text("RETRY") }
+    }
+    state.notice?.let { InfoCard(it) }
+
+    val summary = state.loaded
+    when {
+        state.isInitialLoad -> InfoCard("Measuring offline storage…")
+        summary == null || !summary.available -> InfoCard(
+            "Offline storage is unavailable for this session. No account-protected download " +
+                "metadata is opened while signed out or when a private data directory cannot be used.",
+        )
+        else -> OfflineStorageContent(summary, state.isBusy, holder)
+    }
+}
+
+@Composable
+private fun OfflineStorageContent(
+    summary: OfflineStorageSummary,
+    busy: Boolean,
+    holder: SettingsStateHolder,
+) {
+    SettingsCard {
+        SettingRow(
+            "Requested downloads",
+            "${formatStorageBytes(summary.downloadBytes)} · ${summary.downloadedChapters} complete",
+        )
+        RowDivider()
+        SettingRow(
+            "Streaming cache",
+            "${formatStorageBytes(summary.streamingCacheBytes)} · ${summary.streamingCacheFiles} chapters",
+        )
+    }
+
+    MetaText(text = "// By fiction", color = AarisColor.Accent)
+    SettingsCard {
+        if (summary.fictions.isEmpty()) {
+            MetaText("No requested audio occupies disk for this account.")
+        } else {
+            summary.fictions.forEachIndexed { index, fiction ->
+                if (index > 0) RowDivider()
+                SettingRow(
+                    fiction.title,
+                    "${formatStorageBytes(fiction.bytes)} · ${fiction.chapters} chapters",
+                )
+            }
+        }
+    }
+
+    MetaText(
+        "Signing out keeps requested downloads on disk, but closes this account's titles and " +
+            "index until the same account signs in again. Streaming data is cache and may be evicted.",
     )
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = holder::askDeleteAllDownloads,
+            enabled = !busy && summary.downloadBytes > 0L,
+            shape = RectangleShape,
+        ) { Text("DELETE ALL DOWNLOADS") }
+        OutlinedButton(
+            onClick = holder::askClearStreamingCache,
+            enabled = !busy && summary.streamingCacheBytes > 0L,
+            shape = RectangleShape,
+        ) { Text("CLEAR STREAMING CACHE") }
+        OutlinedButton(
+            onClick = holder::refreshOffline,
+            enabled = !busy,
+            shape = RectangleShape,
+        ) { Text("REFRESH") }
+    }
+}
+
+/** Binary storage units, stable and locale-independent so Settings and tests agree exactly. */
+fun formatStorageBytes(bytes: Long): String {
+    val safe = bytes.coerceAtLeast(0L)
+    if (safe < 1024L) return "$safe B"
+    val units = listOf("KiB", "MiB", "GiB", "TiB")
+    var value = safe.toDouble()
+    var unit = -1
+    do {
+        value /= 1024.0
+        unit++
+    } while (value >= 1024.0 && unit < units.lastIndex)
+    val pattern = if (value >= 10.0) "%.0f %s" else "%.1f %s"
+    return String.format(java.util.Locale.ROOT, pattern, value, units[unit])
 }
 
 // --- Updates & About -----------------------------------------------------------------------

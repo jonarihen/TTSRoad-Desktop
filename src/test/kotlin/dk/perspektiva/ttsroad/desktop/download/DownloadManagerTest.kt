@@ -228,6 +228,28 @@ class DownloadManagerTest {
     }
 
     @Test
+    fun `cancelling releases partial disk space rather than leaving an invisible file`() = runBlocking {
+        storage.resolve("1.mp3.part").writeBytes(ByteArray(2048))
+        index.put(
+            DownloadEntry(
+                chapterId = 1,
+                fictionId = 7,
+                fictionTitle = "A Serial",
+                chapterTitle = "Chapter 1",
+                state = DownloadState.Queued,
+                bytesDownloaded = 2048,
+                fileName = "1.mp3",
+            ),
+        )
+        val manager = manager()
+
+        manager.cancel(1)
+        awaitGone(1)
+
+        assertFalse(storage.resolve("1.mp3.part").exists())
+    }
+
+    @Test
     fun `delete all clears the index and the directory`() = runBlocking {
         repeat(3) { server.enqueue(audioResponse(mp3Bytes())) }
 

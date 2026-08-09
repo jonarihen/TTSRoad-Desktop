@@ -6,6 +6,7 @@ import dk.perspektiva.ttsroad.desktop.player.MediaSourceFactory
 import dk.perspektiva.ttsroad.desktop.player.MediaStream
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -41,7 +42,7 @@ class OfflineFirstMediaSourceTest {
             fictionTitle = "A Serial",
             chapterTitle = "Chapter $chapterId",
             state = state,
-            bytesDownloaded = 16,
+            bytesDownloaded = 2048,
             fileName = fileName,
             updatedAtMs = 1,
         )
@@ -54,7 +55,12 @@ class OfflineFirstMediaSourceTest {
     @Test
     fun `a downloaded chapter plays from disk with the server unreachable`() {
         val storage = storage()
-        storage.resolve("1.mp3").writeBytes(ByteArray(16) { 7 })
+        val audio = ByteArray(2048) { 7 }.also {
+            it[0] = 'I'.code.toByte()
+            it[1] = 'D'.code.toByte()
+            it[2] = '3'.code.toByte()
+        }
+        storage.resolve("1.mp3").writeBytes(audio)
         val index = InMemoryDownloadIndexStore(listOf(entry(1, DownloadState.Downloaded)))
         val network = UnreachableNetwork()
 
@@ -66,7 +72,7 @@ class OfflineFirstMediaSourceTest {
         source.open().use { stream ->
             val buffer = ByteArray(16)
             assertEquals(16, stream.read(buffer, 0, 16))
-            assertTrue(buffer.all { it == 7.toByte() })
+            assertEquals("ID3", buffer.copyOfRange(0, 3).toString(Charsets.US_ASCII))
         }
     }
 
@@ -120,6 +126,20 @@ class OfflineFirstMediaSourceTest {
         OfflineFirstMediaSourceFactory({ index }, { storage }, network).create(1, "/audio/s/1.mp3")
 
         assertEquals(1, network.calls)
+    }
+
+    @Test
+    fun `a corrupt completed file is removed and streamed rather than repeatedly advertised offline`() {
+        val storage = storage()
+        storage.resolve("1.mp3").writeBytes(ByteArray(2048) { '<'.code.toByte() })
+        val index = InMemoryDownloadIndexStore(listOf(entry(1, DownloadState.Downloaded)))
+        val network = UnreachableNetwork()
+
+        OfflineFirstMediaSourceFactory({ index }, { storage }, network).create(1, "/audio/s/1.mp3")
+
+        assertEquals(1, network.calls)
+        assertFalse(storage.resolve("1.mp3").exists())
+        assertNull(DownloadIndex.find(index.entries.value, 1))
     }
 
     @Test

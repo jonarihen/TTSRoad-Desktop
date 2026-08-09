@@ -107,6 +107,20 @@ class DownloadStorageTest {
     }
 
     @Test
+    fun `a symlinked storage root is refused before any file can be written through it`() {
+        val outside = File(tempDir, "outside").apply { mkdirs() }
+        val marker = File(outside, "keep.txt").apply { writeText("keep") }
+        val link = File(tempDir, "linked-downloads")
+        val created = runCatching { Files.createSymbolicLink(link.toPath(), outside.toPath()) }
+        assumeTrue(created.isSuccess, "this filesystem does not allow symlinks")
+
+        val storage = DownloadStorage(link)
+        assertFalse(storage.prepare())
+        storage.deleteAll()
+        assertEquals("keep", marker.readText(), "delete-all followed the refused storage root")
+    }
+
+    @Test
     fun `resolving a normal name gives a path inside the root`() {
         val storage = storage()
         val resolved = storage.resolve("512-a1b2.mp3")

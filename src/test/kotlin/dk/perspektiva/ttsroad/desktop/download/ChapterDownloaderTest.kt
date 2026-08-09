@@ -74,6 +74,11 @@ class ChapterDownloaderTest {
             override fun authHeaderValue(): String? = sessionStore.current().authorizationHeader
             override fun resolveUrl(url: String): String =
                 if (url.startsWith("http")) url else server.url("/").toString().trimEnd('/') + url
+
+            override suspend fun endSession(end: dk.perspektiva.ttsroad.desktop.data.SessionEnd) {
+                super.endSession(end)
+                sessionStore.clearToken()
+            }
         }
         return ChapterDownloader(authedClient(sessionStore), repository, storage, validator)
     }
@@ -212,6 +217,7 @@ class ChapterDownloaderTest {
 
         assertIs<DownloadResult.Failed>(result)
         assertIs<DownloadFailure.SessionExpired>(result.failure)
+        assertFalse(sessionStore.current().isLoggedIn, "the authoritative 401 left the session live")
     }
 
     @Test

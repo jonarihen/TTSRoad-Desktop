@@ -12,6 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -98,13 +99,17 @@ class DownloadManager(
     /**
      * Cancels an in-flight or queued download.
      *
-     * The `.part` file is deliberately left alone: cancelling is "not now", not "throw away the
-     * 40 MB I already fetched", and a later retry resumes from it. Deleting is [remove].
+     * Cancellation waits for the worker to release its file/network handles, then removes the
+     * partial. A crash or network interruption remains resumable; an explicit user Cancel is the
+     * instruction to release both the handle and the disk space.
      */
     fun cancel(chapterId: Int) {
-        jobs.remove(chapterId)?.cancel()
+        val job = jobs.remove(chapterId)
+        job?.cancel()
         val entry = DownloadIndex.find(index.entries.value, chapterId) ?: return
-        if (entry.state.isActive) index.remove(chapterId)
+        if (!entry.state.isActive) return
+        index.put(entry.copy(state = DownloadState.Removing, updatedAtMs = clock()))
+        removeAfterWorker(entry, job)
     }
 
     /**
@@ -114,14 +119,33 @@ class DownloadManager(
      * flicker back to "Download" while a large file is being unlinked.
      */
     fun remove(chapterId: Int) {
-        jobs.remove(chapterId)?.cancel()
+        val job = jobs.remove(chapterId)
+        job?.cancel()
         val entry = DownloadIndex.find(index.entries.value, chapterId) ?: return
         index.put(entry.copy(state = DownloadState.Removing, updatedAtMs = clock()))
-        scope.launch {
-            runCatching { storage.delete(entry.fileName) }
+        removeAfterWorker(entry, job)
+    }
+
+    private fun removeAfterWorker(entry: DownloadEntry, job: Job?) {
+        val cleanup = scope.launch {
+            job?.join()
+            val deleted = runCatching { storage.delete(entry.fileName) }
                 .onFailure { AppLog.warn("could not delete a download", it) }
-            index.remove(chapterId)
+                .getOrDefault(false)
+            if (deleted) {
+                index.remove(entry.chapterId)
+            } else {
+                index.put(
+                    entry.copy(
+                        state = if (entry.isOffline) DownloadState.Downloaded else DownloadState.Failed,
+                        failureMessage = "Could not remove the local file",
+                        updatedAtMs = clock(),
+                    ),
+                )
+            }
         }
+        jobs[entry.chapterId] = cleanup
+        cleanup.invokeOnCompletion { jobs.remove(entry.chapterId, cleanup) }
     }
 
     /**
@@ -135,7 +159,9 @@ class DownloadManager(
 
     /** Deletes every download for this account and returns the bytes reclaimed. */
     suspend fun deleteAll(): Long {
-        jobs.values.forEach { it.cancel() }
+        val active = jobs.values.toList()
+        active.forEach { it.cancel() }
+        active.joinAll()
         jobs.clear()
         val freed = runCatching { storage.deleteAll() }.getOrDefault(0L)
         index.clear()

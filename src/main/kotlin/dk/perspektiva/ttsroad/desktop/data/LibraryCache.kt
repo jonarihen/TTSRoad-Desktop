@@ -39,6 +39,17 @@ class LibraryCache(
     private val clock: () -> Long = System::currentTimeMillis,
 ) : AutoCloseable {
 
+    @Volatile private var diskCache: () -> LibraryDiskCache? = { null }
+
+    /**
+     * Attaches the account-scoped rebuildable store after the composition root has built downloads.
+     * Kept as an attachment rather than a constructor argument so existing isolated caches remain
+     * memory-only by default and never touch a developer's real cache directory in tests.
+     */
+    fun attachDiskCache(supplier: () -> LibraryDiskCache?): LibraryCache = apply {
+        diskCache = supplier
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
     private val _library = MutableStateFlow(Cached<LibraryResponse>())
@@ -54,15 +65,24 @@ class LibraryCache(
     /** Opening the library screen. Reuses what is there; starts one load when there is nothing. */
     fun ensureLibrary() {
         if (_library.value.hasContent || libraryJob?.isActive == true) return
+        primeLibraryFromDisk()
+        // Cached disk content is shown immediately but still refreshed; otherwise an offline
+        // snapshot would become permanent merely because it existed.
         refreshLibrary()
     }
 
     /** The explicit Refresh action. Always re-asks, cancelling any load already running. */
     fun refreshLibrary() {
         libraryJob?.cancel()
+        if (!_library.value.hasContent) primeLibraryFromDisk()
         _library.update { it.copy(isRefreshing = true, error = null) }
+        val persistent = diskCache()
         libraryJob = scope.launch {
-            load(_library, "Could not load library") { repository.library() }
+            load(
+                state = _library,
+                fallback = "Could not load library",
+                onLoaded = { value, savedAt -> persistent?.storeLibrary(value, savedAt) },
+            ) { repository.library() }
         }
     }
 
@@ -72,16 +92,24 @@ class LibraryCache(
     fun chapters(fictionId: Int): StateFlow<Cached<ChaptersResponse>> = chapterState(fictionId).asStateFlow()
 
     fun ensureChapters(fictionId: Int) {
-        if (chapterState(fictionId).value.hasContent || chapterJobs[fictionId]?.isActive == true) return
+        val state = chapterState(fictionId)
+        if (state.value.hasContent || chapterJobs[fictionId]?.isActive == true) return
+        primeChaptersFromDisk(fictionId, state)
         refreshChapters(fictionId)
     }
 
     fun refreshChapters(fictionId: Int) {
         chapterJobs[fictionId]?.cancel()
         val state = chapterState(fictionId)
+        if (!state.value.hasContent) primeChaptersFromDisk(fictionId, state)
         state.update { it.copy(isRefreshing = true, error = null) }
+        val persistent = diskCache()
         chapterJobs[fictionId] = scope.launch {
-            load(state, "Could not load chapters") { repository.chapters(fictionId) }
+            load(
+                state = state,
+                fallback = "Could not load chapters",
+                onLoaded = { value, savedAt -> persistent?.storeChapters(fictionId, value, savedAt) },
+            ) { repository.chapters(fictionId) }
         }
     }
 
@@ -239,9 +267,25 @@ class LibraryCache(
     private fun optionState(fictionId: Int): MutableStateFlow<ChapterListOptions> =
         chapterOptions.getOrPut(fictionId) { MutableStateFlow(ChapterListOptions()) }
 
+    private fun primeLibraryFromDisk() {
+        val stored = diskCache()?.loadLibrary() ?: return
+        if (_library.value.hasContent) return
+        _library.value = Cached(value = stored.value, lastSuccessMillis = stored.savedAtMillis)
+    }
+
+    private fun primeChaptersFromDisk(
+        fictionId: Int,
+        state: MutableStateFlow<Cached<ChaptersResponse>>,
+    ) {
+        val stored = diskCache()?.loadChapters(fictionId) ?: return
+        if (state.value.hasContent) return
+        state.value = Cached(value = stored.value, lastSuccessMillis = stored.savedAtMillis)
+    }
+
     private suspend fun <T> load(
         state: MutableStateFlow<Cached<T>>,
         fallback: String,
+        onLoaded: (T, Long) -> Unit = { _, _ -> },
         block: suspend () -> T,
     ) {
         val result = runCatching { block() }
@@ -249,7 +293,11 @@ class LibraryCache(
         // otherwise the answer to a request the user has already replaced lands on screen.
         coroutineContext.ensureActive()
         result
-            .onSuccess { value -> state.value = Cached(value = value, lastSuccessMillis = clock()) }
+            .onSuccess { value ->
+                val savedAt = clock()
+                state.value = Cached(value = value, lastSuccessMillis = savedAt)
+                onLoaded(value, savedAt)
+            }
             .onFailure { failure ->
                 state.update {
                     it.copy(isRefreshing = false, error = userFacingMessage(failure, fallback))

@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.desktop.download
 
 import dk.perspektiva.ttsroad.desktop.data.AppDirectories
 import dk.perspektiva.ttsroad.desktop.data.AppLog
+import dk.perspektiva.ttsroad.desktop.data.LibraryDiskCache
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.StorageIdentity
@@ -14,6 +15,37 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 
+/** One fiction's measured user-requested audio on disk. */
+data class OfflineFictionUsage(
+    val fictionId: Int,
+    val title: String,
+    val bytes: Long,
+    val chapters: Int,
+)
+
+/** What Settings can say without exposing any other account's metadata. */
+data class OfflineStorageSummary(
+    val available: Boolean = false,
+    val downloadBytes: Long = 0L,
+    val downloadedChapters: Int = 0,
+    val streamingCacheBytes: Long = 0L,
+    val streamingCacheFiles: Int = 0,
+    val fictions: List<OfflineFictionUsage> = emptyList(),
+)
+
+/** Narrow Settings seam, with an unavailable implementation for previews and isolated tests. */
+interface OfflineStorageController {
+    fun summary(): OfflineStorageSummary
+    suspend fun deleteAllDownloads(): Long
+    suspend fun clearStreamingCache(): Long
+}
+
+object UnavailableOfflineStorageController : OfflineStorageController {
+    override fun summary(): OfflineStorageSummary = OfflineStorageSummary()
+    override suspend fun deleteAllDownloads(): Long = 0L
+    override suspend fun clearStreamingCache(): Long = 0L
+}
+
 /**
  * One account's downloads: where they live, what the index says, and the queue working on them.
  *
@@ -23,6 +55,8 @@ import okhttp3.OkHttpClient
 class DownloadSession(
     val identity: StorageIdentity,
     val storage: DownloadStorage,
+    val streamingCache: StreamingCache,
+    val libraryCache: LibraryDiskCache,
     val index: DownloadIndexStore,
     val manager: DownloadManager,
 ) : AutoCloseable {
@@ -46,8 +80,9 @@ class DownloadCoordinator(
     private val client: OkHttpClient,
     private val repository: TtsRoadRepository,
     private val dataDir: File = AppDirectories.dataDir(),
+    private val cacheDir: File = AppDirectories.cacheDir(),
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
-) : AutoCloseable {
+) : AutoCloseable, OfflineStorageController {
 
     private val _current = MutableStateFlow<DownloadSession?>(null)
 
@@ -89,8 +124,56 @@ class DownloadCoordinator(
     /** The storage for the signed-in account, refreshed. */
     fun storageOrNull(): DownloadStorage? = refresh()?.storage
 
+    /** Rebuildable streamed audio for the signed-in account, refreshed. */
+    fun streamingCacheOrNull(): StreamingCache? = refresh()?.streamingCache
+
+    /** Rebuildable library/chapter metadata for the signed-in account only. */
+    fun libraryCacheOrNull(): LibraryDiskCache? = refresh()?.libraryCache
+
+    /**
+     * Measures the current account only. A signed-out username/server hint is deliberately not
+     * enough authority to open its index, and another account's fiction titles are never listed.
+     */
+    override fun summary(): OfflineStorageSummary {
+        val session = refresh() ?: return OfflineStorageSummary()
+        val files = session.storage.audioFileBytes()
+        val entries = session.index.entries.value
+        val byFiction = entries.groupBy { it.fictionId }.mapNotNull { (fictionId, rows) ->
+            val sizes = rows.associateWith { entry ->
+                files[entry.fileName].orZero() + files[entry.fileName + DownloadStorage.PartSuffix].orZero()
+            }
+            val bytes = sizes.values.sum()
+            val chapters = sizes.count { it.value > 0L }
+            if (bytes <= 0L && chapters == 0) return@mapNotNull null
+            OfflineFictionUsage(
+                fictionId = fictionId,
+                title = rows.firstNotNullOfOrNull { it.fictionTitle.takeIf(String::isNotBlank) }
+                    ?: "Fiction $fictionId",
+                bytes = bytes,
+                chapters = chapters,
+            )
+        }.sortedByDescending { it.bytes }
+        val stream = session.streamingCache.stats()
+        return OfflineStorageSummary(
+            available = true,
+            downloadBytes = files.values.sum(),
+            downloadedChapters = entries.count { entry ->
+                entry.isOffline && files[entry.fileName].orZero() > 0L
+            },
+            streamingCacheBytes = stream.bytes,
+            streamingCacheFiles = stream.files,
+            fictions = byFiction,
+        )
+    }
+
+    override suspend fun deleteAllDownloads(): Long = refresh()?.manager?.deleteAll() ?: 0L
+
+    override suspend fun clearStreamingCache(): Long = refresh()?.streamingCache?.clear() ?: 0L
+
+    private fun Long?.orZero(): Long = this ?: 0L
+
     private fun identityOf(session: SessionState): StorageIdentity? {
-        if (session.serverUrl.isBlank()) return null
+        if (!session.isLoggedIn || session.serverUrl.isBlank()) return null
         return StorageIdentity.of(
             connectUrl = session.serverUrl,
             // The advertised identity would be better still and is what StorageIdentity prefers;
@@ -120,12 +203,25 @@ class DownloadCoordinator(
     private fun build(identity: StorageIdentity): DownloadSession {
         val storage = DownloadStorage.forIdentity(identity, dataDir)
         if (!storage.prepare()) {
-            AppLog.warn("the download directory could not be made owner-only")
+            error("the download directory could not be made owner-only")
         }
         val index = FileDownloadIndexStore(storage.indexFile)
         val downloader = ChapterDownloader(client, repository, storage)
         val manager = DownloadManager(downloader, storage, index, dispatcher)
-        return DownloadSession(identity, storage, index, manager)
+        index.entries.value.filter { it.state == DownloadState.Removing }
+            .forEach { manager.remove(it.chapterId) }
+        val streamingCache = StreamingCache.forIdentity(identity, cacheDir)
+        val libraryCache = LibraryDiskCache.forIdentity(identity, cacheDir)
+        // Interrupted rows are already Queued after index recovery. Cached chapter metadata gives
+        // them their live URL again without waiting for the user to open every fiction manually.
+        val pendingFictions = DownloadIndex.pending(index.entries.value).map { it.fictionId }.toSet()
+        val cachedChapters = pendingFictions.mapNotNull(libraryCache::loadChapters)
+        manager.resumePending(
+            chaptersById = cachedChapters.flatMap { it.value.chapters }
+                .associateBy { it.resolvedChapterId },
+            fictionTitles = cachedChapters.associate { it.value.fiction.id to it.value.fiction.title },
+        )
+        return DownloadSession(identity, storage, streamingCache, libraryCache, index, manager)
     }
 
     private fun closeCurrent() {

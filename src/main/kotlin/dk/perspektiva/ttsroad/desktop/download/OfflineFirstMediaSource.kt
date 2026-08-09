@@ -4,6 +4,7 @@ import dk.perspektiva.ttsroad.desktop.data.AppLog
 import dk.perspektiva.ttsroad.desktop.player.FileMediaSource
 import dk.perspektiva.ttsroad.desktop.player.MediaSource
 import dk.perspektiva.ttsroad.desktop.player.MediaSourceFactory
+import java.io.File
 
 /**
  * Plays a downloaded chapter from disk, and anything else from the network.
@@ -21,11 +22,16 @@ class OfflineFirstMediaSourceFactory(
     private val index: () -> DownloadIndexStore?,
     private val storage: () -> DownloadStorage?,
     private val network: MediaSourceFactory,
+    private val streamingCache: () -> StreamingCache? = { null },
+    private val validator: DownloadValidator = Mp3HeaderValidator,
 ) : MediaSourceFactory {
 
     override fun create(chapterId: Int, url: String): MediaSource {
-        val local = localSourceFor(chapterId)
-        return local ?: network.create(chapterId, url)
+        localDownloadFor(chapterId)?.let { return it }
+        val cache = streamingCache()
+        cache?.sourceFor(chapterId)?.let { return it }
+        val remote = network.create(chapterId, url)
+        return cache?.retaining(chapterId, remote) ?: remote
     }
 
     /**
@@ -37,7 +43,7 @@ class OfflineFirstMediaSourceFactory(
      * row that turns out to be wrong is *corrected* rather than merely skipped: otherwise the UI
      * keeps offering "Offline" for a chapter that silently streams every time.
      */
-    private fun localSourceFor(chapterId: Int): MediaSource? {
+    private fun localDownloadFor(chapterId: Int): MediaSource? {
         val index = index() ?: return null
         val storage = storage() ?: return null
         val entry = DownloadIndex.find(index.entries.value, chapterId)?.takeIf { it.isOffline } ?: return null
@@ -46,8 +52,9 @@ class OfflineFirstMediaSourceFactory(
             .onFailure { AppLog.warn("a download entry named an unusable file", it) }
             .getOrNull()
 
-        if (file == null || !file.isFile || file.length() <= 0L) {
-            AppLog.warn("download ${entry.fileName} is missing; streaming this chapter instead")
+        if (file == null || !file.isFile || file.length() <= 0L || !validator.looksDecodable(file)) {
+            AppLog.warn("download ${entry.fileName} is missing or corrupt; streaming this chapter instead")
+            file?.takeIf(File::exists)?.let { runCatching { storage.delete(entry.fileName) } }
             index.remove(chapterId)
             return null
         }

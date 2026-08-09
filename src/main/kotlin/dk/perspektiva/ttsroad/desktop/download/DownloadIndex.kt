@@ -27,15 +27,15 @@ object DownloadIndex {
      * [DownloadState.Queued] so the queue picks it up again — the `.part` file is still there and
      * the transfer resumes from where it stopped rather than from zero.
      *
-     * [DownloadState.Removing] is the opposite case: a delete was interrupted, so the file may or
-     * may not still exist and the row is no longer wanted either way. It is dropped, and the
-     * reconciliation against the filesystem below removes whatever is left.
+     * [DownloadState.Removing] is kept so startup can finish the deletion. Dropping it here would
+     * lose the only safe generated filename for the leftover bytes and turn a user-requested
+     * removal into an orphan that Settings can measure but never name.
      */
     fun recoverAfterRestart(entries: List<DownloadEntry>): List<DownloadEntry> =
         entries.mapNotNull { entry ->
             when (entry.state) {
                 DownloadState.Downloading -> entry.copy(state = DownloadState.Queued)
-                DownloadState.Removing -> null
+                DownloadState.Removing -> entry
                 DownloadState.None -> null
                 else -> entry
             }

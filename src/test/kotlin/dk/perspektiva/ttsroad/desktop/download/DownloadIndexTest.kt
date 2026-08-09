@@ -47,9 +47,9 @@ class DownloadIndexTest {
     }
 
     @Test
-    fun `an interrupted delete is dropped`() {
+    fun `an interrupted delete is retained so startup can finish removing its bytes`() {
         val recovered = DownloadIndex.recoverAfterRestart(listOf(entry(1, DownloadState.Removing)))
-        assertTrue(recovered.isEmpty())
+        assertEquals(DownloadState.Removing, recovered.single().state)
     }
 
     @Test

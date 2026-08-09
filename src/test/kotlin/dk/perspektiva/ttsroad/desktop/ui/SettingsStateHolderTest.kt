@@ -8,6 +8,9 @@ import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionState
+import dk.perspektiva.ttsroad.desktop.download.OfflineFictionUsage
+import dk.perspektiva.ttsroad.desktop.download.OfflineStorageController
+import dk.perspektiva.ttsroad.desktop.download.OfflineStorageSummary
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -31,6 +34,33 @@ import org.junit.jupiter.api.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsStateHolderTest {
 
+    private class FakeOfflineStorage(
+        var current: OfflineStorageSummary = OfflineStorageSummary(available = true),
+    ) : OfflineStorageController {
+        var summaryCalls = 0
+        var deleteCalls = 0
+        var clearCalls = 0
+
+        override fun summary(): OfflineStorageSummary {
+            summaryCalls++
+            return current
+        }
+
+        override suspend fun deleteAllDownloads(): Long {
+            deleteCalls++
+            val bytes = current.downloadBytes
+            current = current.copy(downloadBytes = 0, downloadedChapters = 0, fictions = emptyList())
+            return bytes
+        }
+
+        override suspend fun clearStreamingCache(): Long {
+            clearCalls++
+            val bytes = current.streamingCacheBytes
+            current = current.copy(streamingCacheBytes = 0, streamingCacheFiles = 0)
+            return bytes
+        }
+    }
+
     private val signedIn = SessionState(
         serverUrl = "https://ttsroad.example.com/",
         token = "ttsr_token",
@@ -47,9 +77,15 @@ class SettingsStateHolderTest {
     private fun TestScope.holder(
         repository: FakeRepository,
         store: InMemorySessionStore = InMemorySessionStore(signedIn),
+        offline: OfflineStorageController = FakeOfflineStorage(),
     ): SettingsStateHolder {
         // Publishing capabilities is what a real sign-in does; the gate reads them from here.
-        val holder = SettingsStateHolder(repository, store, UnconfinedTestDispatcher(testScheduler))
+        val holder = SettingsStateHolder(
+            repository,
+            store,
+            UnconfinedTestDispatcher(testScheduler),
+            offline,
+        )
         return holder
     }
 
@@ -85,6 +121,95 @@ class SettingsStateHolderTest {
         assertEquals(3, holder.state.value.devices.loaded?.size)
         assertEquals(1, repository.devicesCalls, "re-entering a pane must not refetch")
         holder.clear()
+    }
+
+    // --- Offline storage ----------------------------------------------------------------------
+
+    @Test
+    fun `offline totals load once and retain their per-fiction breakdown`() = runTest {
+        val offline = FakeOfflineStorage(
+            OfflineStorageSummary(
+                available = true,
+                downloadBytes = 4096,
+                downloadedChapters = 2,
+                streamingCacheBytes = 1024,
+                streamingCacheFiles = 1,
+                fictions = listOf(OfflineFictionUsage(7, "A Serial", 4096, 2)),
+            ),
+        )
+        val holder = holder(FakeRepository(), offline = offline)
+
+        holder.ensureOfflineLoaded()
+        runCurrent()
+        holder.ensureOfflineLoaded()
+        runCurrent()
+
+        assertEquals(1, offline.summaryCalls)
+        assertEquals("A Serial", holder.state.value.offline.loaded?.fictions?.single()?.title)
+        holder.clear()
+    }
+
+    @Test
+    fun `download deletion and cache clearing are separate confirmed actions`() = runTest {
+        val offline = FakeOfflineStorage(
+            OfflineStorageSummary(
+                available = true,
+                downloadBytes = 4096,
+                downloadedChapters = 2,
+                streamingCacheBytes = 1024,
+                streamingCacheFiles = 1,
+                fictions = listOf(OfflineFictionUsage(7, "A Serial", 4096, 2)),
+            ),
+        )
+        val holder = holder(FakeRepository(), offline = offline)
+        holder.ensureOfflineLoaded()
+        runCurrent()
+
+        holder.askClearStreamingCache()
+        assertIs<SettingsConfirmation.ClearStreamingCache>(holder.state.value.confirmation)
+        holder.confirm()
+        runCurrent()
+
+        assertEquals(1, offline.clearCalls)
+        assertEquals(0, offline.deleteCalls)
+        assertEquals(0L, holder.state.value.offline.loaded?.streamingCacheBytes)
+        assertEquals(4096L, holder.state.value.offline.loaded?.downloadBytes)
+
+        holder.askDeleteAllDownloads()
+        assertIs<SettingsConfirmation.DeleteAllDownloads>(holder.state.value.confirmation)
+        holder.confirm()
+        runCurrent()
+
+        assertEquals(1, offline.deleteCalls)
+        assertEquals(0L, holder.state.value.offline.loaded?.downloadBytes)
+        holder.clear()
+    }
+
+    @Test
+    fun `ending the session drops account-protected offline titles from settings`() = runTest {
+        val offline = FakeOfflineStorage(
+            OfflineStorageSummary(
+                available = true,
+                downloadBytes = 1,
+                fictions = listOf(OfflineFictionUsage(7, "Private serial", 1, 1)),
+            ),
+        )
+        val holder = holder(FakeRepository(), offline = offline)
+        holder.ensureOfflineLoaded()
+        runCurrent()
+
+        holder.sessionEnded()
+
+        assertNull(holder.state.value.offline.loaded)
+        holder.clear()
+    }
+
+    @Test
+    fun `storage sizes use binary units without locale drift`() {
+        assertEquals("0 B", formatStorageBytes(0))
+        assertEquals("1.0 KiB", formatStorageBytes(1024))
+        assertEquals("1.5 KiB", formatStorageBytes(1536))
+        assertEquals("10 MiB", formatStorageBytes(10L * 1024 * 1024))
     }
 
     // --- Loading / supported -----------------------------------------------------------------
