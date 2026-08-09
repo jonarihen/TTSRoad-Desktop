@@ -100,6 +100,36 @@ object Mpris {
     fun positionMicros(state: PlayerUiState): Long =
         state.positionMs.coerceAtLeast(0L) * MicrosPerMilli
 
+    /** `CanSeek`: seeking needs a known duration, not merely a loaded chapter. */
+    fun canSeek(state: PlayerUiState): Boolean = state.hasMedia && state.durationMs > 0
+
+    /**
+     * Which player properties a state transition should announce.
+     *
+     * Pure, and here rather than in [MprisService], because *which* transitions are worth a signal
+     * is the interesting decision and the plumbing needs a session bus to instantiate. The two easy
+     * mistakes it exists to pin down:
+     *
+     * - `CanSeek` is not a function of `hasMedia`. A chapter whose API metadata carries no duration
+     *   starts unseekable and becomes seekable when the engine reports one, with `hasMedia`
+     *   unchanged the whole time. Clients cache these flags, so missing that edge leaves seeking
+     *   greyed out for the entire chapter.
+     * - `Position` is never here. The spec excludes it from `PropertiesChanged`; a discontinuity is
+     *   a `Seeked` signal instead.
+     */
+    fun changedPropertyNames(before: PlayerUiState, after: PlayerUiState): Set<String> = buildSet {
+        if (statusOf(before) != statusOf(after)) add("PlaybackStatus")
+        if (trackOf(before) != trackOf(after)) add("Metadata")
+        if (before.speed != after.speed) add("Rate")
+        if (before.hasNext != after.hasNext) add("CanGoNext")
+        if (before.hasPrevious != after.hasPrevious) add("CanGoPrevious")
+        if (before.hasMedia != after.hasMedia) {
+            add("CanPlay")
+            add("CanPause")
+        }
+        if (canSeek(before) != canSeek(after)) add("CanSeek")
+    }
+
     /**
      * Whether a seek request is worth honouring.
      *

@@ -229,39 +229,41 @@ class MprisService private constructor(
      */
     private fun startPublishing(scope: CoroutineScope) {
         publisher = scope.launch {
-            var previous: PlayerUiState? = null
-            controller.state.collect { state ->
-                val last = previous
-                previous = state
-                if (last == null) return@collect
+            launch {
+                var previous: PlayerUiState? = null
+                controller.state.collect { state ->
+                    val last = previous
+                    previous = state
+                    if (last == null) return@collect
 
-                val changed = changedProperties(last, state)
-                if (changed.isNotEmpty()) emitPropertiesChanged(changed)
-                if (isDiscontinuity(last, state)) emitSeeked(Mpris.positionMicros(state))
+                    val changed = changedProperties(last, state)
+                    if (changed.isNotEmpty()) emitPropertiesChanged(changed)
+                    if (isDiscontinuity(last, state)) emitSeeked(Mpris.positionMicros(state))
+                }
+            }
+
+            // Volume is the one published property that does not live in PlayerUiState, so the
+            // state collector above can never see it change. Without this a shell that asks for a
+            // continuous 1.5 keeps displaying 1.5 while playback actually uses the snapped 1.6 —
+            // and a boost changed in Settings never reaches the panel at all.
+            launch {
+                var previous: VolumeBoost? = null
+                preferences.preferences.collect { current ->
+                    val last = previous
+                    previous = current.volumeBoost
+                    if (last == null || last == current.volumeBoost) return@collect
+                    emitPropertiesChanged(mapOf("Volume" to Variant(current.volumeBoost.gain)))
+                }
             }
         }
     }
 
+    /** Names from the pure mapping, paired with the current wire values. */
     private fun changedProperties(before: PlayerUiState, after: PlayerUiState): Map<String, Variant<*>> {
+        val names = Mpris.changedPropertyNames(before, after)
+        if (names.isEmpty()) return emptyMap()
         val all = playerProperties()
-        return buildMap {
-            if (Mpris.statusOf(before) != Mpris.statusOf(after)) {
-                all["PlaybackStatus"]?.let { put("PlaybackStatus", it) }
-            }
-            if (Mpris.trackOf(before) != Mpris.trackOf(after)) {
-                all["Metadata"]?.let { put("Metadata", it) }
-            }
-            if (before.speed != after.speed) all["Rate"]?.let { put("Rate", it) }
-            if (before.hasNext != after.hasNext) all["CanGoNext"]?.let { put("CanGoNext", it) }
-            if (before.hasPrevious != after.hasPrevious) {
-                all["CanGoPrevious"]?.let { put("CanGoPrevious", it) }
-            }
-            if (before.hasMedia != after.hasMedia) {
-                all["CanPlay"]?.let { put("CanPlay", it) }
-                all["CanPause"]?.let { put("CanPause", it) }
-                all["CanSeek"]?.let { put("CanSeek", it) }
-            }
-        }
+        return names.mapNotNull { name -> all[name]?.let { name to it } }.toMap()
     }
 
     /**

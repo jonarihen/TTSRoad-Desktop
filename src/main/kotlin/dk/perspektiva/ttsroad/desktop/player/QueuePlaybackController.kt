@@ -243,6 +243,12 @@ class QueuePlaybackController(
 
     override fun setSleepTimer(mode: SleepTimerMode) {
         sleepTimer.arm(mode)
+        // Arming while already paused has to start out frozen. The tick loop keeps running through
+        // a pause — it is what notices the engine's events — so a timer armed at that moment would
+        // count down against silence and expire without a second of audio having played. The
+        // freeze-on-pause path cannot cover this: it ran when the user pressed pause, back when
+        // there was no deadline to freeze.
+        if (!_state.value.isPlaying) sleepTimer.onPlaybackPaused()
     }
 
     override fun extendSleepTimer() {

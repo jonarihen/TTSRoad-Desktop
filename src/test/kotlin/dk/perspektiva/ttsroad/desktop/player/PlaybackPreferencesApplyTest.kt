@@ -268,6 +268,36 @@ class PlaybackPreferencesApplyTest {
     }
 
     @Test
+    fun `a timer armed while already paused does not count down`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val clock = FakeClock()
+        val timer = SleepTimer(clock)
+        val playback = controller(engine, sleepTimer = timer, clock = clock)
+
+        playback.playQueue(listOf(chapter(1)), startChapterId = 1, fiction = null)
+        playback.await("playback to start") { it.hasMedia && it.isPlaying }
+
+        // Pause *first*, then decide to set a timer. The freeze-on-pause path already ran, back
+        // when there was no deadline to freeze, and the tick loop keeps running through a pause —
+        // so without arming into a frozen state this counts down against silence.
+        playback.togglePlayPause()
+        playback.await("the pause to land") { !it.isPlaying }
+        playback.setSleepTimer(SleepTimerMode.Duration(30))
+
+        clock.nowMs += 60 * 60_000L
+        delay(100)
+        assertTrue(playback.state.value.sleepTimer.isArmed, "the timer expired while paused")
+        assertEquals(30 * 60_000L, playback.state.value.sleepTimer.remainingMs)
+
+        // And it starts running only once audio actually resumes.
+        playback.togglePlayPause()
+        playback.await("playback to resume") { it.isPlaying }
+        clock.nowMs += 10 * 60_000L
+        delay(100)
+        assertEquals(20 * 60_000L, playback.state.value.sleepTimer.remainingMs)
+    }
+
+    @Test
     fun `stopping disarms the timer so the next chapter is not silenced`() = runBlocking {
         val engine = FakePlaybackEngine()
         val playback = controller(engine)

@@ -157,4 +157,51 @@ class MprisStateTest {
     fun `artwork is published so the desktop can draw a cover`() {
         assertEquals("https://server.example/covers/3.jpg", Mpris.trackOf(playing())?.artUrl)
     }
+
+    // --- Which transitions are announced --------------------------------------------------------
+
+    @Test
+    fun `a chapter that learns its duration announces CanSeek`() {
+        // The API gave no audio_duration, so the chapter starts unseekable; the engine reports a
+        // duration a moment later. hasMedia is true throughout, which is exactly why this edge was
+        // missed: a client that caches the flag would leave seeking greyed out for the whole
+        // chapter.
+        val unknown = playing(durationMs = 0)
+        val known = playing(durationMs = 600_000)
+
+        assertFalse(Mpris.canSeek(unknown))
+        assertTrue(Mpris.canSeek(known))
+        assertTrue("CanSeek" in Mpris.changedPropertyNames(unknown, known))
+    }
+
+    @Test
+    fun `a position tick alone announces nothing`() {
+        // Position is excluded from PropertiesChanged by the spec, so the 250 ms tick must be
+        // silent on the bus or the player becomes a signal storm.
+        val before = playing(positionMs = 61_000)
+        val after = playing(positionMs = 61_250)
+
+        assertEquals(emptySet(), Mpris.changedPropertyNames(before, after))
+    }
+
+    @Test
+    fun `pausing announces the status and nothing else`() {
+        val changed = Mpris.changedPropertyNames(playing(), playing(isPlaying = false))
+        assertEquals(setOf("PlaybackStatus"), changed)
+    }
+
+    @Test
+    fun `loading a chapter announces the transport flags and the metadata`() {
+        val changed = Mpris.changedPropertyNames(PlayerUiState(), playing())
+        assertTrue(changed.containsAll(setOf("PlaybackStatus", "Metadata", "CanPlay", "CanPause", "CanSeek")))
+    }
+
+    @Test
+    fun `changing chapter announces new metadata`() {
+        val changed = Mpris.changedPropertyNames(
+            playing(title = "Chapter 12", chapterId = 12),
+            playing(title = "Chapter 13", chapterId = 13),
+        )
+        assertTrue("Metadata" in changed)
+    }
 }
