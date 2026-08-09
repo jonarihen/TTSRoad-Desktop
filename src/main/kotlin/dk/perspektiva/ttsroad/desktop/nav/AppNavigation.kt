@@ -29,9 +29,8 @@ sealed interface Destination {
      * Carries a chapter id and a display title rather than a `ChapterSummary` because it is also
      * reachable from the player, where only the currently loaded media is known.
      *
-     * There is no read-along UI in this build — the destination exists so the back stack, its keys
-     * and its retention rules are settled before the reader phase lands, and so a Reader entry can
-     * never be confused with the Fiction entry of the same numeric id.
+     * A Reader entry is deliberately distinct from the Fiction entry with the same numeric id, so
+     * its find query, follow state, and lazy-list position have their own retained lifetime.
      */
     data class Reader(val chapterId: Int, val title: String) : Destination
 

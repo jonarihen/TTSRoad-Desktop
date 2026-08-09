@@ -144,6 +144,19 @@ class ChapterDownloaderTest {
     }
 
     @Test
+    fun `an already complete part is promoted without an impossible range request`() = runBlocking {
+        val whole = mp3Bytes()
+        File(storage.root, "1.mp3.part").writeBytes(whole)
+
+        val result = downloader().download("/audio/s/1.mp3", "1.mp3", expectedBytes = whole.size.toLong())
+
+        assertIs<DownloadResult.Success>(result)
+        assertEquals(0, server.requestCount)
+        assertContentEquals(whole, storage.resolve("1.mp3").readBytes())
+        assertFalse(File(storage.root, "1.mp3.part").exists())
+    }
+
+    @Test
     fun `a server that ignores the range header restarts instead of corrupting the file`() = runBlocking {
         // The dangerous case: we asked to resume, the server sent the whole file with a 200.
         // Appending would produce a file of the right length made of the wrong bytes.

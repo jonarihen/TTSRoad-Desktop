@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.desktop.download
 import dk.perspektiva.ttsroad.desktop.data.AppDirectories
 import dk.perspektiva.ttsroad.desktop.data.AppLog
 import dk.perspektiva.ttsroad.desktop.data.LibraryDiskCache
+import dk.perspektiva.ttsroad.desktop.data.ReadAlongDiskCache
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.StorageIdentity
@@ -57,6 +58,7 @@ class DownloadSession(
     val storage: DownloadStorage,
     val streamingCache: StreamingCache,
     val libraryCache: LibraryDiskCache,
+    val readAlongCache: ReadAlongDiskCache,
     val index: DownloadIndexStore,
     val manager: DownloadManager,
 ) : AutoCloseable {
@@ -129,6 +131,9 @@ class DownloadCoordinator(
 
     /** Rebuildable library/chapter metadata for the signed-in account only. */
     fun libraryCacheOrNull(): LibraryDiskCache? = refresh()?.libraryCache
+
+    /** Rebuildable, account-scoped narration text and cue documents. */
+    fun readAlongCacheOrNull(): ReadAlongDiskCache? = refresh()?.readAlongCache
 
     /**
      * Measures the current account only. A signed-out username/server hint is deliberately not
@@ -220,6 +225,7 @@ class DownloadCoordinator(
             .forEach { manager.remove(it.chapterId) }
         val streamingCache = StreamingCache.forIdentity(identity, cacheDir)
         val libraryCache = LibraryDiskCache.forIdentity(identity, cacheDir)
+        val readAlongCache = ReadAlongDiskCache.forIdentity(identity, cacheDir)
         // Interrupted rows are already Queued after index recovery. Cached chapter metadata gives
         // them their live URL again without waiting for the user to open every fiction manually.
         val pendingFictions = DownloadIndex.pending(index.entries.value).map { it.fictionId }.toSet()
@@ -229,7 +235,7 @@ class DownloadCoordinator(
                 .associateBy { it.resolvedChapterId },
             fictionTitles = cachedChapters.associate { it.value.fiction.id to it.value.fiction.title },
         )
-        return DownloadSession(identity, storage, streamingCache, libraryCache, index, manager)
+        return DownloadSession(identity, storage, streamingCache, libraryCache, readAlongCache, index, manager)
     }
 
     private fun closeCurrent() {

@@ -67,6 +67,13 @@ class ChapterDownloadsBindingTest {
     }
 
     @Test
+    fun `a chapter without audio has no dead download action`() {
+        val ui = chapterDownloadUi(chapter(1, hasAudio = false), entry = null, storageAvailable = true)
+
+        assertEquals(ChapterDownloadState.Unavailable, ui.state)
+    }
+
+    @Test
     fun `each index state maps to the control that state affords`() {
         fun stateOf(s: DownloadState) = chapterDownloadUi(entry(1, s), available = true).state
 

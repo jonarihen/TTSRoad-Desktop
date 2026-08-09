@@ -86,6 +86,90 @@ class RepositoryTest {
     }
 
     @Test
+    fun `read-along sends its ETag and exposes a normal 304`() = runTest {
+        server.enqueue(MockResponse(code = 304))
+
+        val result = repository.readAlong(101, "\"chapter-etag\"")
+
+        assertEquals(ReadAlongFetchResult.NotModified, result)
+        val request = server.takeRequest()
+        assertEquals("/api/mobile/chapters/101/readalong", request.url.encodedPath)
+        assertEquals("\"chapter-etag\"", request.headers["If-None-Match"])
+        assertEquals("Bearer ttsr_token", request.headers["Authorization"])
+    }
+
+    @Test
+    fun `read-along returns a parsed document and response ETag`() = runTest {
+        val body = """
+            {"chapter":{"id":101,"fiction_id":7,"title":"Chapter 1","has_timings":false},
+             "text":"Narration text.","paragraphs":[[0,15]],"cues":[]}
+        """.trimIndent()
+        server.enqueue(
+            MockResponse(
+                code = 200,
+                headers = Headers.headersOf("Content-Type", "application/json", "ETag", "\"abc\""),
+                body = body,
+            ),
+        )
+
+        val result = repository.readAlong(101)
+
+        val modified = result as ReadAlongFetchResult.Modified
+        assertEquals("Narration text.", modified.response.text)
+        assertEquals("\"abc\"", modified.etag)
+    }
+
+    @Test
+    fun `read-along 404 is normal and does not end the session`() = runTest {
+        enqueue(404, """{"detail":"Chapter has no narration text"}""")
+
+        assertEquals(ReadAlongFetchResult.NotFound, repository.readAlong(101))
+
+        assertTrue(sessionStore.current().isLoggedIn)
+        assertNull(repository.sessionEnd.value)
+    }
+
+    @Test
+    fun `read-along 401 still ends the session`() = runTest {
+        enqueue(401, ServerFixtures.UNAUTHORIZED_TOKEN_EXPIRED)
+
+        assertThrows<HttpException> { repository.readAlong(101) }
+
+        assertFalse(sessionStore.current().isLoggedIn)
+        assertEquals(SessionEndReason.Expired, repository.sessionEnd.value?.reason)
+    }
+
+    @Test
+    fun `reader preferences GET and PATCH use only the supported account keys`() = runTest {
+        enqueue(
+            200,
+            """{"preferences":{"reader_font_size":22,"reader_line_height":1.8,"reader_theme":"sepia","reader_highlight":"word","hide_played":true}}""",
+        )
+        val loaded = repository.readerPreferences()
+        assertEquals(22.0, loaded?.preferences?.fontSize)
+        assertEquals("sepia", loaded?.preferences?.theme)
+
+        enqueue(
+            200,
+            """{"preferences":{"reader_font_size":24,"reader_line_height":1.9,"reader_theme":"light","reader_highlight":"off"}}""",
+        )
+        repository.updateReaderPreferences(ReaderPreferencesPatch(24.0, 1.9, "light", "off"))
+
+        val get = server.takeRequest()
+        assertEquals("GET", get.method)
+        assertEquals("/api/me/preferences", get.url.encodedPath)
+        val patch = server.takeRequest()
+        assertEquals("PATCH", patch.method)
+        assertEquals("/api/me/preferences", patch.url.encodedPath)
+        val json = patch.bodyText()
+        assertTrue(json.contains("\"reader_font_size\":24.0"), json)
+        assertTrue(json.contains("\"reader_line_height\":1.9"), json)
+        assertTrue(json.contains("\"reader_theme\":\"light\""), json)
+        assertTrue(json.contains("\"reader_highlight\":\"off\""), json)
+        assertFalse(json.contains("hide_played"), json)
+    }
+
+    @Test
     fun `markPlayed posts a chapter-id array even for a single chapter`() = runTest {
         enqueue(200, ServerFixtures.MARK_OK)
 

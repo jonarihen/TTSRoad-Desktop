@@ -136,6 +136,24 @@ apply to audio.
   refreshes underneath. Settings measures real files, groups downloads by fiction, and keeps
   confirmed Delete all downloads separate from Clear streaming cache.
 
+### Read-along
+
+- `ReadAlongDocument` validates compact server offsets once, then resolves active cue, sentence,
+  paragraph and word seeks with binary lookup. Its only timing input is `PlayerUiState.positionMs` —
+  never extrapolate with wall time or scale by playback speed. Disable highlighting when timing
+  rows are malformed, requested/returned chapter ids differ, or audio duration is stale.
+- `ReadAlongCache` is memory → identity-scoped disk → authenticated conditional network. A 304
+  reuses the parsed object, 404 is normal no-text, and network/5xx falls back to disk. A 401 never
+  falls back because the session no longer authorizes account content. `App` clears memory and
+  `DownloadCoordinator` makes the retained disk namespace unreachable on sign-out.
+- `ReaderScreen` renders one lazy item per paragraph, not one composable per word. Wheel, drag and
+  scrollbar input permanently surrender follow until Back to current. Highlighting a chapter other
+  than the one playing is forbidden; queue advance changes the document only after the reader has
+  actually followed its own chapter.
+- Reader appearance is local-first in `reader.json` and synchronized only through the four known
+  `/api/me/preferences` keys. PATCH must never echo unrelated account settings. Preserve the server
+  ranges (font 14–30, line height 1.3–2.4) and dark/sepia/light + sentence/word/off vocabularies.
+
 ### MPRIS
 
 `player/MprisState.kt` is pure Kotlin with no D-Bus type in it — that's where the audiobook mapping
@@ -231,8 +249,8 @@ can't quietly skip its way to green.
 credential storage and capability discovery (0002), the playback engine (0002-playback-engine),
 device sessions and Settings (0003), navigation (0004), chapter browsing (0005), and listening
 preferences / sleep timer / MPRIS / shortcuts (0006). Read the relevant one before changing any of
-the invariants above; offline storage and caching are in 0007. They exist because the alternative
-was tried or measured.
+the invariants above; offline storage and caching are in 0007, and read-along is in 0008. They exist
+because the alternative was tried or measured.
 
 ## CI
 

@@ -37,9 +37,9 @@ Two rules are load-bearing:
   `Fiction(fresherSummaryFromChaptersEndpoint)` are the same screen. Without that, a refreshed
   summary would read as a new destination and drop the scroll position.
 
-`Reader` is declared and keyed but has no UI in this build. It is here so the retention rules and,
+`Reader` was declared and keyed but had no UI in this phase (superseded by ADR 0008). It was added so the retention rules and,
 in particular, the `Reader:7` / `Fiction:7` key separation are settled before the read-along phase,
-and so nothing has to change shape later. It renders an honest placeholder; nothing navigates to it.
+and so nothing had to change shape later. It rendered an honest placeholder; nothing navigated to it then.
 
 `Devices` is a real destination rather than a pane flag, so a future "manage sessions" link
 anywhere in the app lands somewhere addressable. Selecting a pane inside Settings **replaces** the

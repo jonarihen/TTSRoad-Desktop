@@ -309,7 +309,7 @@ class ChapterBrowsingUiTest {
     }
 
     @Test
-    fun `read-along is offered only when the server and the chapter both support it`() {
+    fun `read-along is hidden when the server does not support the endpoint`() {
         val repository = FakeRepository(
             chaptersResult = Result.success(response(listOf(chapter(1, hasTimings = true)))),
         )
@@ -317,6 +317,20 @@ class ChapterBrowsingUiTest {
         screen(repository)
 
         compose.onAllNodesWithContentDescription("Read along").assertCountEquals(0)
+        compose.onAllNodesWithContentDescription("Read chapter text").assertCountEquals(0)
+    }
+
+    @Test
+    fun `an untimed chapter still offers its plain narration text on a capable server`() {
+        val repository = FakeRepository(
+            capabilitiesResult = ServerCapabilities(readAlong = true),
+            chaptersResult = Result.success(response(listOf(chapter(1, hasTimings = false)))),
+        )
+        runBlocking { repository.refreshCurrentCapabilities() }
+
+        screen(repository)
+
+        compose.onNodeWithContentDescription("Read chapter text").assertHasClickAction()
     }
 
     @Test

@@ -96,6 +96,26 @@ class PlayerScreenUiTest {
     }
 
     @Test
+    fun `the capable player opens the current chapter in the reader`() {
+        val playback = FakePlaybackController(playingState())
+        var opened: Pair<Int, String>? = null
+        compose.setContent {
+            TtsRoadTheme {
+                PlayerScreen(
+                    playback,
+                    readAlongAvailable = true,
+                    onOpenReader = { id, title -> opened = id to title },
+                    onBack = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("READ ALONG").assertHasClickAction().performClick()
+
+        assertEquals(101 to "Chapter 3 — The Descent", opened)
+    }
+
+    @Test
     fun `a playback error is shown instead of the buffering hint`() {
         val playback = FakePlaybackController(
             PlayerUiState(

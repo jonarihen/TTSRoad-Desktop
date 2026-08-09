@@ -18,10 +18,13 @@ class StreamingCacheTest {
     @TempDir
     lateinit var tempDir: File
 
-    private class BytesSource(private val bytes: ByteArray) : MediaSource {
+    private class BytesSource(
+        private val bytes: ByteArray,
+        private val reportedLength: Long = bytes.size.toLong(),
+    ) : MediaSource {
         override fun open(): MediaStream = object : MediaStream {
             private var position = 0
-            override val length: Long = bytes.size.toLong()
+            override val length: Long = reportedLength
             override val isSeekable: Boolean = true
 
             override fun read(buffer: ByteArray, offset: Int, count: Int): Int {
@@ -107,6 +110,35 @@ class StreamingCacheTest {
 
         assertTrue(cache.stats().bytes <= 80L)
         assertEquals(1, cache.stats().files)
+    }
+
+    @Test
+    fun `a known stream larger than the cache cap is played without retaining bytes`() {
+        val cache = cache(maxBytes = 10)
+        val bytes = ByteArray(64) { it.toByte() }
+
+        assertEquals(bytes.toList(), consume(cache.retaining(7, BytesSource(bytes))).toList())
+
+        assertEquals(0L, cache.root.listFiles().orEmpty().sumOf(File::length))
+        assertNull(cache.sourceFor(7))
+    }
+
+    @Test
+    fun `an unknown-length stream never writes beyond the hard cache cap`() {
+        val cache = cache(maxBytes = 10)
+        val bytes = ByteArray(64) { it.toByte() }
+        val retained = cache.retaining(7, BytesSource(bytes, reportedLength = -1L))
+
+        retained.open().use { stream ->
+            val buffer = ByteArray(7)
+            while (stream.read(buffer, 0, buffer.size) >= 0) {
+                val bytesOnDisk = cache.root.listFiles().orEmpty().sumOf(File::length)
+                assertTrue(bytesOnDisk <= 10L, "streaming cache grew to $bytesOnDisk bytes")
+            }
+        }
+
+        assertNull(cache.sourceFor(7))
+        assertFalse(File(cache.root, "7.mp3.part").exists())
     }
 
     @Test
