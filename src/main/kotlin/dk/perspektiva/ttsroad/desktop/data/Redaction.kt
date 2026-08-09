@@ -1,5 +1,8 @@
 package dk.perspektiva.ttsroad.desktop.data
 
+import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
@@ -95,8 +98,42 @@ object AppLog {
     @Volatile
     var sink: (String) -> Unit = { System.err.println(it) }
 
+    /**
+     * Installs the production sink before any networking, keyring, audio, or UI object is built.
+     * The console copy remains useful from a terminal; the rotating file is what survives a menu
+     * launch, where stderr normally has nowhere visible to go.
+     */
+    @Synchronized
+    fun configurePersistent(
+        file: File = File(AppDirectories.logDir(), "ttsroad.log"),
+        maxBytes: Long = RotatingFileLog.DefaultMaxBytes,
+        backupCount: Int = RotatingFileLog.DefaultBackupCount,
+    ): File {
+        val persistent = RotatingFileLog(file, maxBytes, backupCount)
+        sink = { line ->
+            System.err.println(line)
+            persistent.write(line)
+        }
+        info("logging started")
+        return file
+    }
+
+    fun info(message: String) {
+        sink("[TTSRoad] ${redactSecrets(message)}")
+    }
+
     fun warn(message: String, error: Throwable? = null) {
         val detail = error?.let { " — ${describeNetworkFailure(it)}" }.orEmpty()
         sink("[TTSRoad] ${redactSecrets(message + detail)}")
+    }
+
+    /** A redacted stack trace for the local rotating log; the user-facing dialog stays generic. */
+    fun crash(thread: Thread, error: Throwable) {
+        val trace = StringWriter().also { writer -> error.printStackTrace(PrintWriter(writer)) }.toString()
+        sink(
+            redactSecrets(
+                "[TTSRoad] FATAL uncaught exception on ${thread.name}\n$trace",
+            ),
+        )
     }
 }

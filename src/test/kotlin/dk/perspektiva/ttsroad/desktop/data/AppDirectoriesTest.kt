@@ -27,10 +27,12 @@ class AppDirectoriesTest {
             "XDG_CONFIG_HOME" to "/xdg/config",
             "XDG_DATA_HOME" to "/xdg/data",
             "XDG_CACHE_HOME" to "/xdg/cache",
+            "XDG_STATE_HOME" to "/xdg/state",
         )
         assertEquals("/xdg/config/TTSRoad", AppDirectories.configDir("Linux", "/home/u", e).path)
         assertEquals("/xdg/data/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e).path)
         assertEquals("/xdg/cache/TTSRoad", AppDirectories.cacheDir("Linux", "/home/u", e).path)
+        assertEquals("/xdg/state/TTSRoad", AppDirectories.logDir("Linux", "/home/u", e).path)
     }
 
     @Test
@@ -39,15 +41,21 @@ class AppDirectoriesTest {
         assertEquals("/home/u/.config/TTSRoad", AppDirectories.configDir("Linux", "/home/u", e).path)
         assertEquals("/home/u/.local/share/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e).path)
         assertEquals("/home/u/.cache/TTSRoad", AppDirectories.cacheDir("Linux", "/home/u", e).path)
+        assertEquals("/home/u/.local/state/TTSRoad", AppDirectories.logDir("Linux", "/home/u", e).path)
     }
 
     @Test
     fun `a relative XDG value is ignored rather than resolved against the cwd`() {
         // The spec says so, and the alternative scatters a user's downloads into whatever directory
         // the app was launched from.
-        val e = env("XDG_DATA_HOME" to "relative/path", "XDG_CACHE_HOME" to "also/relative")
+        val e = env(
+            "XDG_DATA_HOME" to "relative/path",
+            "XDG_CACHE_HOME" to "also/relative",
+            "XDG_STATE_HOME" to "state/relative",
+        )
         assertEquals("/home/u/.local/share/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e).path)
         assertEquals("/home/u/.cache/TTSRoad", AppDirectories.cacheDir("Linux", "/home/u", e).path)
+        assertEquals("/home/u/.local/state/TTSRoad", AppDirectories.logDir("Linux", "/home/u", e).path)
     }
 
     @Test
@@ -65,9 +73,11 @@ class AppDirectoriesTest {
         val e = env("APPDATA" to "C:\\Users\\u\\AppData\\Roaming", "LOCALAPPDATA" to "C:\\Users\\u\\AppData\\Local")
         val config = AppDirectories.configDir("Windows 11", "C:\\Users\\u", e).path
         val data = AppDirectories.dataDir("Windows 11", "C:\\Users\\u", e).path
+        val logs = AppDirectories.logDir("Windows 11", "C:\\Users\\u", e).path
 
         assertTrue(config.contains("Roaming"), config)
         assertTrue(data.contains("Local") && !data.contains("Roaming"), data)
+        assertTrue(logs.contains("Local") && logs.endsWith("Logs"), logs)
     }
 
     @Test
@@ -84,6 +94,7 @@ class AppDirectoriesTest {
         val e = env()
         assertTrue(AppDirectories.cacheDir("Mac OS X", "/Users/u", e).path.contains("Library/Caches"))
         assertTrue(AppDirectories.dataDir("Mac OS X", "/Users/u", e).path.contains("Application Support"))
+        assertEquals("/Users/u/Library/Logs/TTSRoad", AppDirectories.logDir("Mac OS X", "/Users/u", e).path)
     }
 
     // --- The invariant the whole split exists for -----------------------------------------------

@@ -28,7 +28,9 @@ env:
 jobs:
   build:
     name: Build, test and package (Ubuntu)
-    runs-on: ubuntu-latest
+    # Linux Mint 22.x is based on Ubuntu 24.04. Build the .deb on that exact ABI generation rather
+    # than allowing ubuntu-latest to move underneath a release artifact.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
@@ -63,20 +65,26 @@ jobs:
       # gstreamer1.0-tools is what provides `gst-inspect-1.0` itself. Without it the verification
       # step below fails with "command not found" on the first element, which reads exactly like a
       # missing plugin and takes the whole job down before any test runs.
-      - name: Install Xvfb and GStreamer
+      - name: Install package, Xvfb, Secret Service and GStreamer tooling
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            desktop-file-utils \
+            fakeroot \
             xvfb \
+            xauth \
             gstreamer1.0-tools \
             gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-pulseaudio \
+            libsecret-tools \
+            lintian
 
       # Fails the build if the pipeline's elements are missing, rather than letting the integration
       # test quietly skip and report green.
       - name: Verify the GStreamer elements the engine needs
         run: |
-          for element in appsrc decodebin audioconvert scaletempo audioresample volume fakesink; do
+          for element in appsrc decodebin audioconvert scaletempo audioresample volume autoaudiosink pulsesink fakesink; do
             gst-inspect-1.0 "$element" > /dev/null || { echo "missing GStreamer element: $element"; exit 1; }
           done
 
@@ -96,11 +104,45 @@ jobs:
       - name: Build the distributable (bundled runtime image)
         run: ./gradlew ${{ env.GRADLE_FLAGS }} createDistributable
 
+      # Exercises the release image through Compose's own release task. The environment
+      # flag is consumed only by the packaged-process smoke path; normal launchers have no default
+      # argument and remain open as expected.
+      - name: Run the release distributable
+        run: TTSROAD_SMOKE_TEST=1 xvfb-run -a ./gradlew ${{ env.GRADLE_FLAGS }} runReleaseDistributable
+
       # Proves the jlink image actually starts: loads Skiko's native library, composes the real
       # UI, and confirms the mp3spi javax.sound.sampled provider survived module minimisation.
       # Exits non-zero if any of that fails.
       - name: Headless launch smoke test of the packaged app
         run: xvfb-run -a ./build/compose/binaries/main/app/TTSRoad/bin/TTSRoad --smoke-test
+
+      # Revision 0 is a throwaway predecessor with the same semantic application version. Revision
+      # 1 is the release candidate. The clean-container job below installs 0, upgrades to 1, then
+      # uninstalls, which tests Debian's upgrade identity without inventing a second app version.
+      - name: Build previous and current release .deb packages
+        run: |
+          mkdir -p build/deb-artifacts
+          ./gradlew ${{ env.GRADLE_FLAGS }} packageReleaseDeb -Pttsroad.debRevision=0
+          cp build/compose/binaries/main-release/deb/ttsroad_*_amd64.deb build/deb-artifacts/ttsroad-previous.deb
+          ./gradlew ${{ env.GRADLE_FLAGS }} packageReleaseDeb
+          revision=$(sed -n 's/^ttsroad\.debRevision=//p' gradle.properties)
+          current=$(find build/compose/binaries/main-release/deb -name "ttsroad_*-${revision}_amd64.deb" -print -quit)
+          test -n "$current"
+          cp "$current" build/deb-artifacts/ttsroad-current.deb
+
+      - name: Inspect release .deb metadata and payload
+        run: |
+          version=$(sed -n 's/^ttsroad\.version=//p' gradle.properties)
+          ./packaging/linux/inspect-deb.sh build/deb-artifacts/ttsroad-previous.deb "$version" 0
+          ./packaging/linux/inspect-deb.sh build/deb-artifacts/ttsroad-current.deb
+
+      - name: Upload Linux release packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-deb-packages
+          path: build/deb-artifacts/*.deb
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload test reports
         if: always()
@@ -112,3 +154,28 @@ jobs:
             build/test-results/test
           if-no-files-found: warn
           retention-days: 14
+
+  package-lifecycle:
+    name: Install, upgrade and uninstall (Ubuntu 24.04 container)
+    needs: build
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out verification scripts
+        uses: actions/checkout@v7
+
+      - name: Download the release packages
+        uses: actions/download-artifact@v7
+        with:
+          name: linux-deb-packages
+          path: build/deb-artifacts
+
+      - name: Install clean-container test tools
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates python3 xvfb xauth
+
+      - name: Verify install, packaged login, upgrade and uninstall
+        run: ./packaging/linux/verify-install-lifecycle.sh build/deb-artifacts/ttsroad-previous.deb build/deb-artifacts/ttsroad-current.deb

@@ -69,10 +69,77 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 > The choice, the rejected alternatives and the measurements behind them are in
 > [`docs/adr/0002-playback-engine.md`](docs/adr/0002-playback-engine.md).
 
+## 🐧 Install on Linux Mint
+
+The supported Linux package is the **x86_64/amd64 `.deb`** built on Ubuntu 24.04, which is the
+base used by Linux Mint 22.x. ARM64 is deferred: `jpackage` does not cross-compile, and the project
+does not yet have a native ARM64 CI runner on which to verify its runtime and native libraries.
+
+Install a downloaded package with APT so its GStreamer and Secret Service dependencies are resolved:
+
+```bash
+sudo apt install ./ttsroad_1.0.1-1_amd64.deb
+```
+
+Open **TTSRoad** from Cinnamon's Audio & Video menu, or run `/opt/TTSRoad/bin/TTSRoad`. Java 25 is
+included in the package; installing a system JRE or JDK is neither required nor used. To upgrade,
+install the newer `.deb` with the same command. The lowercase Debian package identity remains
+`ttsroad`, so APT replaces the existing version rather than installing a second copy.
+
+Before opening the UI, these side-effect-free commands can identify the installed build and collect
+safe environment information:
+
+```bash
+/opt/TTSRoad/bin/TTSRoad --version
+/opt/TTSRoad/bin/TTSRoad --diagnostics
+```
+
+Diagnostics report versions, paths, runtime modules, GStreamer, D-Bus and keyring availability. They
+do not open the credential store or read account data, and their output passes through the same
+credential/URL redaction boundary as the rotating log.
+
+### Uninstall and retained data
+
+```bash
+sudo apt remove ttsroad
+```
+
+Uninstalling removes the application and bundled Java runtime but deliberately preserves settings,
+downloads, cache, logs and the Secret Service entry. This makes reinstall and upgrade safe. The
+default Linux locations are:
+
+| Kind | XDG location | Default |
+| --- | --- | --- |
+| Settings | `$XDG_CONFIG_HOME/TTSRoad` | `~/.config/TTSRoad` |
+| Requested downloads | `$XDG_DATA_HOME/TTSRoad` | `~/.local/share/TTSRoad` |
+| Rebuildable cache | `$XDG_CACHE_HOME/TTSRoad` | `~/.cache/TTSRoad` |
+| Rotating logs | `$XDG_STATE_HOME/TTSRoad` | `~/.local/state/TTSRoad` |
+
+For a full manual purge, first uninstall TTSRoad, back up anything wanted, then delete those four
+directories using their effective XDG locations. This is irreversible and removes offline books.
+Finally open **Passwords and Keys** (Seahorse), search for the `TTSRoad session` item whose service
+is `dk.perspektiva.ttsroad.desktop`, and delete it. Signing out in the app normally clears the live
+credential without deleting downloaded books.
+
+### Linux troubleshooting
+
+- Start with `--diagnostics` and `~/.local/state/TTSRoad/ttsroad.log`. Logs rotate at 1 MiB and keep
+  three backups; crash dialogs intentionally contain no stack trace or credential-shaped detail.
+- If playback has no output, confirm `gst-inspect-1.0 autoaudiosink` and
+  `gst-inspect-1.0 pulsesink` succeed. Reinstall the package with APT to restore required GStreamer
+  Base, Good and PulseAudio plugins. Skip-silence additionally needs the recommended
+  `gstreamer1.0-plugins-bad` package.
+- If sessions do not survive a restart, make sure Cinnamon's Secret Service is unlocked and
+  `secret-tool` is available. TTSRoad deliberately falls back to memory-only credentials when the
+  keyring cannot be reached.
+- A missing D-Bus session disables MPRIS/media-key integration only; playback remains available.
+- For a rendering failure, run from a terminal and attach the redacted diagnostics and rotating log
+  to a bug report. The app's generic crash dialog also names the log location.
+
 ## 🛠️ Supported build matrix
 
-Everything below is verified together: `clean check`, `createDistributable`, a headless launch of
-the packaged app, and `packageMsi`.
+Everything below is verified together: `clean check`, normal and release distributables, headless
+launches of the packaged app, and an inspected/installed `packageReleaseDeb` on Ubuntu 24.04.
 
 | Component | Version | Where it is declared |
 | --- | --- | --- |
@@ -106,6 +173,8 @@ Offline namespaces, resumable downloads, streamed-audio retention and disk metad
 [`docs/adr/0007-offline-downloads-and-streaming-cache.md`](docs/adr/0007-offline-downloads-and-streaming-cache.md).
 Read-along parsing, ETag caching, media-time highlighting and account preference sync are in
 [`docs/adr/0008-audio-synchronized-read-along.md`](docs/adr/0008-audio-synchronized-read-along.md).
+Linux package identity, dependencies, upgrade semantics, diagnostics and lifecycle verification are
+in [`docs/adr/0009-linux-debian-package.md`](docs/adr/0009-linux-debian-package.md).
 
 ## 🚀 Bootstrap
 
@@ -147,10 +216,14 @@ Two flags CI adds, which you can use locally to reproduce a CI failure:
 
 ## 🔢 Versioning
 
-There is exactly **one** version number: `ttsroad.version` in `gradle.properties`. It feeds the
-Gradle/Maven coordinate, `jpackage`'s `packageVersion` (and therefore installer filenames), and the
-generated `BuildInfo.kt` that the settings screen and the window title render. Bump it in one
-place. jpackage rejects MAJOR `0`, so it must stay `>= 1.0.0`.
+There is exactly **one application version**: `ttsroad.version` in `gradle.properties`. It feeds the
+Gradle/Maven coordinate, `jpackage`'s `packageVersion`, and the generated `BuildInfo.kt` that the
+settings screen, diagnostics and window title render. Bump it in one place. jpackage rejects MAJOR
+`0`, so it must stay `>= 1.0.0`.
+
+`ttsroad.debRevision` is deliberately separate Debian packaging metadata, not an application
+version. Increment it when rebuilding the same application source with packaging-only changes;
+reset it to `1` when `ttsroad.version` changes. APT compares the combined `VERSION-REVISION`.
 
 ## 🤖 CI
 
@@ -159,9 +232,12 @@ place. jpackage rejects MAJOR `0`, so it must stay `>= 1.0.0`.
 1. Gradle wrapper validation (checksum of `gradle-wrapper.jar`).
 2. `clean check` under Xvfb — compile, unit tests, Compose UI tests.
 3. Static analysis — Kotlin warnings-as-errors + Gradle deprecation-as-error.
-4. `createDistributable`.
+4. `createDistributable` plus `runReleaseDistributable` under Xvfb.
 5. Headless launch smoke test of the packaged image, which also asserts the MP3
    `javax.sound.sampled` SPI survived jlink module minimisation.
+6. Build two Debian revisions, inspect their metadata, payload, permissions, runtime modules,
+   native linkage, desktop entry and safe diagnostics, then exercise clean install, login-window
+   probe, in-place upgrade and uninstall in an Ubuntu 24.04 container.
 
 Dependency updates arrive as weekly grouped Dependabot PRs
 ([`.github/dependabot.yml`](.github/dependabot.yml)).
@@ -170,7 +246,8 @@ Dependency updates arrive as weekly grouped Dependabot PRs
 
 ```
 src/main/kotlin/dk/perspektiva/ttsroad/desktop/
-├── Main.kt                       entry point, window placement, Coil loader, --smoke-test
+├── Main.kt                       entry point, CLI diagnostics, logging, crash UI, window placement
+├── RuntimeDiagnostics.kt         side-effect-free --version/--diagnostics output
 ├── App.kt                        root UI: back stack, shortcuts, header, login
 ├── di/AppContainer.kt            the single composition root + AppDispatchers
 ├── nav/
@@ -189,7 +266,8 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── ReadAlongCache.kt         ETag revalidation + offline fallback
 │   ├── ReadAlongDiskCache.kt     bounded identity-scoped text cache
 │   ├── ReaderPreferences.kt      local fallback + account synchronization
-│   ├── AppDirectories.kt         platform config/data/cache roots
+│   ├── AppDirectories.kt         platform config/data/cache/log roots
+│   ├── AppLogging.kt             redacted size-rotating persistent log
 │   ├── StorageIdentity.kt        stable server/account disk namespace + generated audio names
 │   ├── ChapterLists.kt           filter/sort, bulk id selection, status, played patch + rollback
 │   ├── WindowPreferences.kt      persisted placement + clamping to attached displays

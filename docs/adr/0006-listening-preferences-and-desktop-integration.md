@@ -219,9 +219,10 @@ not on the ten-second progress tick, which would be write amplification for no e
 - The app gains three runtime dependencies (`dbus-java-core`, its unix-socket transport, and
   `slf4j-nop`) and no new native ones.
 - Skip-silence is unavailable on most installs, CI included, and says so rather than pretending.
-- The `.deb` in phase 9 (#3) should recommend `gstreamer1.0-plugins-bad` so skip-silence is
-  available where a user wants it, and must install `TTSRoad.desktop` under the name
-  `Mpris.DesktopEntry` reports, or the applet will show the player without an icon.
+- The `.deb` in phase 9 (#3) recommends `gstreamer1.0-plugins-bad` so skip-silence is available
+  where a user wants it. JDK 25 jpackage names the desktop entry from the Debian package and
+  launcher, so it installs `ttsroad-TTSRoad.desktop` and `Mpris.DesktopEntry` reports
+  `ttsroad-TTSRoad`; keeping those identical is what gives Cinnamon's player applet the app icon.
 
 ## Alternatives considered and rejected
 

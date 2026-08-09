@@ -42,10 +42,10 @@ object Mpris {
 
     /**
      * Ties the MPRIS entry to the installed `.desktop` file, which is where Cinnamon's applet
-     * takes the icon from. It is the basename without `.desktop`; the Linux packaging in phase 9
-     * (#3) installs `TTSRoad.desktop` under that name.
+     * takes the icon from. It is the basename without `.desktop`; JDK 25 jpackage combines the
+     * Debian package name and launcher name, so phase 9 installs `ttsroad-TTSRoad.desktop`.
      */
-    const val DesktopEntry: String = "TTSRoad"
+    const val DesktopEntry: String = "ttsroad-TTSRoad"
 
     /** The spec's placeholder path for "nothing is loaded". */
     const val NoTrackPath: String = "/org/mpris/MediaPlayer2/TrackList/NoTrack"
