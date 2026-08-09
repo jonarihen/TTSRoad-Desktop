@@ -59,12 +59,32 @@ class StorageIdentityTest {
     // --- Origin canonicalisation ----------------------------------------------------------------
 
     @Test
-    fun `case, trailing slash and path do not change the origin`() {
+    fun `case and a trailing slash do not change the identity`() {
         val expected = "https://host.example"
         assertEquals(expected, StorageIdentity.canonicalOrigin("https://host.example"))
         assertEquals(expected, StorageIdentity.canonicalOrigin("https://Host.Example/"))
-        assertEquals(expected, StorageIdentity.canonicalOrigin("HTTPS://HOST.EXAMPLE/api/mobile/"))
         assertEquals(expected, StorageIdentity.canonicalOrigin("  https://host.example/  "))
+    }
+
+    @Test
+    fun `the path is part of the identity, and its case is preserved`() {
+        // normalizeBaseUrl keeps whatever path the user configured and Retrofit supports
+        // path-based base URLs, so these are two deployments that may hold entirely different
+        // libraries under the same chapter ids. Merging them into one download directory would
+        // serve one server's audio for the other's chapter.
+        assertNotEquals(
+            StorageIdentity.serverKey("https://host.example/ttsroad/"),
+            StorageIdentity.serverKey("https://host.example/other/"),
+        )
+        assertNotEquals(
+            StorageIdentity.serverKey("https://host.example/TTSRoad/"),
+            StorageIdentity.serverKey("https://host.example/ttsroad/"),
+        )
+        // Host case and a trailing slash are still noise around a path that is not.
+        assertEquals(
+            StorageIdentity.serverKey("https://HOST.example/TTSRoad"),
+            StorageIdentity.serverKey("https://host.example/TTSRoad/"),
+        )
     }
 
     @Test
@@ -104,8 +124,12 @@ class StorageIdentityTest {
     // --- Account identity -----------------------------------------------------------------------
 
     @Test
-    fun `usernames are matched case-insensitively`() {
-        assertEquals(StorageIdentity.accountKey("Alice"), StorageIdentity.accountKey("alice"))
+    fun `usernames differing only in case are different accounts`() {
+        // The stored name is the server's own spelling, and Django usernames are case-sensitive by
+        // default. Two accounts sharing a download directory is a disclosure; one account
+        // splitting is a re-download.
+        assertNotEquals(StorageIdentity.accountKey("Alice"), StorageIdentity.accountKey("alice"))
+        // Surrounding whitespace is still noise.
         assertEquals(StorageIdentity.accountKey(" alice "), StorageIdentity.accountKey("alice"))
     }
 

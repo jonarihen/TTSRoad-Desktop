@@ -73,33 +73,48 @@ data class StorageIdentity(
         }
 
         /**
-         * Account component. Usernames are compared case-insensitively and trimmed, because a
-         * server that treats `Alice` and `alice` as one login must not give them two download
-         * directories on this machine.
+         * Account component.
+         *
+         * Trimmed but **not** case-folded. The name stored in the session is
+         * `response.user.username` — the server's own spelling — so folding it would buy nothing
+         * and would merge two genuinely distinct accounts on a server that treats case as
+         * significant, which is Django's default. Two accounts sharing a download directory is a
+         * disclosure; one account occasionally splitting is a re-download.
          */
         fun accountKey(username: String?): String {
-            val name = username?.trim()?.lowercase(Locale.ROOT).orEmpty()
+            val name = username?.trim().orEmpty()
             if (name.isEmpty()) return AnonymousAccount
             return digest("account:$name")
         }
 
         /**
-         * Scheme, host and port, lowercased, with the default port dropped and any path removed.
+         * Scheme, host, port **and path**, with only the case-insensitive parts folded.
          *
-         * Deliberately *not* a general URL parser. `https://Host.Example/` and `https://host.example`
-         * are the same server, and a trailing `/api/` slipping into the identity would split one
-         * server's downloads in two the first time a caller passed a full endpoint instead of a
-         * base. The scheme is kept: `http://host` and `https://host` may genuinely be different
-         * deployments, and guessing otherwise risks mixing two libraries.
+         * Deliberately *not* a general URL parser, and deliberately not origin-only. Scheme and
+         * host are case-insensitive, so `https://Host.Example/` and `https://host.example` are one
+         * server. A **path is not**, and it is part of the identity: `normalizeBaseUrl` keeps
+         * whatever path the user configured and Retrofit supports path-based base URLs, so
+         * `https://host/ttsroad/` and `https://host/other/` are two deployments that may hold
+         * completely different libraries under the same chapter ids.
+         *
+         * Dropping the path would have merged them into one download directory, where one server's
+         * audio is served for the other's chapter. That is the failure this whole type exists to
+         * prevent, and it is strictly worse than the alternative: an identity that splits when it
+         * should not costs a re-download, an identity that merges serves the wrong content. Every
+         * ambiguous call here is resolved that way.
+         *
+         * The scheme is kept for the same reason — `http://host` and `https://host` may genuinely
+         * be different deployments.
          */
         fun canonicalOrigin(url: String): String {
-            val trimmed = url.trim()
+            val trimmed = url.trim().trimEnd('/')
             val schemeEnd = trimmed.indexOf("://")
-            if (schemeEnd <= 0) return trimmed.lowercase(Locale.ROOT).trimEnd('/')
+            if (schemeEnd <= 0) return trimmed.lowercase(Locale.ROOT)
 
             val scheme = trimmed.substring(0, schemeEnd).lowercase(Locale.ROOT)
             val rest = trimmed.substring(schemeEnd + 3)
-            val authority = rest.substringBefore('/').substringBefore('?').substringBefore('#')
+            val authorityEnd = rest.indexOf('/').takeIf { it >= 0 } ?: rest.length
+            val authority = rest.substring(0, authorityEnd)
             // Credentials in a URL are not identity and must never reach a directory name.
             val hostPort = authority.substringAfterLast('@').lowercase(Locale.ROOT)
 
@@ -107,7 +122,10 @@ data class StorageIdentity(
             val host = hostPort.substringBeforeLast(':', hostPort)
             val port = hostPort.substringAfterLast(':', "").takeIf { it != hostPort }.orEmpty()
             val normalisedPort = if (port.isEmpty() || port == defaultPort) "" else ":$port"
-            return "$scheme://$host$normalisedPort"
+
+            // Case preserved, and the query/fragment dropped — neither names a deployment.
+            val path = rest.substring(authorityEnd).substringBefore('?').substringBefore('#').trimEnd('/')
+            return "$scheme://$host$normalisedPort$path"
         }
 
         /**
