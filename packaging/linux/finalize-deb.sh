@@ -58,6 +58,9 @@ fi
 if ! grep -q '^StartupWMClass=' "$desktop"; then
     sed -i '/^Categories=/a StartupWMClass=dk-perspektiva-ttsroad-desktop-MainKt' "$desktop"
 fi
+# jpackage always emits MimeType, empty when no association was requested. An empty key is a
+# declaration that this application handles nothing, which is not the same as saying nothing.
+sed -i '/^MimeType=[[:space:]]*$/d' "$desktop"
 
 # jpackage keeps the desktop entry inside its own /opt tree and registers it from postinst with
 # `xdg-desktop-menu install`, under `set -e`. That call exits non-zero wherever no writable system
