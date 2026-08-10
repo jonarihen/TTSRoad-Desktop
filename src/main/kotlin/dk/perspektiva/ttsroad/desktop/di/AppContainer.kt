@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.desktop.di
 
+import dk.perspektiva.ttsroad.desktop.data.AppDirectories
 import dk.perspektiva.ttsroad.desktop.data.FilePlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.FilePlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.FileSessionStore
@@ -28,6 +29,13 @@ import dk.perspektiva.ttsroad.desktop.player.PlaybackEngine
 import dk.perspektiva.ttsroad.desktop.player.QueuePlaybackController
 import dk.perspektiva.ttsroad.desktop.security.CredentialStore
 import dk.perspektiva.ttsroad.desktop.security.CredentialStores
+import dk.perspektiva.ttsroad.desktop.update.FileUpdateSettingsStore
+import dk.perspektiva.ttsroad.desktop.update.GitHubReleaseSource
+import dk.perspektiva.ttsroad.desktop.update.ReleaseSource
+import dk.perspektiva.ttsroad.desktop.update.UpdateChecker
+import dk.perspektiva.ttsroad.desktop.update.UpdateDownloader
+import dk.perspektiva.ttsroad.desktop.update.UpdateSettingsStore
+import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -111,6 +119,13 @@ class AppContainer(
         { session, client, repo, d -> DownloadCoordinator(session, client, repo, dispatcher = d.io) },
     // A store rather than a file path, so a test never writes into the user's config directory.
     windowPreferencesStore: WindowPreferencesStore = FileWindowPreferencesStore(),
+    /**
+     * When this build last looked for a newer one, and which version was dismissed. Machine-local
+     * like the listening preferences: which build is installed is a property of this desktop.
+     */
+    val updateSettings: UpdateSettingsStore = FileUpdateSettingsStore(),
+    // A factory so a test substitutes the release feed instead of reaching api.github.com.
+    releaseSourceFactory: (OkHttpClient) -> ReleaseSource = { GitHubReleaseSource(it) },
 ) : AutoCloseable {
     val httpClient: OkHttpClient = httpClientFactory(sessionStore)
     val repository: TtsRoadRepository = repositoryFactory(sessionStore, httpClient, dispatchers)
@@ -204,6 +219,26 @@ class AppContainer(
 
     /** Remembered window size/position/maximised state. Never holds anything transient or secret. */
     val windowPreferences: WindowPreferencesStore = windowPreferencesStore
+
+    /**
+     * Looks for a newer published build. On the shared HTTP client on purpose: the auth
+     * interceptor's same-origin rule is what keeps the TTSRoad bearer token off api.github.com,
+     * and a second client would put this call outside that rule.
+     */
+    val updateChecker: UpdateChecker = UpdateChecker(
+        source = releaseSourceFactory(httpClient),
+        settingsStore = updateSettings,
+        clock = clock,
+    )
+
+    /**
+     * Downloads go to the cache root: a rebuildable installer is not user data, and one left behind
+     * by an update the user never ran should be evictable.
+     */
+    val updateDownloader: UpdateDownloader = UpdateDownloader(
+        client = httpClient,
+        targetDirectory = File(AppDirectories.cacheDir(), "updates"),
+    )
 
     /** Called when the main window closes; without it the playback job and temp file outlive it. */
     override fun close() {

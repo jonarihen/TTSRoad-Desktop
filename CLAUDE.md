@@ -35,6 +35,10 @@ Single test class or method — the `test` task uses the JUnit Platform:
 **Tests need a display.** `tasks.test` sets `java.awt.headless=false` because Skiko renders through
 AWT even off-screen. Locally they use your desktop; headless, prefix with `xvfb-run -a`.
 
+**Tests need an unencrypted filesystem.** eCryptfs caps filenames at 143 bytes and a few generated
+test class files exceed it, so `check` fails with `error while writing … (Permission denied)` under
+an encrypted home. Build from a path on ext4 instead.
+
 Reproduce a CI failure locally — CI adds two gates that local builds do not have:
 
 ```bash
@@ -206,6 +210,21 @@ There is deliberately no file-based fallback — encrypting with a key stored be
 plaintext with extra steps. `session.json` holds non-secret hints plus the keyring entry id, written
 atomically and owner-only.
 
+### Releases and update checking
+
+A release tag is `v` plus `ttsroad.version`; `release.yml` refuses to publish when the tag,
+`gradle.properties` and the `CHANGELOG.md` section disagree, and
+`packaging/release/changelog-section.sh` is both the notes extractor and that gate. Each installer
+builds on its own OS; only the `.deb` gets the clean-container install/upgrade/uninstall run. The
+release is created as a **draft**, and `workflow_dispatch` is the dry run that publishes nothing.
+
+The update check reads the *public* GitHub release feed **over the shared `OkHttpClient`** — that is
+what keeps the bearer token off api.github.com, via the same origin rule. It never installs: a
+download is verified against the release's `SHA256SUMS`, a mismatch is deleted and never opened, and
+the verified file goes to the desktop's own handler. No `sudo`, no package manager call. Throttling
+is once per launch and once per day, dismissal is per version, and a manual check bypasses both. A
+release with no asset for this platform/architecture is announced *without* a download button.
+
 ### Server capability discovery
 
 `GET /api/mobile/capabilities` is unauthenticated and additive. Only a literal JSON `true` enables a
@@ -292,7 +311,8 @@ credential storage and capability discovery (0002), the playback engine (0002-pl
 device sessions and Settings (0003), navigation (0004), chapter browsing (0005), and listening
 preferences / sleep timer / MPRIS / shortcuts (0006). Read the relevant one before changing any of
 the invariants above; offline storage and caching are in 0007, read-along is in 0008, and Debian
-packaging/operations are in 0009. They exist because the alternative was tried or measured.
+packaging/operations are in 0009, and releases/update checking are in 0010. They exist because
+the alternative was tried or measured.
 
 ## CI
 

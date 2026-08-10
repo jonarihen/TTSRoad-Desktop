@@ -40,6 +40,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +67,8 @@ import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
+import dk.perspektiva.ttsroad.desktop.data.AppDirectories
+import dk.perspektiva.ttsroad.desktop.update.UpdateStatus
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
@@ -114,6 +118,11 @@ fun SettingsScreen(
     canSkipSilence: Boolean = false,
     // Injected so "expires in 42 days" can be asserted without the test depending on wall time.
     nowMs: () -> Long = System::currentTimeMillis,
+    /**
+     * The update check, or null where there is none — a preview or a screen test. Null keeps
+     * the About pane from claiming an update state nothing checked.
+     */
+    updates: UpdateStateHolder? = null,
 ) {
     val ui by holder.state.collectAsState()
     val session by sessionStore.session.collectAsState()
@@ -152,7 +161,7 @@ fun SettingsScreen(
                         SettingsSection.Devices -> DevicesPane(ui, session, holder, nowMs)
                         SettingsSection.Playback -> PlaybackPane(preferences, canChangeSpeed, canSkipSilence)
                         SettingsSection.Offline -> OfflinePane(ui.offline, holder)
-                        SettingsSection.About -> AboutPane(session, capabilities, sessionStore)
+                        SettingsSection.About -> AboutPane(session, capabilities, sessionStore, updates)
                     }
                 }
             }
@@ -809,6 +818,7 @@ private fun AboutPane(
     session: SessionState,
     capabilities: ServerCapabilities,
     sessionStore: SessionStore,
+    updates: UpdateStateHolder? = null,
 ) {
     PaneTitle("Updates & About", "Build, licences and diagnostics")
 
@@ -819,12 +829,12 @@ private fun AboutPane(
         RowDivider()
         SettingRow("Release channel", "Installed build")
         RowDivider()
-        // Honest rather than aspirational: there is no updater in this build, so claiming to be
-        // "up to date" would be a claim nothing checked.
-        SettingRow("Update check", "Not available — install a newer build to update")
-        RowDivider()
         SettingRow("Java runtime", "${System.getProperty("java.vm.name")} ${System.getProperty("java.version")}")
     }
+
+    // Absent only where the caller supplied no updater — a preview or a screen test. Claiming to
+    // be "up to date" without an updater would be a claim nothing checked.
+    if (updates != null) UpdateCard(updates)
 
     MetaText(text = "// Open source", color = AarisColor.Accent)
     SettingsCard {
@@ -847,12 +857,135 @@ private fun AboutPane(
             color = AarisColor.Muted,
         )
     }
-    OutlinedButton(
-        onClick = { copyToClipboard(diagnostics) },
-        shape = RectangleShape,
-        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-    ) { Text("COPY DIAGNOSTICS") }
+    var exported by remember { mutableStateOf<String?>(null) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { copyToClipboard(diagnostics) },
+            shape = RectangleShape,
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+        ) { Text("COPY DIAGNOSTICS") }
+        OutlinedButton(
+            onClick = { exported = exportDiagnostics(diagnostics)?.toString() },
+            shape = RectangleShape,
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+        ) { Text("EXPORT DIAGNOSTICS") }
+    }
+    exported?.let { path ->
+        Text(
+            "Saved to $path",
+            style = MaterialTheme.typography.bodySmall,
+            color = AarisColor.Muted,
+        )
+    }
 }
+
+/**
+ * The update card: what the last check found, and the two actions that follow from it.
+ *
+ * Download is offered only when the release actually carries a package for this machine. A release
+ * that does not is still announced — with a link rather than a button, because a download that
+ * cannot be installed here is worse than no button at all.
+ */
+@Composable
+private fun UpdateCard(updates: UpdateStateHolder) {
+    val state by updates.state.collectAsState()
+
+    // Once per entry to the pane. The checker owns the throttle, so this is not a request per view.
+    LaunchedEffect(Unit) { updates.checkAutomatically() }
+
+    MetaText(text = "// Updates", color = AarisColor.Accent)
+    SettingsCard {
+        val status = state.status
+        SettingRow(
+            "Update check",
+            when (status) {
+                is UpdateStatus.Checking -> "Checking…"
+                is UpdateStatus.UpToDate -> "${BuildInfo.VERSION} is the newest release"
+                is UpdateStatus.Available -> "Version ${status.release.version} is available"
+                is UpdateStatus.Failed -> status.reason
+                is UpdateStatus.Unknown -> "Not checked yet"
+            },
+        )
+        RowDivider()
+        ToggleRow(
+            label = "Check automatically",
+            description = "At most once a day, and once per launch.",
+            checked = state.automatic,
+            onCheckedChange = updates::setAutomatic,
+        )
+    }
+
+    state.available?.let { release ->
+        if (release.notes.isNotBlank()) {
+            SettingsCard {
+                Text(
+                    release.notes,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AarisColor.Muted,
+                )
+            }
+        }
+    }
+
+    state.downloadError?.let { error ->
+        Text(error, style = MaterialTheme.typography.bodyMedium, color = AarisColor.Danger)
+    }
+    state.downloadedName?.let { name ->
+        Text(
+            "Downloaded and verified $name. Your desktop's installer takes it from here.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = AarisColor.Muted,
+        )
+    }
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = updates::checkNow,
+            enabled = state.status !is UpdateStatus.Checking,
+            shape = RectangleShape,
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+        ) { Text("CHECK NOW") }
+
+        if (state.available != null) {
+            if (state.downloadable != null) {
+                Button(
+                    onClick = updates::download,
+                    enabled = !state.isDownloading,
+                    shape = RectangleShape,
+                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                ) { Text(if (state.isDownloading) "DOWNLOADING…" else "DOWNLOAD") }
+            }
+            TextButton(
+                onClick = updates::dismiss,
+                shape = RectangleShape,
+                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+            ) { Text("DISMISS") }
+        }
+    }
+    if (state.available != null && state.downloadable == null) {
+        Text(
+            "This release publishes nothing for this platform and architecture.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = AarisColor.Muted,
+        )
+    }
+}
+
+/**
+ * Writes the redacted diagnostics block to a file the user can attach to a report.
+ *
+ * The same text the Copy button produces, so there is one redaction boundary rather than two. A
+ * failure returns null instead of throwing: not being able to write a support file is not a reason
+ * to take Settings down.
+ */
+private fun exportDiagnostics(diagnostics: String): java.io.File? = runCatching {
+    val directory = java.io.File(AppDirectories.cacheDir(), "diagnostics")
+    directory.mkdirs()
+    val stamp = java.time.Instant.now().toString().replace(':', '-').substringBefore('.')
+    val file = java.io.File(directory, "ttsroad-diagnostics-$stamp.txt")
+    file.writeText(diagnostics)
+    file
+}.getOrNull()
 
 /**
  * The block a user can paste into a bug report.

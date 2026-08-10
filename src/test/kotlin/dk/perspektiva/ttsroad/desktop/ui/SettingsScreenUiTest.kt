@@ -387,9 +387,11 @@ class SettingsScreenUiTest {
         compose.waitForIdle()
 
         compose.onNodeWithText("Installed build").assertIsDisplayed()
-        compose.onNodeWithText("Not available — install a newer build to update").assertIsDisplayed()
         compose.onNodeWithText("Kotlin, Compose Multiplatform, OkHttp, Retrofit, Moshi, Coil").assertIsDisplayed()
         compose.onNodeWithText("COPY DIAGNOSTICS").assertHasClickAction()
+        compose.onNodeWithText("EXPORT DIAGNOSTICS").assertHasClickAction()
+        // No updater was supplied, so the pane must not claim an update state nothing checked.
+        compose.onNodeWithText("CHECK NOW").assertDoesNotExist()
     }
 
     // --- Devices: supported ------------------------------------------------------------------
