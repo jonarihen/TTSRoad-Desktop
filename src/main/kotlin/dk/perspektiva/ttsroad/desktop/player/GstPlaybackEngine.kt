@@ -229,7 +229,14 @@ class GstPlaybackEngine private constructor(
         val convertIn = ElementFactory.make("audioconvert", "convert-in")
         val tempo = ElementFactory.make("scaletempo", "tempo")
         val convertOut = ElementFactory.make("audioconvert", "convert-out")
-        val resample = ElementFactory.make("audioresample", "resample")
+        val resample = ElementFactory.make("audioresample", "resample").apply {
+            // GStreamer defaults to quality 4 of 10. Almost every chapter crosses a rate boundary —
+            // the MP3s are 44.1 kHz and PipeWire/PulseAudio commonly run the sink at 48 kHz — so
+            // that default is in the path constantly and is audible on speech as a dulled top end.
+            // 10 is a few percent of one core for a mono/stereo stream, which is nothing next to
+            // decoding, and this is a listening application.
+            runCatching { set("quality", RESAMPLE_QUALITY) }
+        }
         val volume = ElementFactory.make("volume", "volume").apply {
             runCatching { set("volume", gain) }
         }
@@ -382,6 +389,9 @@ class GstPlaybackEngine private constructor(
         private const val TEARDOWN_TIMEOUT_NANOS = 2L * 1_000_000_000L
         private const val READ_CHUNK_BYTES = 64 * 1024
         private const val APPSRC_MAX_BYTES = 2L * 1024 * 1024
+
+        /** `audioresample`'s maximum. See the pipeline comment: the default 4 is audible. */
+        private const val RESAMPLE_QUALITY = 10
 
         private const val SILENCE_THRESHOLD_DB = -50
         private const val SILENCE_MIN_NANOS = 100_000_000L
