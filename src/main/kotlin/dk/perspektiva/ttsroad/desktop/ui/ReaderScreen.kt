@@ -369,53 +369,22 @@ private fun ReaderDocumentPage(
                     palette = palette,
                 )
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(end = 14.dp)
-                        .testTag(ReaderListTestTag)
-                        .onPointerEvent(PointerEventType.Scroll) {
-                            followPlayback = readerFollowAfter(followPlayback, ReaderFollowEvent.ManualScroll)
-                        },
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = PageGutter,
-                        end = PageGutter,
-                        top = 20.dp,
-                        bottom = 60.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(18.dp),
-                ) {
-                    item(key = "reader-heading") {
-                        ReaderHeading(document, isPlayingThisChapter, timingsMatch, palette)
-                    }
-                    itemsIndexed(
-                        document.paragraphs,
-                        key = { index, span -> "paragraph-$index-${span.start}" },
-                    ) { _, paragraph ->
-                        ReaderParagraph(
-                            document = document,
-                            paragraph = paragraph,
-                            highlight = highlight,
-                            matches = matches,
-                            activeMatch = activeMatchSpan,
-                            prefs = prefs,
-                            palette = palette,
-                            onSeek = ::seekToOffset,
-                        )
-                    }
-                }
-                VerticalScrollbar(
-                    adapter = rememberScrollbarAdapter(listState),
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .fillMaxHeight()
-                        .onPointerEvent(PointerEventType.Press) {
-                            followPlayback = readerFollowAfter(followPlayback, ReaderFollowEvent.ManualScroll)
-                        },
-                )
-            }
+            ReadAlongParagraphList(
+                document = document,
+                listState = listState,
+                highlight = highlight,
+                timingsMatch = timingsMatch,
+                isPlayingThisChapter = isPlayingThisChapter,
+                matches = matches,
+                activeMatch = activeMatchSpan,
+                prefs = prefs,
+                palette = palette,
+                onSeek = ::seekToOffset,
+                onManualScroll = {
+                    followPlayback = readerFollowAfter(followPlayback, ReaderFollowEvent.ManualScroll)
+                },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
         }
 
         if (!followPlayback && activeParagraph >= 0) {
@@ -485,6 +454,75 @@ private fun ReaderFindBar(
         IconButton(onClick = onClose) { Icon(Icons.Default.Close, "Close find", tint = palette.ink) }
     }
     LaunchedEffect(Unit) { requester.requestFocus() }
+}
+
+/**
+ * The scrolling text itself: heading, paragraphs, highlight and scrollbar.
+ *
+ * Extracted so the reader screen and the player's read-along pane render one implementation rather
+ * than two that drift. Scroll position and follow state stay *hoisted* — the reader drives them
+ * from find-in-chapter and the keyboard as well as from playback, and a pane that owned them could
+ * not be steered from outside. Everything find-related is optional, because the player's pane has
+ * no find bar to feed it.
+ */
+@Composable
+internal fun ReadAlongParagraphList(
+    document: ReadAlongDocument,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    highlight: ReadAlongHighlight,
+    timingsMatch: Boolean,
+    isPlayingThisChapter: Boolean,
+    prefs: ReaderPreferences,
+    palette: ReaderPalette,
+    onSeek: (Int) -> Unit,
+    onManualScroll: () -> Unit,
+    modifier: Modifier = Modifier,
+    matches: List<TextSpan> = emptyList(),
+    activeMatch: TextSpan? = null,
+) {
+    Box(modifier) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(end = 14.dp)
+                .testTag(ReaderListTestTag)
+                .onPointerEvent(PointerEventType.Scroll) { onManualScroll() },
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = PageGutter,
+                end = PageGutter,
+                top = 20.dp,
+                bottom = 60.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            item(key = "reader-heading") {
+                ReaderHeading(document, isPlayingThisChapter, timingsMatch, palette)
+            }
+            itemsIndexed(
+                document.paragraphs,
+                key = { index, span -> "paragraph-$index-${span.start}" },
+            ) { _, paragraph ->
+                ReaderParagraph(
+                    document = document,
+                    paragraph = paragraph,
+                    highlight = highlight,
+                    matches = matches,
+                    activeMatch = activeMatch,
+                    prefs = prefs,
+                    palette = palette,
+                    onSeek = onSeek,
+                )
+            }
+        }
+        VerticalScrollbar(
+            adapter = rememberScrollbarAdapter(listState),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .onPointerEvent(PointerEventType.Press) { onManualScroll() },
+        )
+    }
 }
 
 @Composable
