@@ -34,7 +34,13 @@ field() {
     fail "Version must be $expected_version, got $(field Version)"
 [[ $(field Architecture) == "amd64" ]] || fail "Architecture must be amd64, got $(field Architecture)"
 [[ $(field Section) == "sound" ]] || fail "Section must be sound, got $(field Section)"
-[[ -n $(field Maintainer) ]] || fail "Maintainer is empty"
+maintainer=$(field Maintainer)
+# jpackage composes this from vendor plus --linux-deb-maintainer, which is easy to feed a value
+# that nests angle brackets. Debian policy wants exactly one "Name <address>" pair.
+# The pattern lives in a variable because bash parses a bare `<` inside `[[ ]]` as a redirection.
+maintainer_pattern='^[^<>]+ <[^<>@[:space:]]+@[^<>@[:space:]]+>$'
+[[ $maintainer =~ $maintainer_pattern ]] ||
+    fail "Maintainer must be \"Name <address>\", got $maintainer"
 
 depends=$(field Depends)
 for package in \
@@ -66,6 +72,8 @@ require_payload "$install_root/lib/runtime/release"
 require_payload "$install_root/lib/runtime/lib/modules"
 require_payload "$install_root/lib/TTSRoad.png"
 require_payload /usr/share/doc/ttsroad/copyright
+require_payload /usr/share/doc/ttsroad/changelog.Debian.gz
+require_payload /usr/share/applications/ttsroad-TTSRoad.desktop
 
 mapfile -d '' -t desktop_candidates < <(
     find "$payload" -type f -name 'ttsroad-TTSRoad.desktop' -print0
@@ -97,9 +105,23 @@ if grep -R -a -E -q -- '/home/runner/work/TTSRoad-Desktop|/tmp/gradle|/private/t
     "$payload" "$work_dir/control"; then
     fail "payload contains an absolute CI/build path"
 fi
-if grep -R -a -E -q -- 'secret-tool|XDG_(CONFIG|DATA|CACHE|STATE)_HOME|/home/' \
-    "$work_dir/control"; then
-    fail "package maintainer metadata/scripts attempt to inspect or delete per-user state"
+# Only the maintainer scripts run as root against a live system, so they are what must never touch
+# per-user state. `control` is excluded because declaring the libsecret-tools dependency there is
+# both required and harmless; matching it as "secret-tool" would fail the package for its own
+# Depends line. Absolute build paths inside `control` are still covered by the two checks above.
+mapfile -d '' -t maintainer_scripts < <(
+    find "$work_dir/control" -maxdepth 1 -type f ! -name control ! -name md5sums -print0
+)
+if [[ ${#maintainer_scripts[@]} -gt 0 ]] &&
+    grep -a -E -q -- '\bsecret-tool\b|XDG_(CONFIG|DATA|CACHE|STATE)_HOME|/home/' \
+        "${maintainer_scripts[@]}"; then
+    fail "package maintainer scripts attempt to inspect or delete per-user state"
+fi
+# The desktop entry is shipped as a file, not registered from a script that aborts the install
+# wherever no writable system menu directory exists.
+if [[ ${#maintainer_scripts[@]} -gt 0 ]] &&
+    grep -a -F -q -- 'xdg-desktop-menu' "${maintainer_scripts[@]}"; then
+    fail "package maintainer scripts still register the desktop entry with xdg-desktop-menu"
 fi
 
 grep -Fxq 'Name=TTSRoad' "$desktop" || fail "desktop entry has the wrong display name"
@@ -138,8 +160,24 @@ while IFS= read -r -d '' candidate; do
     fi
 done < <(find "$payload" -type f -print0)
 
+changelog_entry=$(zcat "$payload/usr/share/doc/ttsroad/changelog.Debian.gz" | head -1)
+[[ $changelog_entry == "ttsroad ($expected_version) "* ]] ||
+    fail "Debian changelog does not open with $expected_version: $changelog_entry"
+
 if command -v lintian >/dev/null; then
-    lintian --fail-on error "$deb"
+    # Three error tags are unavoidable properties of a self-contained jpackage bundle and are
+    # accepted deliberately (docs/adr/0009):
+    #   dir-or-file-in-opt          — the whole application is installed under /opt/ttsroad.
+    #   embedded-library            — the bundled JDK carries its own expat/freetype/lcms2/jpeg/zlib.
+    #   unstripped-binary-or-object — the runtime is the upstream Temurin build, shipped as built.
+    # Everything else stays a release blocker; do not widen this list to silence a real defect.
+    suppressed=dir-or-file-in-opt,embedded-library,unstripped-binary-or-object
+    if [[ $deb_revision == 0 ]]; then
+        # Revision 0 is only ever the synthetic predecessor CI upgrades away from, never a
+        # published artifact, and Debian's "a revision must not be zero" rule is about uploads.
+        suppressed="$suppressed,debian-revision-is-zero"
+    fi
+    lintian --fail-on error --suppress-tags "$suppressed" "$deb"
 fi
 
 echo "Verified ttsroad $expected_version amd64: metadata, payload, runtime, desktop entry and native linkage OK"

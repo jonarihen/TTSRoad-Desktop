@@ -357,9 +357,15 @@ compose.desktop {
                 // desktop display name stay TTSRoad.
                 packageName = "ttsroad"
                 appRelease = debRevisionValue
-                appCategory = "AudioVideo;Audio;"
-                debMaintainer = "TTSRoad Maintainers <jonarihen@users.noreply.github.com>"
-                menuGroup = "Audio & Video"
+                // These two feed different files: appCategory becomes the Debian Section, while
+                // menuGroup is written verbatim into the desktop entry's Categories key and so has
+                // to be registered freedesktop categories, not a human-readable group name.
+                appCategory = "sound"
+                // jpackage renders the control field as "<vendor> <<debMaintainer>>", so this must
+                // be a bare address. A "Name <address>" value here produces nested angle brackets
+                // and an RFC-invalid Maintainer.
+                debMaintainer = "jonarihen@users.noreply.github.com"
+                menuGroup = "AudioVideo;Audio;"
                 iconFile.set(generateLinuxPackageIcon.flatMap { it.outputFile })
             }
             macOS {

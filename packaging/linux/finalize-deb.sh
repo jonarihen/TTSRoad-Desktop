@@ -59,11 +59,54 @@ if ! grep -q '^StartupWMClass=' "$desktop"; then
     sed -i '/^Categories=/a StartupWMClass=dk-perspektiva-ttsroad-desktop-MainKt' "$desktop"
 fi
 
+# jpackage keeps the desktop entry inside its own /opt tree and registers it from postinst with
+# `xdg-desktop-menu install`, under `set -e`. That call exits non-zero wherever no writable system
+# menu directory exists, which aborts the whole installation on a minimal or container system.
+# Debian expects the file to be shipped at its final location instead, so move it there and drop
+# the registration calls: the entry then appears through dpkg alone and disappears on removal.
+install -D -m 0644 "$desktop" "$payload/usr/share/applications/ttsroad-TTSRoad.desktop"
+rm -f -- "$desktop"
+for script in postinst prerm; do
+    [[ -f "$payload/DEBIAN/$script" ]] || continue
+    sed -i '/xdg-desktop-menu/d' "$payload/DEBIAN/$script"
+done
+
+# jpackage emits only the one-line synopsis. Debian policy requires an extended description, and
+# it is what `apt show` and the graphical installers actually display.
+if ! grep -A1 '^Description:' "$control" | tail -n +2 | grep -q '^ '; then
+    cat > "$work_directory/extended-description" <<'EOF'
+ TTSRoad Desktop is a client for a private TTSRoad audiobook server. It signs in
+ with two-factor authentication, browses the library, queues and plays chapters,
+ keeps listening progress synchronised, downloads chapters for offline listening
+ and shows the audio-synchronised read-along text.
+ .
+ The Java runtime the application needs is bundled, so neither a system JDK
+ nor a JRE has to be installed.
+EOF
+    sed -i "/^Description:/r $work_directory/extended-description" "$control"
+fi
+
 # `--license-file` is an installer option on Windows/macOS; Debian policy expects copyright and
 # license information in this package-owned location instead.
 install -D -m 0644 "$script_directory/LICENSE.txt" "$payload/usr/share/doc/ttsroad/copyright"
 
-# Replacing the desktop file and adding copyright invalidates jpackage's original checksums.
+# Debian requires a changelog for a non-native package. It is generated rather than committed
+# because CI builds the same application version at more than one Debian revision, and a committed
+# file would have to be rewritten for each of them. The timestamp is fixed (overridable through
+# SOURCE_DATE_EPOCH) so two builds of the same revision stay byte-identical.
+maintainer=$(sed -n 's/^Maintainer: //p' "$control")
+[[ -n $maintainer ]] || fail "DEBIAN/control has no Maintainer field"
+changelog_date=$(LC_ALL=C date -u -d "@${SOURCE_DATE_EPOCH:-1767225600}" '+%a, %d %b %Y %H:%M:%S +0000')
+{
+    printf 'ttsroad (%s-%s) unstable; urgency=medium\n\n' "$application_version" "$debian_revision"
+    printf '  * TTSRoad Desktop %s packaged for Debian-based systems.\n\n' "$application_version"
+    printf ' -- %s  %s\n' "$maintainer" "$changelog_date"
+} > "$work_directory/changelog.Debian"
+gzip -9n -- "$work_directory/changelog.Debian"
+install -D -m 0644 "$work_directory/changelog.Debian.gz" \
+    "$payload/usr/share/doc/ttsroad/changelog.Debian.gz"
+
+# Replacing the desktop file and adding the documentation files invalidates jpackage's checksums.
 # Regenerate them from the final payload so `dpkg --verify` remains meaningful after installation.
 (
     cd "$payload"

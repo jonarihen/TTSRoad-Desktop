@@ -43,12 +43,41 @@ System dependencies remain native packages: GStreamer Base, Good and PulseAudio 
 not necessary for basic playback. The desktop entry is in Audio/AudioVideo and uses the checked-in
 brand artwork, deterministically scaled to jpackage's 512-pixel Linux icon during the build.
 
+Two Compose options feed different files and are easy to swap: `appCategory` becomes the Debian
+`Section`, while `menuGroup` is written verbatim into the desktop entry's `Categories` key and must
+therefore be registered freedesktop categories rather than a readable group name. `debMaintainer` is
+a bare address because jpackage renders the control field as `<vendor> <<debMaintainer>>`, so a
+`Name <address>` value there produces nested angle brackets and an RFC-invalid `Maintainer`.
+
 Compose clears its private jpackage resource directory immediately before invoking the tool, and
 its DSL cannot express Debian `Recommends`, `Section`, `GenericName`, or `StartupWMClass`. The Gradle
 Debian tasks therefore finalize jpackage's archive with `dpkg-deb`: unpack, change only those control
-and desktop fields, install the Debian copyright/license file, rebuild with root ownership, and
-leave the conventional task output in place. Inspection runs after this pass and treats any missing
-field as a release failure.
+and desktop fields, add the extended description, install the Debian copyright/license file and a
+generated `changelog.Debian.gz`, rebuild with root ownership, and leave the conventional task output
+in place. The changelog is generated rather than committed because CI builds the same application
+version at more than one Debian revision; its timestamp is fixed, and `SOURCE_DATE_EPOCH` overrides
+it, so two builds of one revision stay byte-identical. Inspection runs after this pass and treats any
+missing field as a release failure.
+
+### Ship the desktop entry, do not register it from a script
+
+jpackage keeps the entry inside `/opt/ttsroad/lib` and calls `xdg-desktop-menu install` from
+`postinst` under `set -e`. That command exits non-zero wherever no writable system menu directory
+exists, which aborts the entire installation on a minimal or container system — the exact
+environment the lifecycle job installs into. The finalizing pass moves the file to
+`/usr/share/applications/ttsroad-TTSRoad.desktop` and deletes the registration lines from `postinst`
+and `prerm`, so dpkg alone makes the entry appear and removal makes it disappear. Inspection fails
+the build if a maintainer script mentions `xdg-desktop-menu` again.
+
+### Lint the package, and name the three tags a bundled runtime cannot avoid
+
+`lintian --fail-on error` runs over every package. Three error tags are suppressed deliberately and
+individually: `dir-or-file-in-opt` (jpackage installs the whole application under `/opt/ttsroad`),
+`embedded-library` (the bundled JDK carries its own expat, freetype, lcms2, libjpeg and zlib) and
+`unstripped-binary-or-object` (the runtime ships as upstream Temurin built it). Each is a direct
+consequence of bundling Java, which is the decision above. The synthetic revision `0` predecessor
+additionally suppresses `debian-revision-is-zero`, because it is an upgrade fixture and never a
+published artifact. Nothing else is suppressed; a widened list would hide a real defect.
 
 ### Treat state according to XDG and preserve it on removal
 
