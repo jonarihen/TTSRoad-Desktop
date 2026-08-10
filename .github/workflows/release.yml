@@ -1,0 +1,336 @@
+name: Release
+
+# Tag pushes publish; workflow_dispatch performs the identical build and verification but stops
+# before the release is created, which is the documented dry run.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Least privilege by default. Only the publishing job widens this, and only to what it needs.
+permissions:
+  contents: read
+
+env:
+  GRADLE_FLAGS: >-
+    --no-daemon
+    --stacktrace
+    --warning-mode fail
+    -Pttsroad.warningsAsErrors=true
+
+jobs:
+  # Everything downstream builds from the version this job resolves, so a tag that disagrees with
+  # gradle.properties, or a version with no changelog entry, stops the release before a single
+  # artifact exists.
+  verify:
+    name: Verify version, tag and release notes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Resolve and cross-check the version
+        id: resolve
+        run: |
+          version=$(sed -n 's/^ttsroad\.version=//p' gradle.properties)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag=${{ github.ref_name }}
+            if [ "$tag" != "v$version" ]; then
+              echo "tag $tag does not match ttsroad.version $version (expected v$version)" >&2
+              exit 1
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            tag="v$version"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Extract the release notes for this version
+        run: ./packaging/release/changelog-section.sh "${{ steps.resolve.outputs.version }}" > release-notes.md
+
+      - name: Upload the release notes
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  # Linux is the supported release target, so it is the only one whose package is installed and
+  # upgraded before publishing. Windows and macOS build and smoke-test their installers only.
+  linux:
+    name: Linux .deb
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install packaging, Xvfb, Secret Service and GStreamer tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            desktop-file-utils \
+            fakeroot \
+            xvfb \
+            xauth \
+            gstreamer1.0-tools \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-pulseaudio \
+            libsecret-tools \
+            lintian
+
+      - name: Compile, unit tests and Compose UI tests
+        run: xvfb-run -a ./gradlew ${{ env.GRADLE_FLAGS }} clean check
+
+      # runReleaseDistributable is the gate that catches a missing jlink module or, if release
+      # minification is ever enabled, a missing reflection keep rule — before anything is published.
+      - name: Run the release distributable
+        run: TTSROAD_SMOKE_TEST=1 xvfb-run -a ./gradlew ${{ env.GRADLE_FLAGS }} runReleaseDistributable
+
+      - name: Build the release .deb
+        run: ./gradlew ${{ env.GRADLE_FLAGS }} packageReleaseDeb
+
+      - name: Inspect the release .deb
+        run: ./packaging/linux/inspect-deb.sh build/compose/binaries/main-release/deb/ttsroad_*_amd64.deb
+
+      - name: Stage the release artifact
+        run: |
+          mkdir -p build/release-artifacts
+          cp build/compose/binaries/main-release/deb/ttsroad_*_amd64.deb build/release-artifacts/
+
+      - name: Upload the Linux artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: build/release-artifacts/*.deb
+          if-no-files-found: error
+
+      # The application image, not the .deb, because syft reads the bundled jars and runtime
+      # directly. One SBOM covers every platform: the same jars ship in all three installers.
+      - name: Generate the SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: build/compose/binaries/main-release/app/TTSRoad
+          artifact-name: ttsroad-${{ needs.verify.outputs.version }}-sbom.spdx.json
+          output-file: ttsroad-${{ needs.verify.outputs.version }}-sbom.spdx.json
+          upload-release-assets: false
+
+      - name: Upload the SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-sbom
+          path: ttsroad-${{ needs.verify.outputs.version }}-sbom.spdx.json
+          if-no-files-found: error
+
+  # A published .deb that has never been installed is an untested .deb. This is the same clean
+  # container check CI runs, against the artifact that is about to be released.
+  linux-lifecycle:
+    name: Install, upgrade and uninstall the release .deb
+    needs: [verify, linux]
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out verification scripts
+        uses: actions/checkout@v7
+
+      - name: Download the Linux artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: release-linux
+          path: build/release-artifacts
+
+      - name: Install clean-container test tools
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates python3 xvfb xauth
+
+      # The release package is installed over itself: same version, same revision. That still
+      # exercises install, the packaged login window, dpkg's upgrade path and removal.
+      - name: Verify install, packaged login, upgrade and uninstall
+        run: |
+          package=$(find build/release-artifacts -name 'ttsroad_*_amd64.deb' -print -quit)
+          test -n "$package"
+          ./packaging/linux/verify-install-lifecycle.sh "$package" "$package"
+
+  windows:
+    name: Windows .msi
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # jpackage shells out to WiX for an MSI and fails with a bare "candle.exe not found" when it
+      # is absent. Runner images have dropped it before, so install it rather than assume it.
+      - name: Ensure WiX 3 is present
+        shell: pwsh
+        run: |
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset --no-progress --yes
+            $wix = Join-Path ${env:ProgramFiles(x86)} 'WiX Toolset v3.14\bin'
+            if (Test-Path $wix) { Add-Content $env:GITHUB_PATH $wix }
+          }
+
+      # bash rather than pwsh so the Gradle invocation is character-for-character the one the other
+      # two platforms run, including GRADLE_FLAGS word splitting.
+      - name: Compile and unit tests
+        shell: bash
+        run: ./gradlew ${{ env.GRADLE_FLAGS }} clean check
+
+      - name: Build the release .msi
+        shell: bash
+        run: ./gradlew ${{ env.GRADLE_FLAGS }} packageReleaseMsi
+
+      - name: Smoke test the release image
+        shell: bash
+        run: TTSROAD_SMOKE_TEST=1 ./gradlew ${{ env.GRADLE_FLAGS }} runReleaseDistributable
+
+      - name: Upload the Windows artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: build/compose/binaries/main-release/msi/*.msi
+          if-no-files-found: error
+
+  macos:
+    name: macOS .dmg
+    needs: verify
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Compile and unit tests
+        run: ./gradlew ${{ env.GRADLE_FLAGS }} clean check
+
+      - name: Build the release .dmg
+        run: ./gradlew ${{ env.GRADLE_FLAGS }} packageReleaseDmg
+
+      - name: Smoke test the release image
+        run: TTSROAD_SMOKE_TEST=1 ./gradlew ${{ env.GRADLE_FLAGS }} runReleaseDistributable
+
+      - name: Upload the macOS artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: build/compose/binaries/main-release/dmg/*.dmg
+          if-no-files-found: error
+
+  publish:
+    name: Publish the draft release
+    needs: [verify, linux, linux-lifecycle, windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      # contents: write creates the release. The two id-token/attestations scopes are what
+      # actions/attest-build-provenance needs; nothing here holds a signing key of its own.
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Download every built artifact
+        uses: actions/download-artifact@v7
+        with:
+          path: downloads
+
+      - name: Collect the release assets
+        id: collect
+        run: |
+          mkdir -p release
+          find downloads -type f \( -name '*.deb' -o -name '*.msi' -o -name '*.dmg' -o -name '*sbom*.json' \) \
+            -exec cp {} release/ \;
+          cp downloads/release-notes/release-notes.md release-notes.md
+          cp packaging/linux/LICENSE.txt release/LICENSE.txt
+          # Each format is built on its own OS, so a missing one means that job produced nothing.
+          for extension in deb msi dmg; do
+            count=$(find release -name "*.$extension" | wc -l)
+            if [ "$count" -ne 1 ]; then
+              echo "expected exactly one .$extension asset, found $count" >&2
+              exit 1
+            fi
+          done
+          ( cd release && sha256sum ./* > SHA256SUMS )
+          cat release/SHA256SUMS
+
+      # Signed provenance for the installers themselves. The SBOM, checksums and licence file are
+      # descriptions of those artifacts, not the artifacts a user executes.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            release/*.deb
+            release/*.msi
+            release/*.dmg
+
+      # A dry run reaches this point having built, tested and checksummed everything, and stops
+      # without creating a release. A failed gate above never gets here at all.
+      - name: Create the draft release
+        if: needs.verify.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.verify.outputs.tag }}" \
+            --draft \
+            --title "TTSRoad Desktop ${{ needs.verify.outputs.version }}" \
+            --notes-file release-notes.md \
+            --target "${{ github.sha }}" \
+            release/*
+
+      - name: Report a dry run
+        if: needs.verify.outputs.publish != 'true'
+        run: |
+          echo "Dry run for ${{ needs.verify.outputs.tag }}: artifacts built, verified and checksummed."
+          echo "Nothing was published. Push the tag to publish a draft release."

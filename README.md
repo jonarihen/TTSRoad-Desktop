@@ -11,7 +11,7 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.4.10-7F52FF?logo=kotlin&logoColor=white)
 ![Compose Multiplatform](https://img.shields.io/badge/Compose%20Multiplatform-1.11.1-4285F4?logo=jetpackcompose&logoColor=white)
 ![JDK](https://img.shields.io/badge/JDK-25-ED8B00?logo=openjdk&logoColor=white)
-![Gradle](https://img.shields.io/badge/Gradle-9.6.1-02303A?logo=gradle&logoColor=white)
+![Gradle](https://img.shields.io/badge/Gradle-9.7.0-02303A?logo=gradle&logoColor=white)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-informational)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 
@@ -22,7 +22,7 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 ## ✨ Highlights
 
 - 🖥️ **Truly native UI** — rendered with Skia via JetBrains Compose Multiplatform (Material 3), *not* a web view.
-- 📦 **Real installers** — ships as `.msi` (Windows), `.dmg` (macOS), and `.deb` (Linux) with a **bundled Java runtime**, so end users never install Java.
+- 📦 **Real installers** — ships as `.deb` (Linux), `.msi` (Windows) and `.dmg` (macOS) with a **bundled Java runtime**, so end users never install Java. Linux is the platform with a clean-machine install/upgrade/uninstall test; see [Releases](#-releases).
 - 🔗 **Shares the mobile API** — talks to the same `/api/mobile/*` endpoints as the Android app, and wears the same **AARIS** design language.
 - 🔊 **Real audio playback** — bearer-protected chapter MP3s are decoded in pure JVM and streamed to the system audio device.
 
@@ -144,7 +144,7 @@ launches of the packaged app, and an inspected/installed `packageReleaseDeb` on 
 | Component | Version | Where it is declared |
 | --- | --- | --- |
 | JDK (build **and** bundled runtime) | **25** | `gradle/libs.versions.toml` → `jdk`, applied as `kotlin { jvmToolchain(25) }` |
-| Gradle | **9.6.1** | `gradle/wrapper/gradle-wrapper.properties` (SHA-256 pinned) |
+| Gradle | **9.7.0** | `gradle/wrapper/gradle-wrapper.properties` (SHA-256 pinned) |
 | Kotlin | **2.4.10** | `libs.versions.toml` → `kotlin` (also the Compose *compiler* plugin version) |
 | Compose Multiplatform | **1.11.1** | `libs.versions.toml` → `composeMultiplatform` |
 | Compose Material 3 | 1.9.0 | independently versioned; 1.9.0 is the newest **stable** |
@@ -239,8 +239,42 @@ reset it to `1` when `ttsroad.version` changes. APT compares the combined `VERSI
    native linkage, desktop entry and safe diagnostics, then exercise clean install, login-window
    probe, in-place upgrade and uninstall in an Ubuntu 24.04 container.
 
+7. Dependency review on pull requests, failing on a high-severity advisory. It needs GitHub's
+   dependency graph, so it skips itself while the repository is private.
+
 Dependency updates arrive as weekly grouped Dependabot PRs
-([`.github/dependabot.yml`](.github/dependabot.yml)).
+([`.github/dependabot.yml`](.github/dependabot.yml)). Response times for a security report are in
+[`docs/SECURITY.md`](docs/SECURITY.md).
+
+> **Running the tests on an encrypted home directory.** eCryptfs (Linux Mint's "encrypt my home
+> folder" option) caps a filename at 143 bytes, and a few generated test class files are longer
+> than that. `./gradlew check` then fails with `error while writing … (Permission denied)`. Build
+> from a path on an unencrypted filesystem instead — CI is unaffected.
+
+## 🚢 Releases
+
+A release is a tag: `ttsroad.version` prefixed with `v`, so `1.0.1` ships as `v1.0.1`.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) refuses to publish when the tag and
+`gradle.properties` disagree, or when [`CHANGELOG.md`](CHANGELOG.md) has no entry for that version.
+
+Each installer is built on its own operating system. The Linux `.deb` is additionally inspected and
+then installed, upgraded and removed in a clean Ubuntu 24.04 container before anything is published;
+the `.msi` and `.dmg` are built and smoke-tested but have no clean-machine install test. The publish
+job attaches SHA-256 checksums, an SBOM and signed build provenance, and creates the release as a
+**draft** — publishing stays a human action.
+
+Run the workflow manually (`workflow_dispatch`) for a dry run: identical build and verification,
+nothing published.
+
+### Update checking
+
+Settings → **Updates & About** checks the public GitHub release feed at most once per launch and
+once per day, and can be turned off. A version you dismiss is not announced again until a newer one
+appears; pressing **CHECK NOW** ignores all of that.
+
+A download is verified against the release's published `SHA256SUMS` and only then handed to your
+desktop's installer. A file that fails verification is deleted and never opened. The application
+never runs `sudo` and never installs anything itself.
 
 ## 🗂️ Project layout
 

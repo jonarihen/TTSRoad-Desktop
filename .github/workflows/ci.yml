@@ -26,6 +26,23 @@ env:
     -Pttsroad.warningsAsErrors=true
 
 jobs:
+  # Blocks a pull request that introduces a dependency with a known vulnerability or a licence the
+  # project does not accept. The action needs the dependency graph, which GitHub only provides for
+  # public repositories (or private ones with Advanced Security), so the job skips itself while the
+  # repository is private rather than failing every PR.
+  dependency-review:
+    name: Dependency review
+    if: ${{ github.event_name == 'pull_request' && !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
   build:
     name: Build, test and package (Ubuntu)
     # Linux Mint 22.x is based on Ubuntu 24.04. Build the .deb on that exact ABI generation rather

@@ -85,6 +85,7 @@ import dk.perspektiva.ttsroad.desktop.ui.ShortcutsDialog
 import dk.perspektiva.ttsroad.desktop.ui.WindowSizeClass
 import dk.perspektiva.ttsroad.desktop.ui.hasSession
 import dk.perspektiva.ttsroad.desktop.ui.rememberChapterDownloads
+import dk.perspektiva.ttsroad.desktop.ui.UpdateStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.windowSizeClassFor
 
@@ -105,6 +106,11 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     // Hoisted above navigation on purpose: `when (destination)` disposes the screen it leaves, so a
     // holder created inside SettingsScreen would drop the selected pane and the loaded device list
     // every time the user glanced at the library.
+    // Hoisted above navigation like the settings holder, so leaving the About pane and coming
+    // back shows the answer the last check produced instead of checking again.
+    val updates = rememberStateHolder(container) {
+        UpdateStateHolder(container.updateChecker, container.updateDownloader, container.updateSettings)
+    }
     val settings = rememberStateHolder(repository, sessionStore) {
         SettingsStateHolder(repository, sessionStore, offlineStorage = container.downloads)
     }
@@ -346,6 +352,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     // can do by construction.
                                     canChangeSpeed = playerState.canChangeSpeed,
                                     canSkipSilence = playerState.canSkipSilence,
+                                    updates = updates,
                                     // Keeps the destination and the open pane in step, so the
                                     // Devices deep link and the in-screen pane list are the same
                                     // thing rather than two competing notions of "where am I".
