@@ -18,6 +18,16 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-10
+
+### Fixed
+
+- Starting a chapter from the library queued only that one chapter, so the Next control was
+  disabled and playback stopped at the end of the chapter instead of advancing. A queue is now
+  always the whole fiction in reading order, wherever playback was started from.
+- Chapter audio was resampled at GStreamer's default quality. Speech crossing the common
+  44.1 kHz to 48 kHz boundary is now resampled at full quality.
+
 ## [1.0.1] - 2026-08-10
 
 First packaged release: a feature-complete, Linux-native desktop client for a private TTSRoad
@@ -42,5 +52,6 @@ server.
 - A Debian package with a bundled JDK 25 runtime, desktop entry, upgrade-safe revisioning and XDG
   rotating logs, plus credential-safe `--version` and `--diagnostics` commands.
 
-[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.0.2
 [1.0.1]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.0.1
