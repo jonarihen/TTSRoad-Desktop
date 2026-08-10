@@ -14,6 +14,8 @@ import java.io.File
  *   an aggressive janitor — and the user would find an "Offline" badge with no bytes behind it.
  * - **Cache** is everything the app can rebuild by asking the server again: streamed audio it chose
  *   to retain, HTTP metadata. Deleting it costs bandwidth and nothing else.
+ * - **Logs** are local diagnostic history. They are neither preferences nor rebuildable content,
+ *   so Linux puts them under `XDG_STATE_HOME` rather than pretending they are cache entries.
  *
  * [osName], [userHome] and [env] are parameters throughout so the path rules — in particular the
  * XDG Base Directory spec, where honouring `$XDG_DATA_HOME` is the difference between respecting a
@@ -72,6 +74,22 @@ object AppDirectories {
 
         Platform.MacOs -> File(File(userHome, "Library/Caches"), AppFolder)
         Platform.Linux -> File(xdgDir(env, "XDG_CACHE_HOME", userHome, ".cache"), AppFolder)
+    }
+
+    /**
+     * Rotating diagnostic logs: `%LOCALAPPDATA%/TTSRoad/Logs`, `~/Library/Logs/TTSRoad`, or
+     * `$XDG_STATE_HOME/TTSRoad` (falling back to `~/.local/state/TTSRoad`).
+     */
+    fun logDir(
+        osName: String = System.getProperty("os.name").orEmpty(),
+        userHome: String = System.getProperty("user.home").orEmpty(),
+        env: (String) -> String? = System::getenv,
+    ): File = when (platformOf(osName)) {
+        Platform.Windows ->
+            File(File(envDir(env, "LOCALAPPDATA") ?: File(userHome, "AppData/Local"), AppFolder), "Logs")
+
+        Platform.MacOs -> File(File(userHome, "Library/Logs"), AppFolder)
+        Platform.Linux -> File(xdgDir(env, "XDG_STATE_HOME", userHome, ".local/state"), AppFolder)
     }
 
     private enum class Platform { Windows, MacOs, Linux }

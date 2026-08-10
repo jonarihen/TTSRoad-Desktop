@@ -1,5 +1,9 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.awt.RenderingHints
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -13,8 +17,13 @@ group = "dk.perspektiva.ttsroad.desktop"
 // coordinate, the jpackage packageVersion, installer filenames, the generated BuildInfo the
 // About text reads, and CI release artifacts. There is deliberately no second number.
 val appVersionValue: String = providers.gradleProperty("ttsroad.version").get()
+val debRevisionValue: String = providers.gradleProperty("ttsroad.debRevision").get()
 val appNameValue = "TTSRoad"
 version = appVersionValue
+
+require(Regex("[0-9][A-Za-z0-9.+~]*").matches(debRevisionValue)) {
+    "ttsroad.debRevision must be a Debian revision such as 1 or 2ubuntu1"
+}
 
 val jdkVersion: Int = libs.versions.jdk.get().toInt()
 
@@ -28,6 +37,7 @@ dependencies {
     // `compose.material3` / `compose.materialIconsExtended` are error-level deprecations in
     // CMP 1.11.1, so the artifacts are named explicitly via the version catalog instead.
     implementation(compose.desktop.currentOs)
+    implementation(libs.compose.components.resources)
     implementation(libs.compose.material3)
     implementation(libs.compose.materialIconsExtended)
 
@@ -115,6 +125,9 @@ abstract class GenerateBuildInfo : DefaultTask() {
     @get:Input
     abstract val appName: Property<String>
 
+    @get:Input
+    abstract val debRevision: Property<String>
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -131,6 +144,7 @@ abstract class GenerateBuildInfo : DefaultTask() {
             |object BuildInfo {
             |    const val VERSION: String = "${appVersion.get()}"
             |    const val APP_NAME: String = "${appName.get()}"
+            |    const val DEB_REVISION: String = "${debRevision.get()}"
             |}
             |
             """.trimMargin(),
@@ -141,6 +155,7 @@ abstract class GenerateBuildInfo : DefaultTask() {
 val generateBuildInfo = tasks.register<GenerateBuildInfo>("generateBuildInfo") {
     appVersion.set(appVersionValue)
     appName.set(appNameValue)
+    debRevision.set(debRevisionValue)
     outputDir.set(layout.buildDirectory.dir("generated/buildinfo/kotlin"))
 }
 
@@ -212,6 +227,54 @@ tasks.register<JavaExec>("runPlaybackPrototype") {
 
 tasks.named("check") { dependsOn(tasks.named("compilePrototypeKotlin")) }
 
+/**
+ * jpackage wants a conventional Linux PNG rather than the large source artwork that the Compose
+ * window also uses. Deriving it here keeps one checked-in brand asset and makes the package input
+ * deterministic on machines without ImageMagick.
+ */
+abstract class GenerateLinuxPackageIcon : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sourceFile: RegularFileProperty
+
+    @get:Input
+    abstract val edgePixels: Property<Int>
+
+    @get:OutputFile
+    abstract val outputFile: RegularFileProperty
+
+    @TaskAction
+    fun generate() {
+        val source = ImageIO.read(sourceFile.get().asFile)
+            ?: error("Linux package icon is not a readable image")
+        require(source.width == source.height) { "Linux package icon must be square" }
+
+        val edge = edgePixels.get()
+        val scaled = BufferedImage(edge, edge, BufferedImage.TYPE_INT_ARGB)
+        val graphics = scaled.createGraphics()
+        try {
+            graphics.setRenderingHint(
+                RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_BICUBIC,
+            )
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            graphics.drawImage(source, 0, 0, edge, edge, null)
+        } finally {
+            graphics.dispose()
+        }
+        val target = outputFile.get().asFile
+        target.parentFile.mkdirs()
+        check(ImageIO.write(scaled, "png", target)) { "No PNG writer is available in the build JDK" }
+    }
+}
+
+val generateLinuxPackageIcon = tasks.register<GenerateLinuxPackageIcon>("generateLinuxPackageIcon") {
+    sourceFile.set(layout.projectDirectory.file("src/main/composeResources/drawable/ttsroad.png"))
+    edgePixels.set(512)
+    outputFile.set(layout.buildDirectory.file("generated/package-icons/linux/ttsroad.png"))
+}
+
 // jlink/jpackage default to the JVM that is *running Gradle*, not to the Kotlin toolchain, so
 // without this the bundled runtime image is a JDK 21 that cannot load our class-file-69 output
 // ("UnsupportedClassVersionError ... class file version 69.0"). Resolving the launcher here also
@@ -224,6 +287,11 @@ val packagingJavaHome: String = javaToolchains
     .asFile
     .absolutePath
 
+compose.resources {
+    packageOfResClass = "dk.perspektiva.ttsroad.desktop.resources"
+    publicResClass = true
+}
+
 compose.desktop {
     application {
         mainClass = "dk.perspektiva.ttsroad.desktop.MainKt"
@@ -232,8 +300,12 @@ compose.desktop {
 
         buildTypes.release.proguard {
             // CMP 1.11.1's bundled ProGuard 7.7.0 cannot read Java 25 bytecode
-            // ("Unsupported version number [69.0]"). 7.8.0 was the first release that can.
+            // ("Unsupported version number [69.0]"). 7.8.0 was the first release that can. Native
+            // installers do not require shrinking, and this app has reflection/service-provider
+            // boundaries in Moshi, Retrofit, JNA, GStreamer, D-Bus and mp3spi. Keep the release
+            // image behaviorally identical until explicit, tested keep rules cover all of them.
             version.set(libs.versions.proguard)
+            isEnabled.set(false)
         }
 
         nativeDistributions {
@@ -244,8 +316,10 @@ compose.desktop {
             // Same single source as `version` above — installer filenames and the About text
             // can no longer drift apart. jpackage requires MAJOR > 0 (esp. for the macOS .dmg).
             packageVersion = appVersionValue
-            description = "TTSRoad desktop client"
+            copyright = "Copyright 2026 Perspektiva"
+            description = "Listen to and read along with audiobooks from a TTSRoad server"
             vendor = "Perspektiva"
+            licenseFile.set(layout.projectDirectory.file("packaging/linux/LICENSE.txt"))
 
             // The jlink image is minimised by module inference; these are the modules the app
             // needs reflectively/at runtime and which inference does not always find:
@@ -259,8 +333,10 @@ compose.desktop {
             //     session bus" in the packaged image while working fine from source.
             modules(
                 "java.desktop",
+                "java.instrument",
                 "java.naming",
                 "java.management",
+                "jdk.accessibility",
                 "jdk.crypto.ec",
                 "jdk.security.auth",
                 "jdk.unsupported",
@@ -277,7 +353,20 @@ compose.desktop {
             }
             linux {
                 shortcut = true
-                menuGroup = "TTSRoad"
+                // Debian package names are lowercase even though the application, launcher and
+                // desktop display name stay TTSRoad.
+                packageName = "ttsroad"
+                appRelease = debRevisionValue
+                // These two feed different files: appCategory becomes the Debian Section, while
+                // menuGroup is written verbatim into the desktop entry's Categories key and so has
+                // to be registered freedesktop categories, not a human-readable group name.
+                appCategory = "sound"
+                // jpackage renders the control field as "<vendor> <<debMaintainer>>", so this must
+                // be a bare address. A "Name <address>" value here produces nested angle brackets
+                // and an RFC-invalid Maintainer.
+                debMaintainer = "jonarihen@users.noreply.github.com"
+                menuGroup = "AudioVideo;Audio;"
+                iconFile.set(generateLinuxPackageIcon.flatMap { it.outputFile })
             }
             macOS {
                 bundleID = "dk.perspektiva.ttsroad.desktop"
@@ -285,3 +374,45 @@ compose.desktop {
         }
     }
 }
+
+// Compose 1.11 exposes most Linux jpackage options through its DSL, but not package dependencies.
+// `freeArgs` is the plugin's supported escape hatch to the underlying JDK tool. The control
+// package is finalized below with Debian's own tooling because Compose clears its private
+// jpackage resource directory immediately before launch, preventing a stable control/desktop
+// template override. Response-file values cannot contain unquoted spaces, hence the comma-only
+// dependency list.
+tasks.withType<AbstractJPackageTask>().configureEach {
+    if (targetFormat == TargetFormat.Deb) {
+        freeArgs.addAll(
+            "--linux-package-deps",
+            listOf(
+                "gstreamer1.0-plugins-base",
+                "gstreamer1.0-plugins-good",
+                "gstreamer1.0-pulseaudio",
+                "libsecret-tools",
+            ).joinToString(","),
+        )
+    }
+}
+
+// jpackage creates the native archive and dpkg-deb performs the small Debian-specific finishing
+// pass: Section/Recommends, the Debian copyright file, and desktop fields jpackage cannot express.
+// Finalizers are used so the familiar packageDeb/packageReleaseDeb tasks always leave a complete
+// artifact. They no-op when a failed jpackage invocation produced no archive.
+fun registerDebFinalizer(taskName: String, variantDirectory: String) {
+    val debDirectory = layout.buildDirectory.dir("compose/binaries/$variantDirectory/deb")
+    val finalizer = tasks.register<Exec>("finalize${taskName.replaceFirstChar(Char::uppercaseChar)}") {
+        commandLine(
+            "bash",
+            layout.projectDirectory.file("packaging/linux/finalize-deb.sh").asFile.absolutePath,
+            debDirectory.get().asFile.absolutePath,
+            appVersionValue,
+            debRevisionValue,
+        )
+        onlyIf { debDirectory.get().asFile.isDirectory }
+    }
+    tasks.matching { it.name == taskName }.configureEach { finalizedBy(finalizer) }
+}
+
+registerDebFinalizer("packageDeb", "main")
+registerDebFinalizer("packageReleaseDeb", "main-release")

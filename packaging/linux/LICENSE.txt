@@ -1,0 +1,6 @@
+TTSRoad Desktop
+Copyright 2026 Perspektiva. All rights reserved.
+
+This distribution contains third-party components under their respective licenses. The About
+screen identifies the principal open-source components and license families. Their license texts
+remain available in the bundled artifacts and upstream distributions.

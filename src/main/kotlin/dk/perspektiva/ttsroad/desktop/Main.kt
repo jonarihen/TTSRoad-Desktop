@@ -9,19 +9,27 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import dk.perspektiva.ttsroad.desktop.data.ScreenBounds
+import dk.perspektiva.ttsroad.desktop.data.AppLog
 import dk.perspektiva.ttsroad.desktop.data.WindowPlacement
 import dk.perspektiva.ttsroad.desktop.data.WindowPlacements
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
+import dk.perspektiva.ttsroad.desktop.resources.Res
+import dk.perspektiva.ttsroad.desktop.resources.ttsroad
 import dk.perspektiva.ttsroad.desktop.ui.TtsRoadTheme
 import java.awt.Dimension
+import java.awt.EventQueue
 import java.awt.Frame
 import java.awt.GraphicsEnvironment
 import java.awt.event.WindowEvent
+import java.io.File
 import java.util.ServiceLoader
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import javax.swing.JOptionPane
 import javax.sound.sampled.spi.AudioFileReader
 import kotlin.system.exitProcess
 import kotlinx.coroutines.delay
+import org.jetbrains.compose.resources.painterResource
 
 /**
  * `--smoke-test` boots the real window, renders one frame, then exits 0.
@@ -31,6 +39,8 @@ import kotlinx.coroutines.delay
  * test on the Gradle classpath can check.
  */
 private const val SmokeTestFlag = "--smoke-test"
+private const val SmokeTestEnvironment = "TTSROAD_SMOKE_TEST"
+private const val SmokeServerEnvironment = "TTSROAD_SMOKE_SERVER_URL"
 
 /**
  * MP3 decoding is provided by mp3spi/JLayer through a `META-INF/services` SPI registration, which
@@ -83,11 +93,67 @@ private fun attachedDisplays(): List<ScreenBounds> = runCatching {
 }.getOrElse { emptyList() }
 
 fun main(args: Array<String>) {
-    val smokeTest = args.contains(SmokeTestFlag)
+    when {
+        args.contains(VersionFlag) -> {
+            println(versionText())
+            return
+        }
+
+        args.contains(DiagnosticsFlag) -> {
+            println(buildRuntimeDiagnostics())
+            return
+        }
+    }
+
+    val logFile = AppLog.configurePersistent()
+    val crashReported = AtomicBoolean(false)
+    Thread.setDefaultUncaughtExceptionHandler(
+        terminatingUncaughtExceptionHandler(
+            report = { thread, error -> reportFatalCrash(crashReported, logFile, thread, error) },
+            terminate = ::exitProcess,
+        ),
+    )
+
+    val smokeTest = args.contains(SmokeTestFlag) ||
+        System.getenv(SmokeTestEnvironment).equals("1", ignoreCase = true)
+    try {
+        runDesktop(smokeTest)
+    } catch (error: Throwable) {
+        reportFatalCrash(crashReported, logFile, Thread.currentThread(), error)
+        exitProcess(1)
+    }
+}
+
+/**
+ * A background-thread crash is process-fatal: after the report completes (including dismissal of
+ * the desktop dialog), terminate rather than leaving Compose and possibly-corrupt shared state
+ * running. The callbacks keep the ordering and the hard-termination fallback unit-testable.
+ */
+internal fun terminatingUncaughtExceptionHandler(
+    report: (Thread, Throwable) -> Unit,
+    terminate: (Int) -> Unit,
+): Thread.UncaughtExceptionHandler = Thread.UncaughtExceptionHandler { thread, error ->
+    try {
+        report(thread, error)
+    } finally {
+        terminate(1)
+    }
+}
+
+private fun runDesktop(smokeTest: Boolean) {
 
     // The one composition root. Owned by main() rather than by App() so it can be closed when
     // the window closes (stopping playback, deleting the temp file, draining the HTTP pools).
     val container = AppContainer()
+    // Package lifecycle CI supplies a tiny local capabilities server. Seeding only the non-secret
+    // server hint makes the real login screen probe it after composition, proving the installed
+    // launcher, OkHttp stack and login window work together without creating a fake signed-in
+    // session. Ignored for every normal launch and for smoke tests without the explicit variable.
+    if (smokeTest) {
+        System.getenv(SmokeServerEnvironment)?.takeIf { it.isNotBlank() }?.let { serverUrl ->
+            container.sessionStore.save(container.sessionStore.current().copy(serverUrl = serverUrl))
+        }
+    }
 
     // Coil reuses the app's single OkHttpClient instead of building a third one.
     SingletonImageLoader.setSafe {
@@ -109,6 +175,7 @@ fun main(args: Array<String>) {
 
     application {
         val state = rememberWindowState()
+        val appIcon = painterResource(Res.drawable.ttsroad)
         Window(
             onCloseRequest = {
                 frame.get()?.let { container.windowPreferences.save(currentPlacement(it, restored)) }
@@ -116,6 +183,7 @@ fun main(args: Array<String>) {
                 exitApplication()
             },
             title = "${BuildInfo.APP_NAME} ${BuildInfo.VERSION}",
+            icon = appIcon,
             state = state,
         ) {
             // Applied through AWT rather than through `WindowState`, deliberately: `WindowState`
@@ -154,10 +222,38 @@ fun main(args: Array<String>) {
                     verifyMprisRuntimeModulesArePresent()
                     println("${BuildInfo.APP_NAME} ${BuildInfo.VERSION} smoke test OK")
                     container.close()
-                    exitApplication()
+                    // Gradle's runReleaseDistributable launches on its own Java classpath rather
+                    // than through the native launcher. AWT/native service threads can outlive
+                    // Compose in that mode, so the bounded smoke path must terminate explicitly.
+                    exitProcess(0)
                 }
             }
         }
+    }
+}
+
+private fun reportFatalCrash(
+    reported: AtomicBoolean,
+    logFile: File,
+    thread: Thread,
+    error: Throwable,
+) {
+    if (!reported.compareAndSet(false, true)) return
+    AppLog.crash(thread, error)
+    val message = "TTSRoad could not continue. Details were written to ${logFile.absolutePath}."
+    System.err.println(message)
+    if (GraphicsEnvironment.isHeadless()) return
+
+    runCatching {
+        val show = Runnable {
+            JOptionPane.showMessageDialog(
+                null,
+                message,
+                "TTSRoad",
+                JOptionPane.ERROR_MESSAGE,
+            )
+        }
+        if (EventQueue.isDispatchThread()) show.run() else EventQueue.invokeAndWait(show)
     }
 }
 
