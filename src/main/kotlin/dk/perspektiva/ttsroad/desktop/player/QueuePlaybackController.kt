@@ -176,6 +176,22 @@ class QueuePlaybackController(
                 .copy(error = "This chapter has no audio yet")
             return
         }
+        // Starting one chapter still means starting the *serial* at that chapter. Without this the
+        // library's "jump back in" and continue-listening rows built a queue of exactly one, so
+        // Next was disabled and playback stopped at the end of the chapter instead of advancing —
+        // while the identical chapter started from the fiction screen carried the whole fiction.
+        val fictionId = fiction?.id?.takeIf { it > 0 } ?: chapter.fictionId.takeIf { it > 0 }
+        val siblings = fictionId?.let {
+            runCatching { repository.chapters(it).chapters }.getOrNull()
+        }.orEmpty()
+        if (siblings.any { it.resolvedChapterId == chapter.resolvedChapterId }) {
+            playQueue(siblings, chapter.resolvedChapterId, fiction)
+            return
+        }
+
+        // No sibling list — offline, or a chapter the fiction no longer lists. One chapter still
+        // plays; it simply has nothing to advance to, which is the honest state rather than a
+        // failure.
         // Before the queue changes, not after: `leaveCurrentChapter` reads queue[queueIndex], and
         // once the new queue is in place that index names a different chapter — or nothing at all.
         leaveCurrentChapter()

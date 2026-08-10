@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.desktop.player
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.AudioInfo
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -373,5 +374,44 @@ class QueuePlaybackControllerTest {
         controller.release()
 
         assertEquals(1, engine.closeCount.get())
+    }
+
+    // --- Starting one chapter starts the serial --------------------------------------------
+
+    @Test
+    fun `playing a single chapter still queues the rest of the fiction`() = runBlocking {
+        // The library's continue-listening rows call play() with one chapter. Before this, that
+        // built a queue of exactly one: Next was disabled and the chapter's end stopped playback,
+        // while the same chapter started from the fiction screen carried the whole serial.
+        val chapters = listOf(
+            chapter(1, "One", 10.0),
+            chapter(2, "Two", 10.0),
+            chapter(3, "Three", 10.0),
+        )
+        val repository = FakeRepository(
+            chaptersResult = Result.success(
+                ChaptersResponse(fiction = FictionSummary(id = 7), chapters = chapters),
+            ),
+        )
+        val controller = controllerFor(FakePlaybackEngine(), repository = repository)
+
+        controller.play(chapters[1], FictionSummary(id = 7))
+
+        val state = controller.await("the queue holds the whole fiction") { it.queue.size == 3 }
+        assertEquals(1, state.currentIndex)
+        assertTrue(state.hasNext, "a middle chapter must be able to advance")
+    }
+
+    @Test
+    fun `a fiction whose chapters cannot be loaded still plays the one chapter`() = runBlocking {
+        // Offline, or a chapter the fiction no longer lists. One chapter with nothing after it is
+        // the honest state; refusing to play would be worse.
+        val repository = FakeRepository(chaptersResult = Result.failure(IllegalStateException("offline")))
+        val controller = controllerFor(FakePlaybackEngine(), repository = repository)
+
+        controller.play(chapter(1, "Alone", 10.0), FictionSummary(id = 7))
+
+        val state = controller.await("the single chapter is queued") { it.queue.size == 1 }
+        assertFalse(state.hasNext, "nothing was loaded to advance to")
     }
 }
