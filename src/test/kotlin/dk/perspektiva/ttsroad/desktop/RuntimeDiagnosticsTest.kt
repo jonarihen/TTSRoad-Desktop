@@ -47,7 +47,9 @@ class RuntimeDiagnosticsTest {
         assertTrue(text.contains("GStreamer backend: available"), text)
         assertTrue(text.contains("Secret Service helper: available"), text)
         assertTrue(text.contains("Accessibility module: present"), text)
-        assertTrue(text.contains("/tmp/state/TTSRoad/ttsroad.log"), text)
+        // Built through File so the fixture matches the host's separator: this case describes a
+        // Linux layout but must still pass when the suite runs on a Windows runner.
+        assertTrue(text.contains(File("/tmp/state/TTSRoad/ttsroad.log").path), text)
     }
 
     @Test

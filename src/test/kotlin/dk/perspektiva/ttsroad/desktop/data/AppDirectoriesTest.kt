@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.desktop.data
 
+import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -19,6 +20,21 @@ class AppDirectoriesTest {
         return { map[it] }
     }
 
+    /**
+     * Compares paths without caring which separator the *host* uses.
+     *
+     * These cases pass an OS name in, so they describe Linux and macOS layouts from any machine —
+     * but `File.path` renders separators the running JVM's way, so a literal "/a/b" fixture fails
+     * on a Windows runner for a reason that has nothing to do with the layout being asserted.
+     */
+    private fun assertPath(expected: String, actual: File, message: String? = null) {
+        assertEquals(File(expected).path, actual.path, message)
+    }
+
+    /** Same normalisation, for the cases that assert a fragment rather than a whole path. */
+    private fun containsPath(haystack: String, fragment: String): Boolean =
+        haystack.contains(File(fragment).path)
+
     // --- Linux / XDG ----------------------------------------------------------------------------
 
     @Test
@@ -29,19 +45,19 @@ class AppDirectoriesTest {
             "XDG_CACHE_HOME" to "/xdg/cache",
             "XDG_STATE_HOME" to "/xdg/state",
         )
-        assertEquals("/xdg/config/TTSRoad", AppDirectories.configDir("Linux", "/home/u", e).path)
-        assertEquals("/xdg/data/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e).path)
-        assertEquals("/xdg/cache/TTSRoad", AppDirectories.cacheDir("Linux", "/home/u", e).path)
-        assertEquals("/xdg/state/TTSRoad", AppDirectories.logDir("Linux", "/home/u", e).path)
+        assertPath("/xdg/config/TTSRoad", AppDirectories.configDir("Linux", "/home/u", e))
+        assertPath("/xdg/data/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e))
+        assertPath("/xdg/cache/TTSRoad", AppDirectories.cacheDir("Linux", "/home/u", e))
+        assertPath("/xdg/state/TTSRoad", AppDirectories.logDir("Linux", "/home/u", e))
     }
 
     @Test
     fun `linux falls back to the spec's defaults`() {
         val e = env()
-        assertEquals("/home/u/.config/TTSRoad", AppDirectories.configDir("Linux", "/home/u", e).path)
-        assertEquals("/home/u/.local/share/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e).path)
-        assertEquals("/home/u/.cache/TTSRoad", AppDirectories.cacheDir("Linux", "/home/u", e).path)
-        assertEquals("/home/u/.local/state/TTSRoad", AppDirectories.logDir("Linux", "/home/u", e).path)
+        assertPath("/home/u/.config/TTSRoad", AppDirectories.configDir("Linux", "/home/u", e))
+        assertPath("/home/u/.local/share/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e))
+        assertPath("/home/u/.cache/TTSRoad", AppDirectories.cacheDir("Linux", "/home/u", e))
+        assertPath("/home/u/.local/state/TTSRoad", AppDirectories.logDir("Linux", "/home/u", e))
     }
 
     @Test
@@ -53,15 +69,15 @@ class AppDirectoriesTest {
             "XDG_CACHE_HOME" to "also/relative",
             "XDG_STATE_HOME" to "state/relative",
         )
-        assertEquals("/home/u/.local/share/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e).path)
-        assertEquals("/home/u/.cache/TTSRoad", AppDirectories.cacheDir("Linux", "/home/u", e).path)
-        assertEquals("/home/u/.local/state/TTSRoad", AppDirectories.logDir("Linux", "/home/u", e).path)
+        assertPath("/home/u/.local/share/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e))
+        assertPath("/home/u/.cache/TTSRoad", AppDirectories.cacheDir("Linux", "/home/u", e))
+        assertPath("/home/u/.local/state/TTSRoad", AppDirectories.logDir("Linux", "/home/u", e))
     }
 
     @Test
     fun `an empty XDG value is treated as unset`() {
         val e = env("XDG_DATA_HOME" to "")
-        assertEquals("/home/u/.local/share/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e).path)
+        assertPath("/home/u/.local/share/TTSRoad", AppDirectories.dataDir("Linux", "/home/u", e))
     }
 
     // --- Windows --------------------------------------------------------------------------------
@@ -92,9 +108,9 @@ class AppDirectoriesTest {
     @Test
     fun `macos uses Caches for the cache root and Application Support for the rest`() {
         val e = env()
-        assertTrue(AppDirectories.cacheDir("Mac OS X", "/Users/u", e).path.contains("Library/Caches"))
+        assertTrue(containsPath(AppDirectories.cacheDir("Mac OS X", "/Users/u", e).path, "Library/Caches"))
         assertTrue(AppDirectories.dataDir("Mac OS X", "/Users/u", e).path.contains("Application Support"))
-        assertEquals("/Users/u/Library/Logs/TTSRoad", AppDirectories.logDir("Mac OS X", "/Users/u", e).path)
+        assertPath("/Users/u/Library/Logs/TTSRoad", AppDirectories.logDir("Mac OS X", "/Users/u", e))
     }
 
     // --- The invariant the whole split exists for -----------------------------------------------
