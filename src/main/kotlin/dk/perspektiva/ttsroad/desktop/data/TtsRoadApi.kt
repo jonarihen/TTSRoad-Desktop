@@ -1,8 +1,10 @@
 package dk.perspektiva.ttsroad.desktop.data
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -37,6 +39,33 @@ interface TtsRoadApi {
         @Header("Authorization") auth: String,
         @Body request: PlaybackProgressRequest,
     ): PlaybackProgressResponse
+
+    @GET("api/mobile/bookmarks")
+    suspend fun bookmarks(
+        @Header("Authorization") auth: String,
+        @Query("fiction_id") fictionId: Int? = null,
+        @Query("chapter_id") chapterId: Int? = null,
+        @Query("kind") kind: String? = null,
+    ): BookmarkListResponse
+
+    @POST("api/mobile/bookmarks")
+    suspend fun createBookmark(
+        @Header("Authorization") auth: String,
+        @Body request: BookmarkCreateRequest,
+    ): BookmarkWriteResponse
+
+    @PATCH("api/mobile/bookmarks/{bookmark_id}")
+    suspend fun updateBookmark(
+        @Header("Authorization") auth: String,
+        @Path("bookmark_id") bookmarkId: Int,
+        @Body request: BookmarkUpdateRequest,
+    ): BookmarkWriteResponse
+
+    @DELETE("api/mobile/bookmarks/{bookmark_id}")
+    suspend fun deleteBookmark(
+        @Header("Authorization") auth: String,
+        @Path("bookmark_id") bookmarkId: Int,
+    ): BookmarkDeleteResponse
 
     @POST("api/mobile/playback/sync")
     suspend fun syncProgress(

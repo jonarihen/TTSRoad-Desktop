@@ -57,8 +57,17 @@ interface PlaybackController {
     /**
      * Play a whole fiction as a queue, starting at [startChapterId] — enables next/previous,
      * auto-advance, and the up-next list (mirrors the Android client's playQueue).
+     *
+     * [startPositionSeconds] overrides where that chapter resumes from. Seeking after the call
+     * would not work: the position is only settable once media has loaded, so a seek issued
+     * immediately after starting is dropped. Jumping to a bookmark needs the position up front.
      */
-    suspend fun playQueue(chapters: List<ChapterSummary>, startChapterId: Int, fiction: FictionSummary?)
+    suspend fun playQueue(
+        chapters: List<ChapterSummary>,
+        startChapterId: Int,
+        fiction: FictionSummary?,
+        startPositionSeconds: Double? = null,
+    )
     fun togglePlayPause()
     fun seekTo(positionMs: Long)
     fun skipBy(deltaMs: Long)
@@ -114,7 +123,12 @@ class Mp3PlaybackController(private val repository: TtsRoadRepository) : Playbac
         beginPlayback(0, resumeMsOf(chapter))
     }
 
-    override suspend fun playQueue(chapters: List<ChapterSummary>, startChapterId: Int, fiction: FictionSummary?) {
+    override suspend fun playQueue(
+        chapters: List<ChapterSummary>,
+        startChapterId: Int,
+        fiction: FictionSummary?,
+        startPositionSeconds: Double?,
+    ) {
         val playable = chapters.filter { it.audio != null }
         if (playable.isEmpty()) {
             _state.update { it.copy(error = "No playable chapters yet") }
@@ -123,7 +137,10 @@ class Mp3PlaybackController(private val repository: TtsRoadRepository) : Playbac
         queue = playable
         queueFiction = fiction
         val startIndex = playable.indexOfFirst { it.resolvedChapterId == startChapterId }.coerceAtLeast(0)
-        beginPlayback(startIndex, resumeMsOf(playable[startIndex]))
+        val startMs = startPositionSeconds
+            ?.let { (it * 1000).toLong().coerceAtLeast(0L) }
+            ?: resumeMsOf(playable[startIndex])
+        beginPlayback(startIndex, startMs)
     }
 
     override fun togglePlayPause() {

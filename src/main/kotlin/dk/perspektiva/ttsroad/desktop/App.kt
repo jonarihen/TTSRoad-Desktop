@@ -50,6 +50,7 @@ import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.player.Mp3PlaybackController
 import dk.perspektiva.ttsroad.desktop.ui.AarisCard
 import dk.perspektiva.ttsroad.desktop.ui.AarisColor
+import dk.perspektiva.ttsroad.desktop.ui.BookmarksScreen
 import dk.perspektiva.ttsroad.desktop.ui.ContentMaxWidth
 import dk.perspektiva.ttsroad.desktop.ui.FictionDetailScreen
 import dk.perspektiva.ttsroad.desktop.ui.LibraryScreen
@@ -66,15 +67,18 @@ private sealed interface Screen {
     data object Library : Screen
     data class Fiction(val fiction: FictionSummary) : Screen
     data object Player : Screen
+    data object Bookmarks : Screen
     data object Settings : Screen
 }
 
 @Composable
 fun App() {
+    val scope = rememberCoroutineScope()
     val sessionStore = remember { SessionStore() }
     val repository = remember { TtsRoadRepository(sessionStore) }
     val playback = remember { Mp3PlaybackController(repository) }
     val session by sessionStore.session.collectAsState()
+    val capabilities by repository.capabilities.collectAsState()
     var screen by remember { mutableStateOf<Screen>(Screen.Library) }
     // Where the full player collapses back to, so expanding the bar never loses browse context.
     var playerReturn by remember { mutableStateOf<Screen>(Screen.Library) }
@@ -104,6 +108,7 @@ fun App() {
                 HeaderBar(
                     serverName = session.serverName,
                     current = screen,
+                    showBookmarks = capabilities.bookmarks,
                     onSelect = { screen = it },
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
@@ -121,7 +126,16 @@ fun App() {
                             playback,
                             onBack = { screen = Screen.Library },
                         )
-                        Screen.Player -> PlayerScreen(playback, onBack = { screen = playerReturn })
+                        Screen.Player -> PlayerScreen(playback, repository, onBack = { screen = playerReturn })
+                        Screen.Bookmarks -> BookmarksScreen(
+                            repository,
+                            onOpenChapter = { fictionId, chapterId, positionSeconds ->
+                                scope.launch {
+                                    playFromBookmark(repository, playback, fictionId, chapterId, positionSeconds)
+                                }
+                                openPlayer()
+                            },
+                        )
                         Screen.Settings -> SettingsScreen(sessionStore, repository)
                     }
                 }
@@ -133,8 +147,33 @@ fun App() {
     }
 }
 
+/**
+ * Start a bookmarked position.
+ *
+ * The whole fiction is loaded so next/previous and auto-advance behave as they do anywhere else —
+ * a bookmark is a place in a book, not a detached clip. The position is passed into [playQueue]
+ * rather than seeked to afterwards, because a seek issued before the media loads is discarded.
+ */
+private suspend fun playFromBookmark(
+    repository: TtsRoadRepository,
+    playback: Mp3PlaybackController,
+    fictionId: Int,
+    chapterId: Int,
+    positionSeconds: Double,
+) {
+    runCatching {
+        val response = repository.chapters(fictionId)
+        playback.playQueue(response.chapters, chapterId, response.fiction, startPositionSeconds = positionSeconds)
+    }
+}
+
 @Composable
-private fun HeaderBar(serverName: String, current: Screen, onSelect: (Screen) -> Unit) {
+private fun HeaderBar(
+    serverName: String,
+    current: Screen,
+    showBookmarks: Boolean,
+    onSelect: (Screen) -> Unit,
+) {
     Box(Modifier.fillMaxWidth().background(AarisColor.Bg)) {
         Row(
             Modifier
@@ -162,6 +201,9 @@ private fun HeaderBar(serverName: String, current: Screen, onSelect: (Screen) ->
                 "Library",
                 active = current is Screen.Library || current is Screen.Fiction,
             ) { onSelect(Screen.Library) }
+            if (showBookmarks) {
+                NavItem("Bookmarks", active = current is Screen.Bookmarks) { onSelect(Screen.Bookmarks) }
+            }
             NavItem("Settings", active = current is Screen.Settings) { onSelect(Screen.Settings) }
         }
     }
@@ -279,7 +321,7 @@ private data class CapabilityLine(
 
 private fun capabilityLines(c: ServerCapabilities): List<CapabilityLine> = listOf(
     CapabilityLine("Global search", c.search, usedByClient = false),
-    CapabilityLine("Bookmarks", c.bookmarks, usedByClient = false),
+    CapabilityLine("Bookmarks", c.bookmarks, usedByClient = true),
     CapabilityLine("Cross-library queue", c.queue, usedByClient = false),
     CapabilityLine("Follow / unfollow", c.follows, usedByClient = false),
     CapabilityLine("Batch progress sync", c.batchProgress, usedByClient = true),

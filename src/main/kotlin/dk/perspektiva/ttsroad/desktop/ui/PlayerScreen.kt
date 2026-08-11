@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -40,10 +42,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -51,19 +55,25 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import dk.perspektiva.ttsroad.desktop.player.PlayerUiState
+import kotlinx.coroutines.launch
 
 /** Whether the mini-player should be visible: something has been loaded (or tried to load). */
 val PlayerUiState.hasSession: Boolean
     get() = hasMedia || durationMs > 0 || error != null
 
 @Composable
-fun PlayerScreen(playback: PlaybackController, onBack: () -> Unit) {
+fun PlayerScreen(playback: PlaybackController, repository: TtsRoadRepository, onBack: () -> Unit) {
+    val scope = rememberCoroutineScope()
     val s: PlayerUiState by playback.state.collectAsState()
+    val capabilities by repository.capabilities.collectAsState()
     // Track the drag locally and only seek on release — the MP3 backend re-decodes from the
     // start of the file per seek, so seeking on every drag tick would stutter badly.
     var dragMs by remember { mutableStateOf<Float?>(null) }
+    var bookmarkNote by remember { mutableStateOf<String?>(null) }
+    var bookmarkFailed by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().padding(horizontal = PageGutter, vertical = 20.dp)) {
         BackLink("Back", onBack)
@@ -130,6 +140,46 @@ fun PlayerScreen(playback: PlaybackController, onBack: () -> Unit) {
                         }
                         TransportButton(Icons.Default.SkipNext, "Next chapter", enabled = s.hasNext, size = 48.dp) {
                             playback.skipToNextChapter()
+                        }
+                    }
+                    // Gated on the server actually having bookmarks — offering a control that
+                    // 404s would be worse than not offering it.
+                    if (capabilities.bookmarks) {
+                        Spacer(Modifier.height(18.dp))
+                        val chapterId = s.queue.getOrNull(s.currentIndex)?.chapterId
+                        val positionMs = s.positionMs
+                        OutlinedButton(
+                            onClick = {
+                                val target = chapterId ?: return@OutlinedButton
+                                scope.launch {
+                                    bookmarkFailed = false
+                                    bookmarkNote = null
+                                    runCatching {
+                                        repository.createBookmark(
+                                            chapterId = target,
+                                            positionSeconds = positionMs / 1000.0,
+                                            label = s.title,
+                                        )
+                                    }.fold(
+                                        onSuccess = { bookmarkNote = "Bookmarked at ${formatDuration(positionMs)}" },
+                                        onFailure = {
+                                            bookmarkFailed = true
+                                            bookmarkNote = it.message ?: "Could not save bookmark"
+                                        },
+                                    )
+                                }
+                            },
+                            enabled = s.hasMedia && chapterId != null,
+                            shape = RectangleShape,
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) {
+                            Icon(Icons.Default.BookmarkAdd, contentDescription = null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("BOOKMARK THIS POSITION")
+                        }
+                        bookmarkNote?.let {
+                            Spacer(Modifier.height(8.dp))
+                            MetaText(it, color = if (bookmarkFailed) AarisColor.Danger else AarisColor.Ok)
                         }
                     }
                     Spacer(Modifier.height(12.dp))

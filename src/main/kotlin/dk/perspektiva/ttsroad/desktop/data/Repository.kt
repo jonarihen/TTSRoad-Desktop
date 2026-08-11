@@ -138,6 +138,51 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
         withAuthorizedApi { api, auth -> api.markPlayback(auth, PlaybackMarkRequest(chapterIds, played)) }
 
+    /** Every live mark on the account, or just one book's when [fictionId] is given. */
+    suspend fun bookmarks(fictionId: Int? = null): List<Bookmark> =
+        withAuthorizedApi { api, auth -> api.bookmarks(auth, fictionId = fictionId).bookmarks }
+
+    suspend fun createBookmark(
+        chapterId: Int,
+        positionSeconds: Double,
+        label: String? = null,
+        note: String? = null,
+    ): Bookmark = withAuthorizedApi { api, auth ->
+        api.createBookmark(
+            auth,
+            BookmarkCreateRequest(
+                chapterId = chapterId,
+                positionSeconds = positionSeconds.coerceAtLeast(0.0),
+                label = label?.trim()?.ifBlank { null },
+                note = note?.trim()?.ifBlank { null },
+            ),
+        ).bookmark
+    }
+
+    /**
+     * Patch one field. Null means "not mentioned" here, not "clear it" — Moshi omits nulls and the
+     * server leaves absent keys alone, so renaming a mark cannot wipe its note.
+     */
+    suspend fun updateBookmark(
+        bookmarkId: Int,
+        label: String? = null,
+        note: String? = null,
+        positionSeconds: Double? = null,
+    ): Bookmark = withAuthorizedApi { api, auth ->
+        api.updateBookmark(
+            auth,
+            bookmarkId,
+            BookmarkUpdateRequest(
+                label = label,
+                note = note,
+                positionSeconds = positionSeconds,
+            ),
+        ).bookmark
+    }
+
+    suspend fun deleteBookmark(bookmarkId: Int): BookmarkDeleteResponse =
+        withAuthorizedApi { api, auth -> api.deleteBookmark(auth, bookmarkId) }
+
     /**
      * Record a listening position and try to get it to the server.
      *
