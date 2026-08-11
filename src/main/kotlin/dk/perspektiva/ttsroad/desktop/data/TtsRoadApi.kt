@@ -24,7 +24,22 @@ interface TtsRoadApi {
     suspend fun logout(@Header("Authorization") auth: String)
 
     @GET("api/mobile/library")
-    suspend fun library(@Header("Authorization") auth: String): LibraryResponse
+    suspend fun library(
+        @Header("Authorization") auth: String,
+        @Query("scope") scope: String? = null,
+    ): LibraryResponse
+
+    @POST("api/mobile/fictions/{fiction_id}/follow")
+    suspend fun followFiction(
+        @Header("Authorization") auth: String,
+        @Path("fiction_id") fictionId: Int,
+    ): FollowResponse
+
+    @DELETE("api/mobile/fictions/{fiction_id}/follow")
+    suspend fun unfollowFiction(
+        @Header("Authorization") auth: String,
+        @Path("fiction_id") fictionId: Int,
+    ): FollowResponse
 
     @GET("api/mobile/fictions/{fiction_id}/chapters")
     suspend fun chapters(

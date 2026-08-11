@@ -4,6 +4,14 @@ import com.squareup.moshi.Json
 
 // Mirrors the TTSRoad mobile API (/api/mobile/*), shared with the Android client.
 
+object LibraryScope {
+    /** The caller's own shelf. The default, and what a client that predates follows gets. */
+    const val FOLLOWED = "followed"
+
+    /** Everything on the server, so unfollowed fictions are reachable to follow. */
+    const val ALL = "all"
+}
+
 data class LoginRequest(
     val username: String,
     val password: String,
@@ -33,7 +41,10 @@ data class ServerInfo(
 
 data class LibraryResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
+    /** Echoes back what was asked for: "followed" (the shelf) or "all" (browse everything). */
+    val scope: String = LibraryScope.FOLLOWED,
     val fictions: List<FictionSummary> = emptyList(),
+    @param:Json(name = "following_ids") val followingIds: List<Int> = emptyList(),
     @param:Json(name = "continue_listening") val continueListening: List<ChapterSummary> = emptyList(),
     @param:Json(name = "recent_chapters") val recentChapters: List<ChapterSummary> = emptyList(),
 )
@@ -60,6 +71,13 @@ data class FictionSummary(
     @param:Json(name = "pending_chapters") val pendingChapters: Int = 0,
     @param:Json(name = "error_chapters") val errorChapters: Int = 0,
     @param:Json(name = "processing_chapters") val processingChapters: Int = 0,
+    /**
+     * Whether this fiction is on the caller's shelf.
+     *
+     * Only ever populated by `/library` — the chapters endpoint's fiction payload does not carry
+     * it, so a summary that came from there always reads false regardless of the truth.
+     */
+    val following: Boolean = false,
 ) {
     val readyFraction: Float
         get() = if (totalChapters > 0) (doneChapters.toFloat() / totalChapters).coerceIn(0f, 1f) else 0f
@@ -127,4 +145,14 @@ data class PlaybackMarkResponse(
     val played: Boolean = false,
     @param:Json(name = "chapter_ids") val chapterIds: List<Int> = emptyList(),
     val count: Int = 0,
+)
+
+data class FollowResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    val following: Boolean = false,
+    /** True only when this call is what created the follow; a repeat follow is idempotent. */
+    val created: Boolean = false,
+    val removed: Boolean = false,
 )

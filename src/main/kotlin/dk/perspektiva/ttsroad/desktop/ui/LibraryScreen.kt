@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
+import dk.perspektiva.ttsroad.desktop.data.LibraryScope
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import kotlinx.coroutines.launch
@@ -63,10 +65,21 @@ fun LibraryScreen(
     onOpenPlayer: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val capabilities by repository.capabilities.collectAsState()
     var state by remember { mutableStateOf<Load<LibraryResponse>>(Load.Loading) }
+    var browsingAll by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        state = runCatching { repository.library() }
+    // Re-fetches when the scope flips. Asking for a scope at all is gated on the capability: a
+    // server without follows returns the whole shared list either way, and sending the parameter
+    // would imply a distinction it does not make.
+    LaunchedEffect(browsingAll, capabilities.follows) {
+        state = Load.Loading
+        val requested = when {
+            !capabilities.follows -> null
+            browsingAll -> LibraryScope.ALL
+            else -> LibraryScope.FOLLOWED
+        }
+        state = runCatching { repository.library(requested) }
             .fold({ Load.Ok(it) }, { Load.Err(it.message ?: "Could not load library") })
     }
 
@@ -92,10 +105,24 @@ fun LibraryScreen(
                     }
                     Spacer(Modifier.height(36.dp))
                 }
-                SectionTitle("02", "Fictions")
+                SectionTitle("02", if (browsingAll) "All fictions" else "Fictions")
                 Spacer(Modifier.height(16.dp))
+                if (capabilities.follows) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ScopeTab("MY SHELF", active = !browsingAll) { browsingAll = false }
+                        Spacer(Modifier.width(8.dp))
+                        ScopeTab("BROWSE ALL", active = browsingAll) { browsingAll = true }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
                 if (library.fictions.isEmpty()) {
-                    MetaText("Nothing here yet — add fictions on the server")
+                    MetaText(
+                        if (browsingAll) {
+                            "Nothing here yet — add fictions on the server"
+                        } else {
+                            "Your shelf is empty — browse all and follow something"
+                        },
+                    )
                 } else {
                     var query by remember { mutableStateOf("") }
                     OutlinedTextField(
@@ -123,6 +150,31 @@ fun LibraryScreen(
                 }
             }
         }
+    }
+}
+
+/** Square scope selector, matching the header's active-tab treatment. */
+@Composable
+private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(
+        Modifier
+            .background(if (active) AarisColor.Accent else Color.Transparent)
+            .border(1.dp, if (active) AarisColor.Accent else AarisColor.Line)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        MetaText(
+            label,
+            color = when {
+                active -> AarisColor.Bg
+                hovered -> AarisColor.Ink
+                else -> AarisColor.Muted
+            },
+        )
     }
 }
 

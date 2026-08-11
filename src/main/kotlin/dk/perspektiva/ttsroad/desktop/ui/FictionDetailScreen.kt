@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -26,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,8 +57,33 @@ fun FictionDetailScreen(
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val capabilities by repository.capabilities.collectAsState()
     var state by remember { mutableStateOf<Load<ChaptersResponse>>(Load.Loading) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    // Tracked here rather than read back off the reloaded fiction: the chapters endpoint's fiction
+    // payload does not carry `following` at all, so the reload would always report false.
+    var following by remember(fiction.id) { mutableStateOf(fiction.following) }
+    var followBusy by remember(fiction.id) { mutableStateOf(false) }
+    // Its own slot rather than sharing actionError, which is only rendered once chapters have
+    // loaded — a follow can fail while the list is still loading or already errored.
+    var followError by remember(fiction.id) { mutableStateOf<String?>(null) }
+
+    fun toggleFollow() {
+        if (followBusy) return
+        val target = !following
+        scope.launch {
+            followBusy = true
+            followError = null
+            runCatching { repository.setFollowing(fiction.id, target) }
+                .fold(
+                    // Trust the server's answer rather than the value asked for — following an
+                    // already-followed fiction is idempotent, and a 404 must not look like success.
+                    onSuccess = { following = it.following },
+                    onFailure = { followError = it.message ?: "Could not update your shelf" },
+                )
+            followBusy = false
+        }
+    }
 
     suspend fun load() {
         state = runCatching { repository.chapters(fiction.id) }
@@ -66,7 +93,17 @@ fun FictionDetailScreen(
     LaunchedEffect(fiction.id) { load() }
 
     PageScroll {
-        BackLink("Library", onBack)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            BackLink("Library", onBack)
+            Spacer(Modifier.weight(1f))
+            if (capabilities.follows) {
+                FollowButton(following = following, busy = followBusy, onClick = ::toggleFollow)
+            }
+        }
+        followError?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = MaterialTheme.colorScheme.error)
+        }
         Spacer(Modifier.height(20.dp))
         when (val s = state) {
             Load.Loading -> {
@@ -117,6 +154,34 @@ fun FictionDetailScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Shelf toggle. Filled while following, outlined while not, so the current state reads without
+ * having to parse the verb.
+ */
+@Composable
+private fun FollowButton(following: Boolean, busy: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(
+        Modifier
+            .background(if (following) AarisColor.Accent else Color.Transparent)
+            .border(1.dp, if (following || hovered) AarisColor.Accent else AarisColor.Line)
+            .hoverable(interaction)
+            .let { if (busy) it else it.pointerHoverIcon(PointerIcon.Hand) }
+            .clickable(interactionSource = interaction, indication = null, enabled = !busy, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        MetaText(
+            when {
+                busy -> "WORKING"
+                following -> "✓ ON MY SHELF"
+                else -> "+ FOLLOW"
+            },
+            color = if (following) AarisColor.Bg else if (hovered) AarisColor.Ink else AarisColor.Muted,
+        )
     }
 }
 

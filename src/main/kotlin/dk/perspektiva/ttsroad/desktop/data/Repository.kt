@@ -130,7 +130,25 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
         _limits.value = ServerLimits()
     }
 
-    suspend fun library(): LibraryResponse = withAuthorizedApi { api, auth -> api.library(auth) }
+    /**
+     * The caller's shelf, or the whole catalogue with [scope] = [LibraryScope.ALL].
+     *
+     * Null sends no parameter at all, which is what a server without follows expects — it answers
+     * with the whole shared list either way.
+     */
+    suspend fun library(scope: String? = null): LibraryResponse =
+        withAuthorizedApi { api, auth -> api.library(auth, scope = scope) }
+
+    /**
+     * Put a fiction on this account's shelf, or take it off.
+     *
+     * Both directions are idempotent server-side, and both 404 for a fiction that does not exist —
+     * the caller has to handle that rather than assume success.
+     */
+    suspend fun setFollowing(fictionId: Int, following: Boolean): FollowResponse =
+        withAuthorizedApi { api, auth ->
+            if (following) api.followFiction(auth, fictionId) else api.unfollowFiction(auth, fictionId)
+        }
 
     suspend fun chapters(fictionId: Int, playableOnly: Boolean = false): ChaptersResponse =
         withAuthorizedApi { api, auth -> api.chapters(auth, fictionId = fictionId, playableOnly = playableOnly) }
