@@ -26,6 +26,7 @@ data class MobileUser(
 
 data class ServerInfo(
     val name: String = "TTSRoad",
+    val version: String? = null,
     @param:Json(name = "base_url") val baseUrl: String? = null,
     @param:Json(name = "api_version") val apiVersion: Int = 1,
 )

@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LoginResult
+import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.player.Mp3PlaybackController
@@ -77,6 +79,12 @@ fun App() {
     // Where the full player collapses back to, so expanding the bar never loses browse context.
     var playerReturn by remember { mutableStateOf<Screen>(Screen.Library) }
     val playerState by playback.state.collectAsState()
+
+    // A session restored from disk never goes through login, so this is where a relaunch learns
+    // what the server can do. Failure is silent: all-false is the pre-capability feature set.
+    LaunchedEffect(session.isLoggedIn) {
+        if (session.isLoggedIn) runCatching { repository.refreshCapabilities() }
+    }
 
     fun openPlayer() {
         if (screen != Screen.Player) playerReturn = screen
@@ -251,10 +259,41 @@ private fun Field(label: String, value: String, password: Boolean = false, onVal
     )
 }
 
+/**
+ * One line of the server-feature table.
+ *
+ * [usedByClient] is the point of the table. Listing what the server supports and stopping there
+ * reads as a feature list, when for an unused capability it is the opposite — a thing the server
+ * offers and this app does not yet do. Saying both keeps it honest.
+ */
+private data class CapabilityLine(
+    val label: String,
+    val onServer: Boolean,
+    val usedByClient: Boolean,
+)
+
+private fun capabilityLines(c: ServerCapabilities): List<CapabilityLine> = listOf(
+    CapabilityLine("Global search", c.search, usedByClient = false),
+    CapabilityLine("Bookmarks", c.bookmarks, usedByClient = false),
+    CapabilityLine("Cross-library queue", c.queue, usedByClient = false),
+    CapabilityLine("Follow / unfollow", c.follows, usedByClient = false),
+    CapabilityLine("Batch progress sync", c.batchProgress, usedByClient = false),
+    CapabilityLine("Delta sync", c.deltaSync, usedByClient = false),
+    CapabilityLine("Read-along", c.readalong, usedByClient = false),
+    CapabilityLine("Audiobook export", c.audiobookExport, usedByClient = false),
+    CapabilityLine("Offline download plans", c.offlineDownloads, usedByClient = false),
+    CapabilityLine("Audio content hash", c.audioContentHash, usedByClient = false),
+    CapabilityLine("Player preferences", c.playerPreferences, usedByClient = false),
+    CapabilityLine("Device management", c.deviceManagement, usedByClient = false),
+    CapabilityLine("Voice preview", c.voicePreview, usedByClient = false),
+    CapabilityLine("Live events (browser only)", c.liveEvents, usedByClient = false),
+)
+
 @Composable
 private fun SettingsScreen(sessionStore: SessionStore, repository: TtsRoadRepository) {
     val scope = rememberCoroutineScope()
     val session by sessionStore.session.collectAsState()
+    val capabilities by repository.capabilities.collectAsState()
     var busy by remember { mutableStateOf(false) }
     PageScroll(maxWidth = NarrowMaxWidth, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         MetaText(text = "// Session", color = AarisColor.Accent)
@@ -267,12 +306,34 @@ private fun SettingsScreen(sessionStore: SessionStore, repository: TtsRoadReposi
                 SettingRow("Role", if (session.isAdmin) "Admin" else "User")
             }
         }
+        MetaText(text = "// Server features", color = AarisColor.Accent)
+        AarisCard {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                capabilityLines(capabilities).forEach { line ->
+                    CapabilityRow(line)
+                }
+            }
+        }
         Button(
             onClick = { scope.launch { busy = true; repository.logout(); busy = false } },
             enabled = !busy,
             shape = RectangleShape,
             modifier = Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Hand),
         ) { Text(if (busy) "SIGNING OUT" else "SIGN OUT") }
+    }
+}
+
+@Composable
+private fun CapabilityRow(line: CapabilityLine) {
+    val (status, color) = when {
+        !line.onServer -> "Not on server" to AarisColor.Dim
+        line.usedByClient -> "Ready" to AarisColor.Ok
+        else -> "Server only — not used here" to AarisColor.Warning
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        MetaText(line.label, color = if (line.onServer) AarisColor.Muted else AarisColor.Dim)
+        Spacer(Modifier.weight(1f))
+        MetaText(status, color = color)
     }
 }
 

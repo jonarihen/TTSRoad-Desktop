@@ -8,6 +8,13 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface TtsRoadApi {
+    /**
+     * Unauthenticated on purpose — the backend lists this path in `_PUBLIC_PREFIXES`, so the client
+     * can ask what a server supports before anyone has signed into it.
+     */
+    @GET("api/mobile/capabilities")
+    suspend fun capabilities(): CapabilitiesResponse
+
     @POST("api/mobile/login")
     suspend fun login(@Body request: LoginRequest): LoginResponse
 

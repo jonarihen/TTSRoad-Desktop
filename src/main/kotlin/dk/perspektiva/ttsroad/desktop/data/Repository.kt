@@ -4,6 +4,9 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import retrofit2.HttpException
@@ -31,6 +34,33 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
 
     private val apiCache = HashMap<String, TtsRoadApi>()
 
+    private val _capabilities = MutableStateFlow(ServerCapabilities())
+    private val _limits = MutableStateFlow(ServerLimits())
+
+    /**
+     * What the currently-connected server supports. Starts all-false and stays that way until
+     * [refreshCapabilities] succeeds, so a screen that gates on a flag hides the control rather
+     * than flashing it and then withdrawing it.
+     */
+    val capabilities: StateFlow<ServerCapabilities> = _capabilities.asStateFlow()
+    val limits: StateFlow<ServerLimits> = _limits.asStateFlow()
+
+    /**
+     * Ask the server what it can do. Safe to call before login — the endpoint is public.
+     *
+     * Failures are the caller's to swallow: not knowing the capability set is not a reason to fail
+     * whatever the user was actually doing, and all-false degrades to the feature set this client
+     * had before it learned to ask.
+     */
+    suspend fun refreshCapabilities(): ServerCapabilities = withContext(Dispatchers.IO) {
+        val baseUrl = sessionStore.current().serverUrl
+        if (baseUrl.isBlank()) return@withContext ServerCapabilities()
+        val response = api(baseUrl).capabilities()
+        _capabilities.value = response.capabilities
+        _limits.value = response.limits
+        response.capabilities
+    }
+
     suspend fun login(
         baseUrl: String,
         username: String,
@@ -56,6 +86,8 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
                     serverName = response.server?.name ?: "TTSRoad",
                 ),
             )
+            // Best-effort: a server that won't answer this is still a server we just logged into.
+            runCatching { refreshCapabilities() }
             LoginResult.Success
         } catch (e: HttpException) {
             val body = e.response()?.errorBody()?.string()
@@ -75,6 +107,9 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
             session.authorizationHeader?.let { auth -> api(session.serverUrl).logout(auth) }
         }
         sessionStore.clearToken()
+        // The next sign-in may be against a different server with a different feature set.
+        _capabilities.value = ServerCapabilities()
+        _limits.value = ServerLimits()
     }
 
     suspend fun library(): LibraryResponse = withAuthorizedApi { api, auth -> api.library(auth) }
