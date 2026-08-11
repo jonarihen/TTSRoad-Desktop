@@ -45,6 +45,14 @@ data class ServerCapabilities(
     val audioContentHash: Boolean = false,
     val deviceManagement: Boolean = false,
     val maxChaptersPerPage: Int? = null,
+    /**
+     * How many items `/playback/sync` accepts in one batch.
+     *
+     * Null until discovery reaches a server that publishes it. Not advisory: an oversized batch is
+     * answered with a 400 rather than truncated, so a client that guesses high loses the whole
+     * batch rather than part of it.
+     */
+    val maxPlaybackSyncItems: Int? = null,
 ) {
     /** True once discovery has actually reached a TTSRoad server (only it reports a version). */
     val isDiscovered: Boolean get() = serverVersion != null
@@ -66,6 +74,7 @@ data class ServerCapabilities(
             audioContentHash = response.capabilities.flag("audio_content_hash"),
             deviceManagement = response.capabilities.flag("device_management"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
+            maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
         )
 
         /**

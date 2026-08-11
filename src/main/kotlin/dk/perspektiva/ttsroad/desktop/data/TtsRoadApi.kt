@@ -86,6 +86,9 @@ interface TtsRoadApi {
     @POST("api/mobile/playback/progress")
     suspend fun saveProgress(@Body request: PlaybackProgressRequest): PlaybackProgressResponse
 
+    @POST("api/mobile/playback/sync")
+    suspend fun syncProgress(@Body request: PlaybackSyncRequest): PlaybackSyncResponse
+
     @POST("api/mobile/playback/mark")
     suspend fun markPlayback(@Body request: PlaybackMarkRequest): PlaybackMarkResponse
 }
