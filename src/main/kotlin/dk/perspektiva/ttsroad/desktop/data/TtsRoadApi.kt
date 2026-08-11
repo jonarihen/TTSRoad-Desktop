@@ -38,6 +38,12 @@ interface TtsRoadApi {
         @Body request: PlaybackProgressRequest,
     ): PlaybackProgressResponse
 
+    @POST("api/mobile/playback/sync")
+    suspend fun syncProgress(
+        @Header("Authorization") auth: String,
+        @Body request: PlaybackSyncRequest,
+    ): PlaybackSyncResponse
+
     @POST("api/mobile/playback/mark")
     suspend fun markPlayback(
         @Header("Authorization") auth: String,

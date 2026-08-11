@@ -47,17 +47,22 @@ class SessionStore {
     private fun load(): SessionState =
         runCatching { if (file.isFile) adapter.fromJson(file.readText()) else null }
             .getOrNull() ?: SessionState()
+}
 
-    private fun configDir(): File {
-        val home = System.getProperty("user.home")
-        val os = System.getProperty("os.name").lowercase()
-        val base = when {
-            os.contains("win") -> System.getenv("APPDATA")?.let { File(it) } ?: File(home, "AppData/Roaming")
-            os.contains("mac") -> File(home, "Library/Application Support")
-            else -> System.getenv("XDG_CONFIG_HOME")?.let { File(it) } ?: File(home, ".config")
-        }
-        return File(base, "TTSRoad")
+/**
+ * Per-user config directory: %APPDATA%/TTSRoad on Windows, ~/Library/Application Support/TTSRoad on
+ * macOS, $XDG_CONFIG_HOME/TTSRoad (or ~/.config/TTSRoad) elsewhere. Shared by everything that
+ * persists across runs, so the session and the unsent-progress outbox live side by side.
+ */
+fun configDir(): File {
+    val home = System.getProperty("user.home")
+    val os = System.getProperty("os.name").lowercase()
+    val base = when {
+        os.contains("win") -> System.getenv("APPDATA")?.let { File(it) } ?: File(home, "AppData/Roaming")
+        os.contains("mac") -> File(home, "Library/Application Support")
+        else -> System.getenv("XDG_CONFIG_HOME")?.let { File(it) } ?: File(home, ".config")
     }
+    return File(base, "TTSRoad")
 }
 
 fun normalizeBaseUrl(input: String): String {

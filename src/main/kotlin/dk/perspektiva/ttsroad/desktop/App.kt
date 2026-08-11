@@ -83,7 +83,12 @@ fun App() {
     // A session restored from disk never goes through login, so this is where a relaunch learns
     // what the server can do. Failure is silent: all-false is the pre-capability feature set.
     LaunchedEffect(session.isLoggedIn) {
-        if (session.isLoggedIn) runCatching { repository.refreshCapabilities() }
+        if (session.isLoggedIn) {
+            runCatching { repository.refreshCapabilities() }
+            // Relaunching is the reconnect that matters: anything recorded while the last session
+            // was offline has been sitting on disk since, and this is the first chance to send it.
+            runCatching { repository.flushProgress() }
+        }
     }
 
     fun openPlayer() {
@@ -277,7 +282,7 @@ private fun capabilityLines(c: ServerCapabilities): List<CapabilityLine> = listO
     CapabilityLine("Bookmarks", c.bookmarks, usedByClient = false),
     CapabilityLine("Cross-library queue", c.queue, usedByClient = false),
     CapabilityLine("Follow / unfollow", c.follows, usedByClient = false),
-    CapabilityLine("Batch progress sync", c.batchProgress, usedByClient = false),
+    CapabilityLine("Batch progress sync", c.batchProgress, usedByClient = true),
     CapabilityLine("Delta sync", c.deltaSync, usedByClient = false),
     CapabilityLine("Read-along", c.readalong, usedByClient = false),
     CapabilityLine("Audiobook export", c.audiobookExport, usedByClient = false),

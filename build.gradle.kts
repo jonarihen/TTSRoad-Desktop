@@ -43,6 +43,12 @@ dependencies {
     // past what our Kotlin 2.1.0 compiler's metadata reader accepts.
     implementation("io.coil-kt.coil3:coil-compose:3.2.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
+
+    testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 java {

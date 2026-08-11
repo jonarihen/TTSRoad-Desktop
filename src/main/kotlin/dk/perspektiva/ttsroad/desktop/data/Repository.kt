@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import retrofit2.HttpException
@@ -34,8 +35,21 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
 
     private val apiCache = HashMap<String, TtsRoadApi>()
 
+    private val outbox = ProgressOutbox(configDir().resolve("progress-outbox.json"))
+
     private val _capabilities = MutableStateFlow(ServerCapabilities())
     private val _limits = MutableStateFlow(ServerLimits())
+    private val _serverPlaybackState = MutableStateFlow<Map<Int, PlaybackStateRow>>(emptyMap())
+
+    /**
+     * What the server says it holds for chapters this client has written to, as of the last flush.
+     *
+     * This is how a losing write gets noticed. `/playback/sync` returns the server's own state for
+     * every chapter in the batch, so when an offline position loses to a newer one from the
+     * browser, the newer position is right here — and playback resumes from it instead of from the
+     * stale local one.
+     */
+    val serverPlaybackState: StateFlow<Map<Int, PlaybackStateRow>> = _serverPlaybackState.asStateFlow()
 
     /**
      * What the currently-connected server supports. Starts all-false and stays that way until
@@ -103,6 +117,10 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
 
     suspend fun logout() = withContext(Dispatchers.IO) {
         val session = sessionStore.current()
+        // Last chance to save: the token is about to be revoked, and anything still queued after
+        // that can never be sent under it. A clean sign-out should not cost the user their place.
+        runCatching { flushProgress() }
+        outbox.clear()
         runCatching {
             session.authorizationHeader?.let { auth -> api(session.serverUrl).logout(auth) }
         }
@@ -120,18 +138,100 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
         withAuthorizedApi { api, auth -> api.markPlayback(auth, PlaybackMarkRequest(chapterIds, played)) }
 
-    suspend fun saveProgress(
+    /**
+     * Record a listening position and try to get it to the server.
+     *
+     * The write is stamped and queued to disk first, then flushed. That ordering is the fix for
+     * #36: if the flush fails — offline, server down, laptop closed — the position survives with
+     * the time it was actually reached, so when it does reach the server it can be ordered against
+     * whatever else has happened since instead of blindly overwriting it.
+     *
+     * A flush failure is not raised to the caller. Playback must not stall because progress could
+     * not be saved; the entry stays queued and the next call retries it.
+     */
+    suspend fun recordProgress(
         fictionId: Int,
         chapterId: Int,
         positionSeconds: Double,
         isPlayed: Boolean,
-    ): PlaybackProgressResponse? = withContext(Dispatchers.IO) {
-        val session = sessionStore.current()
-        val auth = session.authorizationHeader ?: return@withContext null
-        api(session.serverUrl).saveProgress(
-            auth,
-            PlaybackProgressRequest(fictionId, chapterId, positionSeconds.coerceAtLeast(0.0), isPlayed),
+    ) {
+        outbox.record(
+            PendingProgress(
+                fictionId = fictionId,
+                chapterId = chapterId,
+                positionSeconds = positionSeconds.coerceAtLeast(0.0),
+                isPlayed = isPlayed,
+                clientUpdatedAt = nowStamp(),
+            ),
         )
+        runCatching { flushProgress() }
+    }
+
+    /**
+     * Send everything queued.
+     *
+     * Batched through `/playback/sync` when the server has it, in chunks of the server's published
+     * `max_playback_sync_items` — it answers an oversized batch with a 400 rather than truncating,
+     * so ignoring the limit would lose the whole batch.
+     *
+     * Falls back to `/playback/progress` when `batch_progress` is false. That endpoint cannot order
+     * writes, so the overwrite this all exists to prevent is still possible against an older
+     * server — but losing the position entirely would be worse, and the backend keeps the endpoint
+     * working deliberately.
+     */
+    suspend fun flushProgress() = withContext(Dispatchers.IO) {
+        val session = sessionStore.current()
+        val auth = session.authorizationHeader ?: return@withContext
+        val pending = outbox.snapshot()
+        if (pending.isEmpty()) return@withContext
+        val api = api(session.serverUrl)
+
+        try {
+            if (capabilities.value.batchProgress) {
+                val batchSize = limits.value.maxPlaybackSyncItems.coerceAtLeast(1)
+                pending.chunked(batchSize).forEach { batch ->
+                    val response = api.syncProgress(
+                        auth,
+                        PlaybackSyncRequest(
+                            batch.map {
+                                PlaybackSyncItem(
+                                    chapterId = it.chapterId,
+                                    positionSeconds = it.positionSeconds,
+                                    isPlayed = it.isPlayed,
+                                    clientUpdatedAt = it.clientUpdatedAt,
+                                )
+                            },
+                        ),
+                    )
+                    // Rejections are as final as acceptances — every reason the server can give is
+                    // terminal for that item, so re-sending would just get the same answer.
+                    outbox.drop(response.accepted.map { it.chapterId } + response.rejected.map { it.chapterId })
+                    if (response.serverState.isNotEmpty()) {
+                        _serverPlaybackState.update { known ->
+                            known + response.serverState.associateBy { it.chapterId }
+                        }
+                    }
+                }
+            } else {
+                pending.forEach { entry ->
+                    api.saveProgress(
+                        auth,
+                        PlaybackProgressRequest(
+                            entry.fictionId,
+                            entry.chapterId,
+                            entry.positionSeconds,
+                            entry.isPlayed,
+                        ),
+                    )
+                    outbox.drop(listOf(entry.chapterId))
+                }
+            }
+        } catch (e: HttpException) {
+            // 401 means the credential is gone, so this queue can never be flushed under it.
+            // Anything else is transient as far as this client can tell — keep the queue.
+            if (e.code() == 401) outbox.clear()
+            throw e
+        }
     }
 
     /** Authorization header that audio requests must carry (bearer-protected MP3s). */

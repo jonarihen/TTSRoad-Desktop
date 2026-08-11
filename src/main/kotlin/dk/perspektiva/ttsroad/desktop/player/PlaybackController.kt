@@ -180,8 +180,19 @@ class Mp3PlaybackController(private val repository: TtsRoadRepository) : Playbac
         wantsPlaying = false
     }
 
-    private fun resumeMsOf(chapter: ChapterSummary): Long =
-        (chapter.resolvedPositionSeconds * 1000).toLong().coerceAtLeast(0L)
+    /**
+     * Where to start this chapter.
+     *
+     * Prefers the server's reconciled state when there is one. That map is only populated by a
+     * `/playback/sync` round-trip, which is strictly later than the chapter list this summary came
+     * from — so when an offline position here lost to a newer one from the browser, this is what
+     * picks up the browser's position instead of silently restarting from the stale local one.
+     */
+    private fun resumeMsOf(chapter: ChapterSummary): Long {
+        val reconciled = repository.serverPlaybackState.value[chapter.resolvedChapterId]
+        val seconds = reconciled?.positionSeconds ?: chapter.resolvedPositionSeconds
+        return (seconds * 1000).toLong().coerceAtLeast(0L)
+    }
 
     private suspend fun beginPlayback(startIndex: Int, startMs: Long) {
         playJob?.cancelAndJoin()
@@ -312,7 +323,7 @@ class Mp3PlaybackController(private val repository: TtsRoadRepository) : Playbac
 
     private suspend fun saveProgress(chapter: ChapterSummary, positionMs: Long, isPlayed: Boolean) {
         runCatching {
-            repository.saveProgress(
+            repository.recordProgress(
                 fictionId = chapter.resolvedFictionId,
                 chapterId = chapter.resolvedChapterId,
                 positionSeconds = positionMs / 1000.0,
