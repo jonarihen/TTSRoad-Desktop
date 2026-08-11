@@ -40,6 +40,14 @@ interface TtsRoadApi {
         @Body request: PlaybackProgressRequest,
     ): PlaybackProgressResponse
 
+    @GET("api/mobile/search")
+    suspend fun search(
+        @Header("Authorization") auth: String,
+        @Query("q") query: String,
+        @Query("limit") limit: Int? = null,
+        @Query("fiction_id") fictionId: Int? = null,
+    ): SearchResponse
+
     @GET("api/mobile/bookmarks")
     suspend fun bookmarks(
         @Header("Authorization") auth: String,

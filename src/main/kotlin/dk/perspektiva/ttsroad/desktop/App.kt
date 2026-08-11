@@ -60,6 +60,7 @@ import dk.perspektiva.ttsroad.desktop.ui.NowPlayingBar
 import dk.perspektiva.ttsroad.desktop.ui.PageGutter
 import dk.perspektiva.ttsroad.desktop.ui.PageScroll
 import dk.perspektiva.ttsroad.desktop.ui.PlayerScreen
+import dk.perspektiva.ttsroad.desktop.ui.SearchScreen
 import dk.perspektiva.ttsroad.desktop.ui.hasSession
 import kotlinx.coroutines.launch
 
@@ -68,6 +69,7 @@ private sealed interface Screen {
     data class Fiction(val fiction: FictionSummary) : Screen
     data object Player : Screen
     data object Bookmarks : Screen
+    data object Search : Screen
     data object Settings : Screen
 }
 
@@ -108,6 +110,7 @@ fun App() {
                 HeaderBar(
                     serverName = session.serverName,
                     current = screen,
+                    showSearch = capabilities.search,
                     showBookmarks = capabilities.bookmarks,
                     onSelect = { screen = it },
                 )
@@ -131,8 +134,16 @@ fun App() {
                             repository,
                             onOpenChapter = { fictionId, chapterId, positionSeconds ->
                                 scope.launch {
-                                    playFromBookmark(repository, playback, fictionId, chapterId, positionSeconds)
+                                    playChapterAt(repository, playback, fictionId, chapterId, positionSeconds)
                                 }
+                                openPlayer()
+                            },
+                        )
+                        Screen.Search -> SearchScreen(
+                            repository,
+                            onOpenFiction = { screen = Screen.Fiction(it) },
+                            onPlayChapter = { fictionId, chapterId ->
+                                scope.launch { playChapterAt(repository, playback, fictionId, chapterId) }
                                 openPlayer()
                             },
                         )
@@ -148,18 +159,21 @@ fun App() {
 }
 
 /**
- * Start a bookmarked position.
+ * Start one chapter, reached from somewhere that only knows its id — a bookmark, a search hit.
  *
- * The whole fiction is loaded so next/previous and auto-advance behave as they do anywhere else —
- * a bookmark is a place in a book, not a detached clip. The position is passed into [playQueue]
- * rather than seeked to afterwards, because a seek issued before the media loads is discarded.
+ * The whole fiction is loaded so next/previous and auto-advance behave as they do anywhere else: a
+ * bookmark or a search result is a place in a book, not a detached clip.
+ *
+ * [positionSeconds] is passed into [Mp3PlaybackController.playQueue] rather than seeked to
+ * afterwards, because a seek issued before the media has loaded is discarded — the jump would
+ * silently land at the top of the chapter.
  */
-private suspend fun playFromBookmark(
+private suspend fun playChapterAt(
     repository: TtsRoadRepository,
     playback: Mp3PlaybackController,
     fictionId: Int,
     chapterId: Int,
-    positionSeconds: Double,
+    positionSeconds: Double? = null,
 ) {
     runCatching {
         val response = repository.chapters(fictionId)
@@ -171,6 +185,7 @@ private suspend fun playFromBookmark(
 private fun HeaderBar(
     serverName: String,
     current: Screen,
+    showSearch: Boolean,
     showBookmarks: Boolean,
     onSelect: (Screen) -> Unit,
 ) {
@@ -201,6 +216,9 @@ private fun HeaderBar(
                 "Library",
                 active = current is Screen.Library || current is Screen.Fiction,
             ) { onSelect(Screen.Library) }
+            if (showSearch) {
+                NavItem("Search", active = current is Screen.Search) { onSelect(Screen.Search) }
+            }
             if (showBookmarks) {
                 NavItem("Bookmarks", active = current is Screen.Bookmarks) { onSelect(Screen.Bookmarks) }
             }
@@ -320,7 +338,7 @@ private data class CapabilityLine(
 )
 
 private fun capabilityLines(c: ServerCapabilities): List<CapabilityLine> = listOf(
-    CapabilityLine("Global search", c.search, usedByClient = false),
+    CapabilityLine("Global search", c.search, usedByClient = true),
     CapabilityLine("Bookmarks", c.bookmarks, usedByClient = true),
     CapabilityLine("Cross-library queue", c.queue, usedByClient = false),
     CapabilityLine("Follow / unfollow", c.follows, usedByClient = false),

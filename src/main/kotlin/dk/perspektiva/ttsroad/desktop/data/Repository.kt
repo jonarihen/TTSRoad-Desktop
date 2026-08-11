@@ -138,6 +138,17 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
         withAuthorizedApi { api, auth -> api.markPlayback(auth, PlaybackMarkRequest(chapterIds, played)) }
 
+    /**
+     * Server-side search across fiction metadata, chapter titles and narration text.
+     *
+     * The library screen's filter cannot do this: it only sees what has already been fetched, and
+     * never sees chapter text at all.
+     */
+    suspend fun search(query: String, fictionId: Int? = null, limit: Int? = null): SearchResponse =
+        withAuthorizedApi { api, auth ->
+            api.search(auth, query = query.trim(), limit = limit, fictionId = fictionId)
+        }
+
     /** Every live mark on the account, or just one book's when [fictionId] is given. */
     suspend fun bookmarks(fictionId: Int? = null): List<Bookmark> =
         withAuthorizedApi { api, auth -> api.bookmarks(auth, fictionId = fictionId).bookmarks }
