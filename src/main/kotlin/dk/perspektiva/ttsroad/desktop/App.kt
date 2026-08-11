@@ -60,6 +60,7 @@ import dk.perspektiva.ttsroad.desktop.ui.NowPlayingBar
 import dk.perspektiva.ttsroad.desktop.ui.PageGutter
 import dk.perspektiva.ttsroad.desktop.ui.PageScroll
 import dk.perspektiva.ttsroad.desktop.ui.PlayerScreen
+import dk.perspektiva.ttsroad.desktop.ui.QueueScreen
 import dk.perspektiva.ttsroad.desktop.ui.SearchScreen
 import dk.perspektiva.ttsroad.desktop.ui.hasSession
 import kotlinx.coroutines.launch
@@ -70,6 +71,7 @@ private sealed interface Screen {
     data object Player : Screen
     data object Bookmarks : Screen
     data object Search : Screen
+    data object Queue : Screen
     data object Settings : Screen
 }
 
@@ -111,6 +113,7 @@ fun App() {
                     serverName = session.serverName,
                     current = screen,
                     showSearch = capabilities.search,
+                    showQueue = capabilities.queue,
                     showBookmarks = capabilities.bookmarks,
                     onSelect = { screen = it },
                 )
@@ -142,6 +145,13 @@ fun App() {
                         Screen.Search -> SearchScreen(
                             repository,
                             onOpenFiction = { screen = Screen.Fiction(it) },
+                            onPlayChapter = { fictionId, chapterId ->
+                                scope.launch { playChapterAt(repository, playback, fictionId, chapterId) }
+                                openPlayer()
+                            },
+                        )
+                        Screen.Queue -> QueueScreen(
+                            repository,
                             onPlayChapter = { fictionId, chapterId ->
                                 scope.launch { playChapterAt(repository, playback, fictionId, chapterId) }
                                 openPlayer()
@@ -186,6 +196,7 @@ private fun HeaderBar(
     serverName: String,
     current: Screen,
     showSearch: Boolean,
+    showQueue: Boolean,
     showBookmarks: Boolean,
     onSelect: (Screen) -> Unit,
 ) {
@@ -218,6 +229,9 @@ private fun HeaderBar(
             ) { onSelect(Screen.Library) }
             if (showSearch) {
                 NavItem("Search", active = current is Screen.Search) { onSelect(Screen.Search) }
+            }
+            if (showQueue) {
+                NavItem("Up next", active = current is Screen.Queue) { onSelect(Screen.Queue) }
             }
             if (showBookmarks) {
                 NavItem("Bookmarks", active = current is Screen.Bookmarks) { onSelect(Screen.Bookmarks) }
@@ -340,7 +354,7 @@ private data class CapabilityLine(
 private fun capabilityLines(c: ServerCapabilities): List<CapabilityLine> = listOf(
     CapabilityLine("Global search", c.search, usedByClient = true),
     CapabilityLine("Bookmarks", c.bookmarks, usedByClient = true),
-    CapabilityLine("Cross-library queue", c.queue, usedByClient = false),
+    CapabilityLine("Cross-library queue", c.queue, usedByClient = true),
     CapabilityLine("Follow / unfollow", c.follows, usedByClient = true),
     CapabilityLine("Batch progress sync", c.batchProgress, usedByClient = true),
     CapabilityLine("Delta sync", c.deltaSync, usedByClient = false),

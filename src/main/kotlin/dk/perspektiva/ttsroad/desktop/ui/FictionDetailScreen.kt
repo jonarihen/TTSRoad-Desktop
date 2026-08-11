@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -45,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.QueueMode
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import kotlinx.coroutines.launch
@@ -137,8 +140,16 @@ fun FictionDetailScreen(
                 chapters.forEach { chapter ->
                     ChapterListRow(
                         chapter = chapter,
+                        canQueue = capabilities.queue,
                         onPlay = {
                             scope.launch { playback.playQueue(chapters, chapter.resolvedChapterId, s.value.fiction) }
+                        },
+                        onQueue = { mode ->
+                            scope.launch {
+                                actionError = null
+                                runCatching { repository.addToQueue(listOf(chapter.resolvedChapterId), mode) }
+                                    .onFailure { actionError = it.message ?: "Could not queue chapter" }
+                            }
                         },
                         onMarkPlayed = { played ->
                             scope.launch {
@@ -294,7 +305,9 @@ private fun FictionHeader(
 @Composable
 private fun ChapterListRow(
     chapter: ChapterSummary,
+    canQueue: Boolean,
     onPlay: () -> Unit,
+    onQueue: (String) -> Unit,
     onMarkPlayed: (Boolean) -> Unit,
 ) {
     val playable = chapter.audio != null
@@ -342,6 +355,20 @@ private fun ChapterListRow(
                     contentDescription = if (isPlayed) "Mark unplayed" else "Mark played",
                     tint = if (isPlayed) AarisColor.Ok else AarisColor.Dim,
                 ) { onMarkPlayed(!isPlayed) }
+            }
+            if (hovered && canQueue) {
+                Spacer(Modifier.width(8.dp))
+                RowIconAction(
+                    icon = Icons.Default.PlaylistPlay,
+                    contentDescription = "Play next",
+                    tint = AarisColor.Dim,
+                ) { onQueue(QueueMode.NEXT) }
+                Spacer(Modifier.width(8.dp))
+                RowIconAction(
+                    icon = Icons.Default.PlaylistAdd,
+                    contentDescription = "Add to queue",
+                    tint = AarisColor.Dim,
+                ) { onQueue(QueueMode.END) }
             }
             if (hovered) {
                 Spacer(Modifier.width(8.dp))

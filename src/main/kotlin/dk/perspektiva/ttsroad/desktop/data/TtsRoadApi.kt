@@ -55,6 +55,15 @@ interface TtsRoadApi {
         @Body request: PlaybackProgressRequest,
     ): PlaybackProgressResponse
 
+    @GET("api/mobile/queue")
+    suspend fun queue(@Header("Authorization") auth: String): QueueState
+
+    @POST("api/mobile/queue")
+    suspend fun updateQueue(
+        @Header("Authorization") auth: String,
+        @Body request: QueueUpdateRequest,
+    ): QueueState
+
     @GET("api/mobile/search")
     suspend fun search(
         @Header("Authorization") auth: String,

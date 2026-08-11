@@ -156,6 +156,37 @@ class TtsRoadRepository(private val sessionStore: SessionStore) {
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
         withAuthorizedApi { api, auth -> api.markPlayback(auth, PlaybackMarkRequest(chapterIds, played)) }
 
+    /** The shared Up Next queue — the same rows the browser reads. */
+    suspend fun queue(): QueueState = withAuthorizedApi { api, auth -> api.queue(auth) }
+
+    /**
+     * Queue chapters. [mode] decides whether they land at the end or immediately next.
+     *
+     * Every mutation returns the whole queue as the server now holds it, so the caller replaces its
+     * copy rather than trying to predict the result.
+     */
+    suspend fun addToQueue(chapterIds: List<Int>, mode: String = QueueMode.END): QueueState =
+        withAuthorizedApi { api, auth ->
+            api.updateQueue(auth, QueueUpdateRequest(action = QueueAction.ADD, chapterIds = chapterIds, mode = mode))
+        }
+
+    /** Removes by queue-row id, not chapter id — the same chapter can sit in the queue twice. */
+    suspend fun removeFromQueue(itemIds: List<Int>): QueueState =
+        withAuthorizedApi { api, auth ->
+            api.updateQueue(auth, QueueUpdateRequest(action = QueueAction.REMOVE, itemIds = itemIds))
+        }
+
+    /** [itemIds] is the complete desired order, not a delta. */
+    suspend fun reorderQueue(itemIds: List<Int>): QueueState =
+        withAuthorizedApi { api, auth ->
+            api.updateQueue(auth, QueueUpdateRequest(action = QueueAction.REORDER, itemIds = itemIds))
+        }
+
+    suspend fun clearQueue(): QueueState =
+        withAuthorizedApi { api, auth ->
+            api.updateQueue(auth, QueueUpdateRequest(action = QueueAction.CLEAR))
+        }
+
     /**
      * Server-side search across fiction metadata, chapter titles and narration text.
      *
