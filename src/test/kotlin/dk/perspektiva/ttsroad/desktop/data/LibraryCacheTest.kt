@@ -111,7 +111,7 @@ class LibraryCacheTest {
         val gate = CompletableDeferred<LibraryResponse>()
         val repository = object : FakeRepository() {
             var calls = 0
-            override suspend fun library(): LibraryResponse {
+            override suspend fun library(scope: LibraryScope): LibraryResponse {
                 calls++
                 return gate.await()
             }
@@ -152,7 +152,7 @@ class LibraryCacheTest {
         val second = CompletableDeferred<LibraryResponse>()
         val repository = object : FakeRepository() {
             var calls = 0
-            override suspend fun library(): LibraryResponse {
+            override suspend fun library(scope: LibraryScope): LibraryResponse {
                 calls++
                 return if (calls == 1) first.await() else second.await()
             }
@@ -525,5 +525,152 @@ class LibraryCacheTest {
         runCurrent()
 
         assertEquals(1, repository.libraryCalls)
+    }
+
+    // --- Browse all and follows -----------------------------------------------------------------
+
+    private fun shelf(vararg titles: String) = LibraryResponse(
+        scope = "followed",
+        fictions = titles.mapIndexed { index, title ->
+            FictionSummary(id = index + 1, title = title, following = true)
+        },
+    )
+
+    private fun catalogue(vararg followed: Pair<String, Boolean>) = LibraryResponse(
+        scope = "all",
+        fictions = followed.mapIndexed { index, (title, isFollowed) ->
+            FictionSummary(id = index + 1, title = title, following = isFollowed)
+        },
+    )
+
+    @Test
+    fun `browse-all is a different request from the shelf, and neither answers for the other`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(shelf("Followed")),
+            browseAllResult = Result.success(catalogue("Followed" to true, "Not followed" to false)),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+
+        cache.ensureLibrary()
+        cache.ensureBrowseAll()
+        runCurrent()
+
+        assertEquals(listOf(LibraryScope.Followed, LibraryScope.All), repository.libraryScopes)
+        assertEquals(1, cache.library.value.value?.fictions?.size)
+        assertEquals(2, cache.browseAll.value.value?.fictions?.size)
+        cache.close()
+    }
+
+    @Test
+    fun `switching back to a mode already loaded costs no request`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(shelf("Followed")),
+            browseAllResult = Result.success(catalogue("Followed" to true)),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+
+        cache.ensureBrowseAll()
+        runCurrent()
+        cache.ensureBrowseAll()
+        cache.ensureBrowseAll()
+        runCurrent()
+
+        assertEquals(listOf(LibraryScope.All), repository.libraryScopes)
+        cache.close()
+    }
+
+    @Test
+    fun `following patches the flag in both lists and re-asks the shelf`() = runTest {
+        // The flag patch is what makes the toggle instant; the shelf re-ask is what makes the row
+        // actually appear, which a flag patch cannot express.
+        val repository = FakeRepository(
+            libraryResult = Result.success(shelf("Followed")),
+            browseAllResult = Result.success(catalogue("Followed" to true, "Not followed" to false)),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureLibrary()
+        cache.ensureBrowseAll()
+        runCurrent()
+
+        val confirmed = cache.setFollowing(2, following = true)
+        runCurrent()
+
+        assertEquals(true, confirmed)
+        assertEquals(listOf(2 to true), repository.followCalls)
+        assertEquals(true, cache.browseAll.value.value?.fictions?.first { it.id == 2 }?.following)
+        assertEquals(listOf(LibraryScope.Followed, LibraryScope.All, LibraryScope.Followed), repository.libraryScopes)
+        cache.close()
+    }
+
+    @Test
+    fun `the state the server reports wins over the state that was asked for`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(shelf("Followed")),
+            browseAllResult = Result.success(catalogue("Followed" to true, "Other" to false)),
+            // A server that disagrees — the client must render its answer, not its own request.
+            followResult = Result.success(false),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureBrowseAll()
+        runCurrent()
+
+        val confirmed = cache.setFollowing(2, following = true)
+        runCurrent()
+
+        assertEquals(false, confirmed)
+        assertEquals(false, cache.browseAll.value.value?.fictions?.first { it.id == 2 }?.following)
+        cache.close()
+    }
+
+    @Test
+    fun `a 404 changes nothing at all, and says so`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(shelf("Followed")),
+            browseAllResult = Result.success(catalogue("Followed" to true, "Deleted" to false)),
+            followResult = Result.success(null),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureBrowseAll()
+        runCurrent()
+
+        val confirmed = cache.setFollowing(2, following = true)
+        runCurrent()
+
+        assertNull(confirmed)
+        assertEquals(false, cache.browseAll.value.value?.fictions?.first { it.id == 2 }?.following)
+        assertEquals(emptyList(), repository.libraryScopes.filter { it == LibraryScope.Followed })
+        cache.close()
+    }
+
+    @Test
+    fun `follow state is read from the library payloads, never from the chapters one`() = runTest {
+        // The trap this exists for: the chapters endpoint's `fiction` has no `following` key, so
+        // anything that trusted it would read null and render "not followed".
+        val repository = FakeRepository(libraryResult = Result.success(shelf("Followed")))
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureLibrary()
+        runCurrent()
+
+        assertEquals(true, cache.followingOf(1))
+        assertNull(cache.followingOf(999), "a fiction nothing knows about answers null, not false")
+        cache.close()
+    }
+
+    @Test
+    fun `signing out drops the catalogue as well as the shelf`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(shelf("Followed")),
+            browseAllResult = Result.success(catalogue("Followed" to true)),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureLibrary()
+        cache.ensureBrowseAll()
+        runCurrent()
+
+        cache.clear()
+
+        assertNull(cache.library.value.value)
+        assertNull(cache.browseAll.value.value)
+        cache.close()
     }
 }

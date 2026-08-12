@@ -43,6 +43,14 @@ data class ServerCapabilities(
     val deltaSync: Boolean = false,
     val batchProgress: Boolean = false,
     val audioContentHash: Boolean = false,
+    /**
+     * Per-user libraries.
+     *
+     * False means `/api/mobile/library` is still the whole shared list on that server, so this
+     * client must not offer a follow control it cannot honour — the capability comment in
+     * `app/routers/platform.py` states exactly that consequence.
+     */
+    val follows: Boolean = false,
     val deviceManagement: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
@@ -72,6 +80,7 @@ data class ServerCapabilities(
             deltaSync = response.capabilities.flag("delta_sync"),
             batchProgress = response.capabilities.flag("batch_progress"),
             audioContentHash = response.capabilities.flag("audio_content_hash"),
+            follows = response.capabilities.flag("follows"),
             deviceManagement = response.capabilities.flag("device_management"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),

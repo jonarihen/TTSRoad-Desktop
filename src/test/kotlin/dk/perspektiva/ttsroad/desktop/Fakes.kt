@@ -41,6 +41,10 @@ open class FakeRepository(
         Result.success(null),
     /** `success(null)` is the server saying it cannot search — not "nothing matched". */
     var searchResult: Result<dk.perspektiva.ttsroad.desktop.data.SearchResponse?> = Result.success(null),
+    /** What `scope=all` answers. Defaults to the same payload the shelf gives. */
+    var browseAllResult: Result<LibraryResponse> = Result.success(LibraryResponse()),
+    /** Null means "echo what was asked". `success(null)` is the server's 404. */
+    var followResult: Result<Boolean?>? = null,
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -69,6 +73,12 @@ open class FakeRepository(
     val capabilityProbes: MutableList<String> = mutableListOf()
     /** Queries the server was actually asked, in order — trimming and debouncing are observable. */
     val searchQueries: MutableList<String> = mutableListOf()
+
+    /** Scopes the library was asked for, in order — browse-all is a different request. */
+    val libraryScopes: MutableList<dk.perspektiva.ttsroad.desktop.data.LibraryScope> = mutableListOf()
+
+    /** `(fictionId, following)` pairs passed to [setFollowing], in order. */
+    val followCalls: MutableList<Pair<Int, Boolean>> = mutableListOf()
     val markedPlayed: MutableList<Pair<List<Int>, Boolean>> = mutableListOf()
     val savedProgress: MutableList<Triple<Int, Double, Boolean>> = mutableListOf()
 
@@ -109,9 +119,22 @@ open class FakeRepository(
         logoutCalls++
     }
 
-    override suspend fun library(): LibraryResponse {
+    override suspend fun library(
+        scope: dk.perspektiva.ttsroad.desktop.data.LibraryScope,
+    ): LibraryResponse {
         libraryCalls++
-        return libraryResult.getOrThrow()
+        libraryScopes += scope
+        return (if (scope == dk.perspektiva.ttsroad.desktop.data.LibraryScope.All) browseAllResult else libraryResult)
+            .getOrThrow()
+    }
+
+    override suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? {
+        followCalls += fictionId to following
+        // An *unset* `followResult` echoes what was asked, which is what a healthy server does.
+        // A set one is used as-is, null included — `success(null)` is the server's 404 and must not
+        // fall through to the echo.
+        val configured = followResult ?: return following
+        return configured.getOrThrow()
     }
 
     override suspend fun currentUser(): MobileUser? = currentUserResult.getOrThrow()

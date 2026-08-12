@@ -60,8 +60,22 @@ interface TtsRoadApi {
     @POST("api/mobile/devices/revoke-others")
     suspend fun revokeOtherDevices()
 
+    /**
+     * The caller's shelf, or the whole server with `scope=all`.
+     *
+     * The parameter is always sent — an older server simply ignores an unknown query parameter and
+     * answers the shared list it always did, which is what makes browse-all safe to ask for.
+     */
     @GET("api/mobile/library")
-    suspend fun library(): LibraryResponse
+    suspend fun library(@Query("scope") scope: String = LibraryScope.Followed.wireValue): LibraryResponse
+
+    /** Puts a fiction on this account's shelf. 404 for a fiction that does not exist. */
+    @POST("api/mobile/fictions/{fiction_id}/follow")
+    suspend fun follow(@Path("fiction_id") fictionId: Int): FollowResponse
+
+    /** Takes it off. The fiction stays on the server and stays reachable through `scope=all`. */
+    @DELETE("api/mobile/fictions/{fiction_id}/follow")
+    suspend fun unfollow(@Path("fiction_id") fictionId: Int): FollowResponse
 
     /**
      * Library-wide search across fiction metadata, chapter titles and narration text.

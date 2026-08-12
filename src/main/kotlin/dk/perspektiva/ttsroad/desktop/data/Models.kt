@@ -45,9 +45,41 @@ data class ServerInfo(
 
 data class LibraryResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
+    /**
+     * Which list this is: `followed` (the caller's shelf, and the default) or `all` (the whole
+     * server). Echoed by the server so a client can tell that the scope it asked for is the scope
+     * it got — an older server ignores the parameter and answers `followed` shaped content with no
+     * `scope` key at all.
+     */
+    val scope: String? = null,
     val fictions: List<FictionSummary> = emptyList(),
     @param:Json(name = "continue_listening") val continueListening: List<ChapterSummary> = emptyList(),
     @param:Json(name = "recent_chapters") val recentChapters: List<ChapterSummary> = emptyList(),
+)
+
+/**
+ * The two answers to "which fictions".
+ *
+ * `followed` is what a client that has never heard of follows gets, and it is safe because the
+ * server backfills a follow of every fiction for every existing account on upgrade.
+ */
+enum class LibraryScope(val wireValue: String) {
+    Followed("followed"),
+    All("all"),
+}
+
+/** `POST`/`DELETE /api/mobile/fictions/{id}/follow`. */
+data class FollowResponse(
+    val status: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    /**
+     * The state the server now holds — **not** the state that was asked for.
+     *
+     * Read rather than assumed, so a request that did not do what it looked like cannot render as
+     * success. `created`/`removed` say whether anything actually changed and are deliberately not
+     * modelled: following something already followed is a no-op, not a failure.
+     */
+    val following: Boolean = false,
 )
 
 data class ChaptersResponse(
@@ -72,6 +104,16 @@ data class FictionSummary(
     @param:Json(name = "pending_chapters") val pendingChapters: Int = 0,
     @param:Json(name = "error_chapters") val errorChapters: Int = 0,
     @param:Json(name = "processing_chapters") val processingChapters: Int = 0,
+    /**
+     * Whether this account has the fiction on its shelf, or **null when the payload does not say**.
+     *
+     * Nullable rather than defaulted-false, because the difference is a real trap: only
+     * `/api/mobile/library` adds this key. `/api/mobile/fictions/{id}/chapters` builds its `fiction`
+     * with `_fiction_payload()`, which does not — so a detail screen that re-read follow state from
+     * its own chapters response would flip every followed book to "unfollowed" the moment the
+     * chapters arrived. Null means *ask someone else*, and false would have meant "not followed".
+     */
+    val following: Boolean? = null,
 ) {
     val readyFraction: Float
         get() = if (totalChapters > 0) (doneChapters.toFloat() / totalChapters).coerceIn(0f, 1f) else 0f

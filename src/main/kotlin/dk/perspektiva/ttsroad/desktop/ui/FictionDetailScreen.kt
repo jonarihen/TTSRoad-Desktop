@@ -27,6 +27,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
@@ -197,6 +199,34 @@ fun FictionDetailScreen(
     val playingChapterId = player.playingChapterIdIn(fiction.id)
     val currentRow = remember(visible, playingChapterId) { visible.indexOfChapter(playingChapterId) }
 
+    // Seeded from the library summary and mutated only by the toggle. Deliberately *not* re-read
+    // from `loaded.fiction`: the chapters endpoint builds its fiction payload without a `following`
+    // key at all, so a screen that trusted it would flip every followed book to "unfollowed" the
+    // moment its chapters arrived. See [FictionSummary.following].
+    var followOverride by remember(fiction.id) { mutableStateOf<Boolean?>(null) }
+    var followBusy by remember(fiction.id) { mutableStateOf(false) }
+    val following = followOverride ?: fiction.following ?: cache.followingOf(fiction.id)
+
+    fun toggleFollow() {
+        val target = !(following ?: false)
+        followBusy = true
+        actionError = null
+        scope.launch {
+            runCatching { cache.setFollowing(fiction.id, target) }
+                .onSuccess { confirmed ->
+                    // Null is the server's 404 — no such fiction, or no such endpoint. Nothing
+                    // changed, so nothing may render as though it had.
+                    if (confirmed == null) {
+                        actionError = "The server does not have this fiction any more"
+                    } else {
+                        followOverride = confirmed
+                    }
+                }
+                .onFailure { actionError = userFacingMessage(it, "Could not update your shelf") }
+            followBusy = false
+        }
+    }
+
     fun mark(ids: List<Int>, played: Boolean) {
         if (ids.isEmpty()) return
         actionError = null
@@ -261,7 +291,19 @@ fun FictionDetailScreen(
                     }
 
                     // `resumeTarget` is null until chapters load, so the button appears with the list.
-                    FictionHeader(header, repository, chapters = chapters, onResume = ::play)
+                    FictionHeader(
+                        header,
+                        repository,
+                        chapters = chapters,
+                        onResume = ::play,
+                        // Absent, not disabled, on a server whose library is still the whole shared
+                        // list: there is no shelf there to add anything to.
+                        follow = if (capabilities.follows) {
+                            FollowUi(following = following ?: false, busy = followBusy, onToggle = ::toggleFollow)
+                        } else {
+                            null
+                        },
+                    )
 
                     actionError?.let { message ->
                         Spacer(Modifier.height(12.dp))
@@ -503,12 +545,18 @@ private fun resumeTarget(chapters: List<ChapterSummary>): ChapterSummary? =
         ?: chapters.firstOrNull { it.hasAudio && !it.isPlayed }
         ?: chapters.firstOrNull { it.hasAudio }
 
+/** The follow control's whole state, or null where the server has no per-user library. */
+data class FollowUi(val following: Boolean, val busy: Boolean, val onToggle: () -> Unit)
+
+const val FollowToggleTestTag: String = "followToggle"
+
 @Composable
 private fun FictionHeader(
     fiction: FictionSummary,
     repository: TtsRoadRepository,
     chapters: List<ChapterSummary>,
     onResume: (ChapterSummary) -> Unit,
+    follow: FollowUi? = null,
 ) {
     Row(Modifier.fillMaxWidth()) {
         CoverImage(
@@ -578,19 +626,55 @@ private fun FictionHeader(
                 MetaText(listeningTotalsLabel(totals), color = AarisColor.Muted)
             }
             val target = remember(chapters) { resumeTarget(chapters) }
-            if (target != null) {
+            if (target != null || follow != null) {
                 Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = { onResume(target) },
-                    shape = RectangleShape,
-                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (target.resolvedPositionSeconds > 0.0) "RESUME" else "START LISTENING")
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (target != null) {
+                        Button(
+                            onClick = { onResume(target) },
+                            shape = RectangleShape,
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (target.resolvedPositionSeconds > 0.0) "RESUME" else "START LISTENING")
+                        }
+                    }
+                    follow?.let { FollowButton(it) }
                 }
             }
         }
+    }
+}
+
+/**
+ * Add to, or take off, this account's shelf.
+ *
+ * Labelled for the state it is *in* rather than the action it performs — "Following" with a filled
+ * bookmark, "Follow" with an outline — because the row above it is a description of the fiction,
+ * and a control there that reads as an instruction is ambiguous about which of the two it is
+ * saying. The content description carries the action for a screen reader.
+ */
+@Composable
+private fun FollowButton(follow: FollowUi) {
+    OutlinedButton(
+        onClick = follow.onToggle,
+        enabled = !follow.busy,
+        shape = RectangleShape,
+        modifier = Modifier
+            .pointerHoverIcon(PointerIcon.Hand)
+            .testTag(FollowToggleTestTag)
+            .semantics {
+                contentDescription = if (follow.following) "Unfollow this fiction" else "Follow this fiction"
+            },
+    ) {
+        Icon(
+            if (follow.following) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+            contentDescription = null,
+            Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(if (follow.following) "FOLLOWING" else "FOLLOW")
     }
 }
 
