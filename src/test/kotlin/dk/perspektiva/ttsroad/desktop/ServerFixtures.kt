@@ -437,6 +437,144 @@ object ServerFixtures {
 
     /** POST /api/mobile/playback/mark — 200. */
     val MARK_OK = """{"status": "ok", "played": true, "chapter_ids": [101], "count": 1}"""
+
+    /**
+     * GET /api/mobile/search — 200, one hit in each of the three groups.
+     *
+     * Reproduces the shape `app/services/search.py` actually emits: one item type across all three
+     * groups with nulls where a field does not apply, `highlights` as `[[start, end], …]` ranges
+     * rather than markup, and `char_offset` present only on a narration-text hit.
+     */
+    val SEARCH = """
+        {
+          "api_version": 1,
+          "query": "ashfall gate",
+          "tokens": ["ashfall", "gate"],
+          "scope": {"fiction_id": null},
+          "limit": 20,
+          "offset": 0,
+          "indexed": true,
+          "total": 3,
+          "fictions": {
+            "items": [
+              {
+                "kind": "fiction",
+                "score": 160.0,
+                "fiction_id": 7,
+                "fiction_title": "A Test Serial",
+                "fiction_slug": "a-test-serial",
+                "author": "Someone",
+                "cover_image_url": "https://ttsroad.example.com/static/covers/7.jpg",
+                "tags": ["LitRPG"],
+                "chapter_id": null,
+                "chapter_title": null,
+                "chapter_number": null,
+                "audio_duration": 0.0,
+                "status": null,
+                "excluded": false,
+                "playable": false,
+                "has_timings": false,
+                "audio": null,
+                "char_offset": null,
+                "matched_fields": ["title"],
+                "snippet": "A Test Serial",
+                "highlights": [[2, 6]],
+                "url": "/fiction/7"
+              }
+            ],
+            "total": 1,
+            "capped": false,
+            "has_more": false
+          },
+          "chapters": {
+            "items": [
+              {
+                "kind": "chapter",
+                "score": 140.0,
+                "fiction_id": 7,
+                "fiction_title": "A Test Serial",
+                "fiction_slug": "a-test-serial",
+                "author": null,
+                "cover_image_url": "https://ttsroad.example.com/static/covers/7.jpg",
+                "tags": [],
+                "chapter_id": 102,
+                "chapter_title": "The Ashfall Gate",
+                "chapter_number": 2,
+                "audio_duration": 1200.0,
+                "status": "done",
+                "excluded": false,
+                "playable": true,
+                "has_timings": true,
+                "audio": {
+                  "filename": "0002.mp3",
+                  "url": "/api/mobile/audio/a-test-serial/0002.mp3",
+                  "requires_bearer_auth": true
+                },
+                "char_offset": null,
+                "matched_fields": ["chapter_title"],
+                "snippet": "The Ashfall Gate",
+                "highlights": [[4, 11]],
+                "url": "/fiction/7?play=102"
+              }
+            ],
+            "total": 1,
+            "capped": false,
+            "has_more": false
+          },
+          "text": {
+            "items": [
+              {
+                "kind": "text",
+                "score": 96.5,
+                "fiction_id": 7,
+                "fiction_title": "A Test Serial",
+                "fiction_slug": "a-test-serial",
+                "author": null,
+                "cover_image_url": null,
+                "tags": [],
+                "chapter_id": 103,
+                "chapter_title": "Descent",
+                "chapter_number": 3,
+                "audio_duration": 980.0,
+                "status": "done",
+                "excluded": false,
+                "playable": true,
+                "has_timings": false,
+                "audio": {
+                  "filename": "0003.mp3",
+                  "url": "/api/mobile/audio/a-test-serial/0003.mp3",
+                  "requires_bearer_auth": true
+                },
+                "char_offset": 4180,
+                "matched_fields": ["clean_text"],
+                "snippet": "…they came at last to the ashfall gate, and it was shut.",
+                "highlights": [[26, 38]],
+                "url": "/fiction/7?play=103"
+              }
+            ],
+            "total": 1,
+            "capped": false,
+            "has_more": false
+          }
+        }
+    """.trimIndent()
+
+    /** A query nothing matched. Every group is present and empty — the server never omits one. */
+    val SEARCH_EMPTY = """
+        {
+          "api_version": 1,
+          "query": "nothingatall",
+          "tokens": ["nothingatall"],
+          "scope": {"fiction_id": null},
+          "limit": 20,
+          "offset": 0,
+          "indexed": true,
+          "total": 0,
+          "fictions": {"items": [], "total": 0, "capped": false, "has_more": false},
+          "chapters": {"items": [], "total": 0, "capped": false, "has_more": false},
+          "text": {"items": [], "total": 0, "capped": false, "has_more": false}
+        }
+    """.trimIndent()
 }
 
 /**
@@ -458,6 +596,12 @@ object ParsedFixtures {
         get() = requireNotNull(
             moshi.adapter(dk.perspektiva.ttsroad.desktop.data.ChaptersResponse::class.java)
                 .fromJson(ServerFixtures.CHAPTERS),
+        )
+
+    val search: dk.perspektiva.ttsroad.desktop.data.SearchResponse
+        get() = requireNotNull(
+            moshi.adapter(dk.perspektiva.ttsroad.desktop.data.SearchResponse::class.java)
+                .fromJson(ServerFixtures.SEARCH),
         )
 
     val devices: List<dk.perspektiva.ttsroad.desktop.data.DeviceSession>

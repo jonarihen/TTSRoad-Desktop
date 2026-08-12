@@ -34,6 +34,16 @@ sealed interface Destination {
      */
     data class Reader(val chapterId: Int, val title: String) : Destination
 
+    /**
+     * Server-side search results.
+     *
+     * Carries no query. The query and its results live in the hoisted search holder, so opening a
+     * hit and coming back finds the list still there — and so re-opening this destination from the
+     * library with a *new* query is not defeated by the pop-back-to-existing rule below, which
+     * keeps the older entry's payload.
+     */
+    data object Search : Destination
+
     data object Settings : Destination
 
     data object Devices : Destination
@@ -53,6 +63,7 @@ val Destination.key: String
         is Destination.Fiction -> "Fiction:${fiction.id}"
         Destination.Player -> "Player"
         is Destination.Reader -> "Reader:$chapterId"
+        Destination.Search -> "Search"
         Destination.Settings -> "Settings"
         Destination.Devices -> "Devices"
     }

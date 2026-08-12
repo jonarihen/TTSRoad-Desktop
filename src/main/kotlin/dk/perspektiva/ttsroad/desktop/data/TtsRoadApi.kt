@@ -63,6 +63,19 @@ interface TtsRoadApi {
     @GET("api/mobile/library")
     suspend fun library(): LibraryResponse
 
+    /**
+     * Library-wide search across fiction metadata, chapter titles and narration text.
+     *
+     * Advertised as the `search` capability; 404 on a server older than the endpoint. An empty
+     * query is an empty result rather than a 422, which is what lets the field clear itself.
+     */
+    @GET("api/mobile/search")
+    suspend fun search(
+        @Query("q") query: String,
+        @Query("limit") limit: Int = SearchLimits.Default,
+        @Query("offset") offset: Int = 0,
+    ): SearchResponse
+
     @GET("api/mobile/fictions/{fiction_id}/chapters")
     suspend fun chapters(
         @Path("fiction_id") fictionId: Int,

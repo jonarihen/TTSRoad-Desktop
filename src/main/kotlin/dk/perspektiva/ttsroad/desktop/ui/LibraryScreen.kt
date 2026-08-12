@@ -33,11 +33,15 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed as itemsIndexedInRow
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,6 +65,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
@@ -102,6 +107,14 @@ fun LibraryScreen(
     playback: PlaybackController,
     onOpenFiction: (FictionSummary) -> Unit,
     onOpenPlayer: () -> Unit,
+    /**
+     * Whether the signed-in server advertises the `search` capability.
+     *
+     * False hides the escalation entirely rather than disabling it: the field above still filters
+     * what is loaded, which is the whole feature on a server that cannot do more.
+     */
+    serverSearchAvailable: Boolean = false,
+    onSearchServer: (String) -> Unit = {},
     /**
      * Local listening history, for the "Jump back in" strip. Defaulted to an in-memory store so a
      * screen test never reads or writes the real config directory.
@@ -216,8 +229,25 @@ fun LibraryScreen(
                                     onValueChange = { query = it },
                                     label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
                                     singleLine = true,
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                    // Enter escalates rather than filtering again: the filter has
+                                    // already applied itself on every keystroke, so the only thing
+                                    // left for the key to mean is "look further than this".
+                                    keyboardActions = KeyboardActions(
+                                        onSearch = {
+                                            if (serverSearchAvailable && query.isNotBlank()) onSearchServer(query)
+                                        },
+                                    ),
                                     modifier = Modifier.fillMaxWidth(),
                                 )
+                                if (serverSearchAvailable) {
+                                    Spacer(Modifier.height(10.dp))
+                                    SearchServerAction(
+                                        query = query,
+                                        matches = filtered.size,
+                                        onSearch = { onSearchServer(query) },
+                                    )
+                                }
                             }
                         }
                     }
@@ -331,6 +361,40 @@ private fun JumpBackShelf(
                     )
                 }
             }
+        }
+    }
+}
+
+const val SearchServerTestTag: String = "librarySearchServer"
+
+/**
+ * The escalation from the local filter to the server's own index.
+ *
+ * Phrased as what it adds — chapter titles and narration text — rather than as "search", because
+ * the field directly above it is also search and the difference between the two is the only reason
+ * this control exists. Disabled rather than hidden while the field is empty, so it does not appear
+ * and disappear under the cursor as the user types.
+ */
+@Composable
+private fun SearchServerAction(query: String, matches: Int, onSearch: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(
+            onClick = onSearch,
+            enabled = query.isNotBlank(),
+            shape = RectangleShape,
+            modifier = Modifier
+                .pointerHoverIcon(PointerIcon.Hand)
+                .testTag(SearchServerTestTag),
+        ) {
+            Icon(Icons.Default.Search, contentDescription = null, Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            MetaText("Search chapters and text on the server", color = AarisColor.Ink)
+        }
+        // The case this is really for: the words are in a chapter, not in a title, so the shelf
+        // below is empty and the server is the only thing that can answer.
+        if (query.isNotBlank() && matches == 0) {
+            Spacer(Modifier.width(12.dp))
+            MetaText("Nothing here matches — the server may still find it", color = AarisColor.Dim)
         }
     }
 }
