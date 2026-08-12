@@ -2,8 +2,10 @@ package dk.perspektiva.ttsroad.desktop.ui
 
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.ListeningTotals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -77,5 +79,51 @@ class AdaptiveLayoutTest {
     @Test
     fun `a timestamp from the future reads as just now rather than as a negative age`() {
         assertEquals("just now", formatLastUpdated(2_000_000, nowMillis = 1_000_000))
+    }
+
+    // --- Listening totals ------------------------------------------------------------------------
+
+    @Test
+    fun `the fiction totals line leads with what is left to listen to`() {
+        val totals = ListeningTotals(listenable = 73, played = 12, remainingSeconds = 54 * 3600 + 38 * 60.0)
+
+        assertEquals("54h 38m remaining  ·  12/73 played  ·  61 left", listeningTotalsLabel(totals))
+    }
+
+    @Test
+    fun `a finished fiction drops the remaining span rather than reading as stalled`() {
+        val totals = ListeningTotals(listenable = 73, played = 73, remainingSeconds = 0.0)
+
+        assertEquals("73/73 played", listeningTotalsLabel(totals))
+    }
+
+    // --- Remaining in the current chapter --------------------------------------------------------
+
+    @Test
+    fun `the player counts down the current chapter`() {
+        assertEquals("-13:07", remainingLabel(positionMs = 412_500, durationMs = 1_200_000, speed = 1f))
+    }
+
+    @Test
+    fun `above 1x the readout says what the remainder actually costs`() {
+        assertEquals(
+            "-13:07  ·  8:45 at 1.5x",
+            remainingLabel(positionMs = 412_500, durationMs = 1_200_000, speed = 1.5f),
+        )
+    }
+
+    @Test
+    fun `a chapter that has not reported a duration yet has no honest answer`() {
+        assertNull(remainingLabel(positionMs = 0, durationMs = 0, speed = 1f))
+    }
+
+    @Test
+    fun `a speed the engine has not reported yet does not render an infinite estimate`() {
+        assertEquals("-20:00", remainingLabel(positionMs = 0, durationMs = 1_200_000, speed = 0f))
+    }
+
+    @Test
+    fun `a position past the end reads as finished, not as negative time`() {
+        assertEquals("-0:00", remainingLabel(positionMs = 1_300_000, durationMs = 1_200_000, speed = 1f))
     }
 }

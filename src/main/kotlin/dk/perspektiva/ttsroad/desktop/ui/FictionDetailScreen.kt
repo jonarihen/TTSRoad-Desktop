@@ -71,11 +71,14 @@ import dk.perspektiva.ttsroad.desktop.data.ChapterSort
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
+import dk.perspektiva.ttsroad.desktop.data.ListeningTotals
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.chapterKeys
 import dk.perspektiva.ttsroad.desktop.data.chapterView
 import dk.perspektiva.ttsroad.desktop.data.chaptersBefore
+import dk.perspektiva.ttsroad.desktop.data.formatListeningSpan
 import dk.perspektiva.ttsroad.desktop.data.indexOfChapter
+import dk.perspektiva.ttsroad.desktop.data.listeningTotals
 import dk.perspektiva.ttsroad.desktop.data.markableIds
 import dk.perspektiva.ttsroad.desktop.data.playbackOrder
 import dk.perspektiva.ttsroad.desktop.data.statusLabel
@@ -481,6 +484,18 @@ fun BackLink(label: String, onBack: () -> Unit) {
     }
 }
 
+/**
+ * "54h 38m remaining  ·  12/73 played  ·  61 left".
+ *
+ * The remaining span leads because it is the number a listener plans an evening around; it is
+ * dropped once nothing is left rather than rendered as "0m remaining", which reads as a stall.
+ */
+internal fun listeningTotalsLabel(totals: ListeningTotals): String = buildString {
+    if (totals.remainingSeconds > 0.0) append("${formatListeningSpan(totals.remainingSeconds)} remaining  ·  ")
+    append("${totals.played}/${totals.listenable} played")
+    if (totals.unplayed > 0) append("  ·  ${totals.unplayed} left")
+}
+
 /** Best chapter to resume: furthest in-progress one, else the first playable. */
 private fun resumeTarget(chapters: List<ChapterSummary>): ChapterSummary? =
     chapters.filter { it.hasAudio && it.resolvedPositionSeconds > 0.0 && !it.isPlayed }
@@ -554,6 +569,14 @@ private fun FictionHeader(
                 },
                 color = AarisColor.Dim,
             )
+            // What is left to *listen to*, as opposed to the conversion progress above it. Summed
+            // from the same rows the list draws, so a bulk mark-played moves it immediately and a
+            // failed mark rolls it back with the checkmarks.
+            val totals = remember(chapters) { chapters.listeningTotals() }
+            if (!totals.isEmpty) {
+                Spacer(Modifier.height(6.dp))
+                MetaText(listeningTotalsLabel(totals), color = AarisColor.Muted)
+            }
             val target = remember(chapters) { resumeTarget(chapters) }
             if (target != null) {
                 Spacer(Modifier.height(16.dp))

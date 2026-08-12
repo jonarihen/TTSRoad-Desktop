@@ -1,0 +1,3623 @@
+ ▐▛███▜▌   Claude Code v2.1.226
+▝▜█████▛▘  Opus 5 · Claude Pro
+  ▘▘ ▝▝    /Projekts/TTSRoad-Desktop
+
+  ⎿  SessionStart:startup hook error
+  ⎿  Failed with non-blocking status code: /bin/sh: line 1: node: command not 
+     found
+
+❯ Please continue on the issues in the phases                                   
+  ⎿  UserPromptSubmit hook error
+  ⎿  Failed with non-blocking status code: /bin/sh: line 1: node: command not 
+     found
+
+● I'll start by getting oriented — checking the roadmap/phase docs and current
+  state of the branch.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● Phase 6 work is uncommitted on the branch. Let me find the roadmap/issue
+  tracking.
+
+  Listed 1 directory, ran 3 shell commands (ctrl+o to expand)
+
+● Phase 6 (issue #9) implementation is in the working tree, uncommitted. Let me
+  verify it builds and passes before moving on.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● While that runs, let me audit the implementation against the issue's
+  acceptance criteria.
+
+  Read 2 files (ctrl+o to expand)
+
+● Background command "Run full CI-equivalent check" completed (exit code 0)
+
+● The full CI-equivalent check passed. Let me confirm and check test coverage.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Correction: that check did not actually run — the pipe masked the exit code,
+  and gradlew failed with JAVA_HOME is not set. Let me locate a JDK.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● Test results are from Aug 7 — stale, predating Phase 6. There's a
+  Gradle-provisioned JDK 25 I can bootstrap with.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● JDK 25 and Xvfb are both available. Running the real check now, without a pipe
+  masking the exit code.
+
+  Read 4 files, ran 3 shell commands (ctrl+o to expand)
+
+● Background command "Run full CI check with JDK on PATH" completed (exit code
+0)
+
+● Build passed. But :test came FROM-CACHE — let me verify the Phase 6 tests
+  actually ran and are present in the results.
+
+  Ran 1 shell command (ctrl+o to expand)
+● 561 tests, 0 failures. All Phase 6 test classes ran. Let me check the 2 skips
+  and run the remaining CI gates.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● 2 skips are Windows-only credential tests — expected on Linux. GStreamer
+  1.22.12 is present, so the integration test really ran. Now the packaging
+  gates.
+
+  Searched for 3 patterns, read 2 files, ran 3 shell commands (ctrl+o to expand)
+
+● Background command "Build the distributable image" completed (exit code 0)
+
+● Distributable built, and there's a real session bus here. Running the smoke
+  test, then verifying MPRIS live on the bus.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Smoke test passes (keyring/GL fallbacks are the graceful-degradation paths
+  working). Now a live MPRIS check against the real session bus.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Found a real bug — and one the smoke test structurally cannot catch. Let me
+  stop the app and confirm.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Confirmed — jdk.security.auth is missing from the jlink module list. Let me
+  verify that's the module that owns the class.
+
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+● Confirmed: the packaged runtime ships 11 modules, and jdk.security.auth isn't
+  one of them. Let me look at the smoke-test path, since it structurally can't
+  catch this.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Now I'll fix both the missing module and the CI gap that hid it.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(build.gradle.kts)
+  ⎿  Added 12 lines, removed 1 line
+      253              //   java.naming   — OkHttp's DNS/JNDI usage
+      254              //   jdk.crypto.ec — TLS elliptic-curve suites (ht
+           tps:// servers fail without it)
+      255              //   java.management / jdk.unsupported — Kotlin + 
+           Skiko runtime bits
+      256 -            modules("java.desktop", "java.naming", "java.manag
+          -ement", "jdk.crypto.ec", "jdk.unsupported")                   
+      256 +            //   jdk.security.auth — com.sun.security.auth.mod
+          +ule.UnixSystem, which dbus-java's                             
+      257 +            //     unix-socket transport uses to read the uid 
+          +when connecting to the session bus.                           
+      258 +            //     Reached only by reflection, so inference mi
+          +sses it and MPRIS degrades to "no                             
+      259 +            //     session bus" in the packaged image while wo
+          +rking fine from source.                                       
+      260 +            modules(                                          
+      261 +                "java.desktop",                               
+      262 +                "java.naming",                                
+      263 +                "java.management",                            
+      264 +                "jdk.crypto.ec",                              
+      265 +                "jdk.security.auth",                          
+      266 +                "jdk.unsupported",                            
+      267 +            )                                                 
+      268  
+      269              windows {
+      270                  // Without these the MSI installs with no Star
+           t menu / desktop entry at all.
+
+● Now the CI gap — following the existing verifyMp3SpiIsRegistered precedent so
+  this can't regress silently.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/Main.kt)
+  ⎿  Added 22 lines
+      47  }
+      48  
+      49  /**
+      50 + * The classes MPRIS needs that live outside the modules jlink 
+         +infers.                                                        
+      51 + *                                                             
+      52 + * `com.sun.security.auth.module.UnixSystem` is in `jdk.securit
+         +y.auth` and is reached only by                                 
+      53 + * reflection from dbus-java's unix-socket transport, so leavin
+         +g that module out of the jlink list                            
+      54 + * produces the worst possible failure mode: the app starts, pl
+         +ays audio, and reports "no MPRIS                               
+      55 + * integration on this desktop" — indistinguishable from a mach
+         +ine that genuinely has no session                              
+      56 + * bus. Checked here rather than by connecting, because CI has 
+         +no session bus and "no bus" must stay                          
+      57 + * a passing configuration while "no module" must not.         
+      58 + *                                                             
+      59 + * Linux only: this is where MPRIS applies, and the class does 
+         +not exist on Windows runtimes.                                 
+      60 + */                                                            
+      61 +private fun verifyMprisRuntimeModulesArePresent() {            
+      62 +    if (!System.getProperty("os.name").orEmpty().contains("linu
+         +x", ignoreCase = true)) return                                 
+      63 +    val required = "com.sun.security.auth.module.UnixSystem"   
+      64 +    runCatching { Class.forName(required) }.onFailure {        
+      65 +        System.err.println("FATAL: $required is missing from th
+         +is runtime image (jdk.security.auth)")                         
+      66 +        exitProcess(1)                                         
+      67 +    }                                                          
+      68 +    println("MPRIS runtime modules present: $required")        
+      69 +}                                                              
+      70 +                                                               
+      71 +/**                                                            
+      72   * The displays attached right now, in device pixels.
+      73   *
+      74   * Wrapped in `runCatching` because a headless JVM throws rathe
+          r than returning nothing — and a
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/Main.kt)
+  ⎿  Added 1 line
+      151                  LaunchedEffect(Unit) {
+      152                      delay(2_000)
+      153                      verifyMp3SpiIsRegistered()
+      154 +                    verifyMprisRuntimeModulesArePresent()     
+      155                      println("${BuildInfo.APP_NAME} ${BuildInfo
+           .VERSION} smoke test OK")
+      156                      container.close()
+      157                      exitApplication()
+
+● Rebuilding the image to verify the fix takes MPRIS live on the bus.
+  Searched for 1 pattern, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The ADR's "nothing new to package" claim is exactly what this bug disproves.
+  Let me correct it.
+
+● Update(docs/adr/0006-listening-preferences-and-desktop-integration.md)
+  ⎿  Added 11 lines, removed 1 line
+      114  
+      115  `com.github.hypfvieh:dbus-java-core` plus its `native-unixsock
+           et` transport. It implements the D-Bus
+      116  wire protocol in pure Java and reaches the session bus through
+            the JDK's own AF_UNIX
+      117 -`SocketChannel`, so it adds **no native library** to the jlink
+          - image and nothing new to package.                            
+      117 +`SocketChannel`, so it adds **no native library** to the jlink
+          + image.                                                       
+      118  `slf4j-nop` is pinned alongside it: without a provider, SLF4J 
+           2 prints "No SLF4J providers were
+      119  found" to stderr on first use, and a desktop app should not na
+           rrate its dependency wiring.
+      120  
+      121 +It does, however, add a **jlink module**: the transport reads 
+          +the caller's uid through                                      
+      122 +`com.sun.security.auth.module.UnixSystem`, which lives in `jdk
+          +.security.auth` and is reached only by                        
+      123 +reflection, so module inference misses it. Leaving it out prod
+          +uced the worst available failure mode                         
+      124 +— the packaged app started, played audio, and logged "no MPRIS
+          + integration on this desktop", which                          
+      125 +is exactly what a machine with no session bus logs, while the 
+          +same code worked from `./gradlew run`                         
+      126 +because a full JDK was on the module path. The `--smoke-test` 
+          +launch now asserts the class resolves                         
+      127 +(`verifyMprisRuntimeModulesArePresent`), because the smoke tes
+          +t deliberately does *not* claim a bus                         
+      128 +name and so could never have caught this by connecting. "No se
+          +ssion bus" stays a passing                                    
+      129 +configuration; "no module" does not.                          
+      130 +                                                              
+      131  The integration is split in two:
+      132  
+      133  - `MprisState.kt` is pure Kotlin with no D-Bus type in it. The
+            audiobook mapping lives here —
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Update(CLAUDE.md)
+  ⎿  Added 7 lines, removed 3 lines
+      179  - **`src/prototype/`** is a separate source set that `main` ne
+           ver sees, so an unaccepted evaluation
+      180    can't reach the shipped app or its jlink image. `check` comp
+           iles it; running it needs a real
+      181    GStreamer install: `./gradlew runPlaybackPrototype`.
+      182 -- **jlink module list** in `build.gradle.kts` (`java.desktop`,
+          - `java.naming`, `jdk.crypto.ec`, …) is                        
+      183 -  load-bearing — module inference misses these, and dropping o
+          -ne breaks the packaged app at runtime                         
+      184 -  rather than at build time. The `--smoke-test` launch is what
+          - catches it.                                                  
+      182 +- **jlink module list** in `build.gradle.kts` (`java.desktop`,
+          + `java.naming`, `jdk.crypto.ec`,                              
+      183 +  `jdk.security.auth`, …) is load-bearing — module inference m
+          +isses these, and dropping one breaks                          
+      184 +  the packaged app at runtime rather than at build time. The `
+          +--smoke-test` launch is what catches                          
+      185 +  it, and it only catches what it *asserts*: each such module 
+          +needs a check there, because the                              
+      186 +  failures are silent by nature. `jdk.security.auth` is the MP
+          +RIS one — without it dbus-java cannot                         
+      187 +  read the uid, and the packaged app reports "no MPRIS integra
+          +tion" exactly as a machine with no                            
+      188 +  session bus would.                                          
+      189  - **`--enable-native-access=ALL-UNNAMED`** is applied to run, 
+           test and the packaged app; Skiko,
+      190    the Windows credential store and JNA all use restricted meth
+           ods on JDK 25.
+      191  
+
+● Background command "Rebuild image and verify module present" completed (exit
+code 0)
+
+  Read 1 file (ctrl+o to expand)
+
+● jdk.security.auth is now in the image. The real test — does MPRIS actually
+  appear on the bus?
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● MPRIS is live. Now let me verify the actual properties a Cinnamon applet would
+  read.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Second real bug: Metadata fails to marshal. Let me pin down whether it's Get
+  specifically.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Diagnosis confirmed: GetAll is correct; only Get fails, because it strips the
+  Variant wrapper and with it the a{sv} signature. Let me fix it.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/MprisService.kt)
+  ⎿  Added 10 lines, removed 1 line
+      126           */
+      127          override fun OpenUri(uri: String) = Unit
+      128  
+      129 +        /**                                                   
+      130 +         * Returns the [Variant] itself, **not** `variant.valu
+          +e`.                                                           
+      131 +         *                                                    
+      132 +         * `Get` is declared to return `v`, and dbus-java re-w
+          +raps a bare value in an *unqualified*                         
+      133 +         * Variant — which throws for `Metadata`, whose `a{sv}
+          +` signature only exists because                               
+      134 +         * [playerProperties] attached it. Handing back the al
+          +ready-qualified Variant keeps the                             
+      135 +         * signature all the way to the wire. `GetAll` never h
+          +ad the problem: its return type is                            
+      136 +         * `a{sv}` and the Variants survive in the map.       
+      137 +         */                                                   
+      138          @Suppress("UNCHECKED_CAST")
+      139          override fun <A : Any?> Get(interfaceName: String, pro
+           pertyName: String): A =
+      131 -            (allProperties(interfaceName)[propertyName]?.value
+          -) as A                                                        
+      140 +            allProperties(interfaceName)[propertyName] as A   
+      141  
+      142          override fun <A : Any?> Set(interfaceName: String, pro
+           pertyName: String, value: A) = guard {
+      143              when (propertyName) {
+
+● Now rebuild and re-verify live, including the Get path that failed.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Update(docs/adr/0006-listening-preferences-and-desktop-integration.md)
+  ⎿  Added 6 lines
+      156  - **Absence is normal.** `createOrNull` catches `Throwable`, n
+           ot `Exception` — a missing transport
+      157    provider arrives as a `ServiceConfigurationError`. No sessio
+           n bus means no MPRIS and a fully
+      158    working player, with a diagnostic in `AppLog`.
+      159 +- **`Properties.Get` returns the `Variant`, not `variant.value
+          +`.** `Get` is declared to return `v`,                         
+      160 +  and dbus-java re-wraps a bare value in an *unqualified* Vari
+          +ant, which cannot marshal `Metadata`                          
+      161 +  — its `a{sv}` signature exists only because `playerPropertie
+          +s` attached it. Unwrapping made every                         
+      162 +  scalar property work and `Metadata` alone fail, which is why
+          + `GetAll` (typed `a{sv}`, Variants                            
+      163 +  intact) looked fine while a client that reads properties one
+          + at a time got an error instead of a                          
+      164 +  title. Verified against a real session bus with `busctl`; CI
+          + has no bus and cannot catch it.                              
+      165  
+      166  `mpris:artUrl` does name the private server's host to other pr
+           ocesses in the user's login session.
+      167  That is the cost of the desktop being able to draw artwork at 
+           all; the cover endpoint is
+
+  Searched for 1 pattern, read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● Background command "Full check plus distributable" completed (exit code 0)
+
+● Build passes. Now the decisive re-test: smoke test plus the live Get/Metadata
+  path that failed.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Background command "Wait and check build" completed (exit code 0)
+
+● Both bugs fixed and verified live. Let me also exercise the control methods a
+  media applet would call.
+  Ran 1 shell command (ctrl+o to expand)
+
+● All methods respond cleanly with correct signatures. Let me check the app log
+  for guard warnings, then stop it.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● MPRIS connected cleanly (no fallback message) and released the bus name on
+  exit. Let me commit this work.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Phase 6 is committed and verified. Before I push or open the PR, and before
+  moving to the next phase:
+
+● User answered Claude's questions:
+  ⎿  · Phase 6 is committed locally on `phase-6-playback-preferences`. How 
+     should I proceed with it? → Push and open the PR
+     · Which phase should I pick up next? → Phase 7 — offline downloads
+
+  Pushed to phase-6-playback-preferences, created PR #24 (ctrl+o to expand)
+
+● PR #24 opened. Now Phase 7 — let me read the issue.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Phase 7 is substantial. Let me get oriented in the existing code it has to
+  build on.
+
+  Read 5 files, ran 3 shell commands (ctrl+o to expand)
+
+● Now I have the full picture. Phase 7 is large, so I'll build it in layers
+  starting with the storage foundation everything else depends on.
+
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/AppDirectories.kt)
+  ⎿  Wrote 101 lines to
+     src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/AppDirectories.kt
+       1 package dk.perspektiva.ttsroad.desktop.data
+       2 
+       3 import java.io.File
+       5 /**
+       6  * Where this app is allowed to write, split by what the operati
+         ng system is entitled to do with it.
+       7  *
+       9  *
+      10  * - **Config** is small, hand-made state — the server, the wind
+         ow placement, the listening
+     … +129 lines (ctrl+o to expand)
+
+❯ pr24 has issuies All checks have failed                                       
+                                                                                
+  1 failing check                                                               
+  failing checks                                                                
+                                                                                
+      CI / Build, test and package (Ubuntu) (pull_request)                      
+      CI / Build, test and package (Ubuntu) (pull_request)Failing after 35s     
+
+● Let me check the PR #24 CI failure.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● gst-inspect-1.0: command not found — the verification step needs a package the
+  install step doesn't provide. Let me look.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Phase 6 only added volume to the list. The command not found is pre-existing —
+  gst-inspect-1.0 ships in gstreamer1.0-tools, which the workflow never
+  installs. Let me confirm against master's history.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● CI has been red since Phase 5 — master included. Let me confirm master fails
+  the same way.
+
+  Ran 2 shell commands (ctrl+o to expand)
+● Master fails identically — this is a pre-existing Phase 5 bug that has kept
+  clean check from ever running in CI. Let me determine the right package set.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Mapping confirmed: scaletempo/mpg123audiodec come from plugins-good, fakesink
+  from core — all installed. Only the gst-inspect-1.0 binary itself is missing;
+  it ships in gstreamer1.0-tools. Let me fix that on the Phase 6 branch.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Update(.github/workflows/ci.yml)
+  ⎿  Added 5 lines
+      59        # plugins the pipeline actually names means GstPlaybackEn
+          gineIntegrationTest runs here
+      60        # instead of skipping, so the real engine has CI coverage
+           rather than none. These are also
+      61        # exactly the packages the .deb will declare in phase 9 (
+          #3).
+      62 +      #                                                        
+      63 +      # gstreamer1.0-tools is what provides `gst-inspect-1.0` i
+         +tself. Without it the verification                             
+      64 +      # step below fails with "command not found" on the first 
+         +element, which reads exactly like a                            
+      65 +      # missing plugin and takes the whole job down before any 
+         +test runs.                                                     
+      66        - name: Install Xvfb and GStreamer
+      67          run: |
+      68            sudo apt-get update
+      69            sudo apt-get install -y \
+      70              xvfb \
+      71 +            gstreamer1.0-tools \                               
+      72              gstreamer1.0-plugins-base \
+      73              gstreamer1.0-plugins-good
+      74  
+
+  Pushed to phase-6-playback-preferences (ctrl+o to expand)
+
+● Pushed. Let me watch the CI run — this is the first time clean check will
+  actually execute in CI.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+❯ remeber to check codex reviews on the pr                                      
+
+● CI is green — first successful run since Phase 5. Now let me check the Codex
+  review on the PR.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The suggestions are inline review comments. Let me fetch those.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Three legitimate P2 findings. Let me verify each against the code and fix
+  them. First, the sleep-timer-armed-while-paused bug.
+
+  Read 1 file (ctrl+o to expand)
+
+● Confirmed — the tick loop runs regardless of pause state, so a timer armed
+  while paused counts down. Fixing:
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Added 6 lines
+      243  
+      244      override fun setSleepTimer(mode: SleepTimerMode) {
+      245          sleepTimer.arm(mode)
+      246 +        // Arming while already paused has to start out frozen
+          +. The tick loop keeps running through                         
+      247 +        // a pause — it is what notices the engine's events — 
+          +so a timer armed at that moment would                         
+      248 +        // count down against silence and expire without a sec
+          +ond of audio having played. The                               
+      249 +        // freeze-on-pause path cannot cover this: it ran when
+          + the user pressed pause, back when                            
+      250 +        // there was no deadline to freeze.                   
+      251 +        if (!_state.value.isPlaying) sleepTimer.onPlaybackPaus
+          +ed()                                                          
+      252      }
+      253  
+      254      override fun extendSleepTimer() {
+
+● Now the two MPRIS findings — CanSeek never re-announced, and Volume never
+  announced at all.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/MprisService.kt)
+  ⎿  Added 7 lines, removed 1 line
+      259              if (before.hasMedia != after.hasMedia) {
+      260                  all["CanPlay"]?.let { put("CanPlay", it) }
+      261                  all["CanPause"]?.let { put("CanPause", it) }
+      262 -                all["CanSeek"]?.let { put("CanSeek", it) }    
+      262              }
+      263 +            // Compared on its own rather than folded into the
+          + hasMedia branch above: a chapter                             
+      264 +            // whose API metadata carries no duration starts a
+          +s CanSeek=false and flips to true the                         
+      265 +            // moment the engine reports one, with hasMedia un
+          +changed throughout. Clients cache                             
+      266 +            // these flags, so missing that edge leaves seekin
+          +g greyed out for the whole chapter.                           
+      267 +            if (canSeek(before) != canSeek(after)) all["CanSee
+          +k"]?.let { put("CanSeek", it) }                               
+      268          }
+      269      }
+      270  
+      271 +    private fun canSeek(state: PlayerUiState): Boolean = state
+          +.hasMedia && state.durationMs > 0                             
+      272 +                                                              
+      273      /**
+      274       * Whether the position moved by more than playback alone 
+           explains.
+      275       *
+
+● Now Volume — the publisher only watches controller state, but volume lives in
+  preferences.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/MprisService.kt)
+  ⎿  Added 24 lines, removed 8 lines
+      229       */
+      230      private fun startPublishing(scope: CoroutineScope) {
+      231          publisher = scope.launch {
+      232 -            var previous: PlayerUiState? = null               
+      233 -            controller.state.collect { state ->               
+      234 -                val last = previous                           
+      235 -                previous = state                              
+      236 -                if (last == null) return@collect              
+      232 +            launch {                                          
+      233 +                var previous: PlayerUiState? = null           
+      234 +                controller.state.collect { state ->           
+      235 +                    val last = previous                       
+      236 +                    previous = state                          
+      237 +                    if (last == null) return@collect          
+      238  
+      238 -                val changed = changedProperties(last, state)  
+      239 -                if (changed.isNotEmpty()) emitPropertiesChange
+          -d(changed)                                                    
+      240 -                if (isDiscontinuity(last, state)) emitSeeked(M
+          -pris.positionMicros(state))                                   
+      239 +                    val changed = changedProperties(last, stat
+          +e)                                                            
+      240 +                    if (changed.isNotEmpty()) emitPropertiesCh
+          +anged(changed)                                                
+      241 +                    if (isDiscontinuity(last, state)) emitSeek
+          +ed(Mpris.positionMicros(state))                               
+      242 +                }                                             
+      243              }
+      244 +                                                              
+      245 +            // Volume is the one published property that does 
+          +not live in PlayerUiState, so the                             
+      246 +            // state collector above can never see it change. 
+          +Without this a shell that asks for a                          
+      247 +            // continuous 1.5 keeps displaying 1.5 while playb
+          +ack actually uses the snapped 1.6 —                           
+      248 +            // and a boost changed in Settings never reaches t
+          +he panel at all.                                              
+      249 +            launch {                                          
+      250 +                var previous: VolumeBoost? = null             
+      251 +                preferences.preferences.collect { current ->  
+      252 +                    val last = previous                       
+      253 +                    previous = current.volumeBoost            
+      254 +                    if (last == null || last == current.volume
+          +Boost) return@collect                                         
+      255 +                    emitPropertiesChanged(mapOf("Volume" to Va
+          +riant(current.volumeBoost.gain)))                             
+      256 +                }                                             
+      257 +            }                                                 
+      258          }
+      259      }
+      260  
+
+● Let me check the test setup, and make the MPRIS change-detection testable by
+  moving it into the pure layer the ADR designates.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now let me move the change-detection into the pure, testable layer per the
+  ADR's split.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/MprisState.kt)
+  ⎿  Added 30 lines
+      100      fun positionMicros(state: PlayerUiState): Long =
+      101          state.positionMs.coerceAtLeast(0L) * MicrosPerMilli
+      102  
+      103 +    /** `CanSeek`: seeking needs a known duration, not merely 
+          +a loaded chapter. */                                          
+      104 +    fun canSeek(state: PlayerUiState): Boolean = state.hasMedi
+          +a && state.durationMs > 0                                     
+      105 +                                                              
+      106      /**
+      107 +     * Which player properties a state transition should annou
+          +nce.                                                          
+      108 +     *                                                        
+      109 +     * Pure, and here rather than in [MprisService], because *
+          +which* transitions are worth a signal                         
+      110 +     * is the interesting decision and the plumbing needs a se
+          +ssion bus to instantiate. The two easy                        
+      111 +     * mistakes it exists to pin down:                        
+      112 +     *                                                        
+      113 +     * - `CanSeek` is not a function of `hasMedia`. A chapter 
+          +whose API metadata carries no duration                        
+      114 +     *   starts unseekable and becomes seekable when the engin
+          +e reports one, with `hasMedia`                                
+      115 +     *   unchanged the whole time. Clients cache these flags, 
+          +so missing that edge leaves seeking                           
+      116 +     *   greyed out for the entire chapter.                   
+      117 +     * - `Position` is never here. The spec excludes it from `
+          +PropertiesChanged`; a discontinuity is                        
+      118 +     *   a `Seeked` signal instead.                           
+      119 +     */                                                       
+      120 +    fun changedPropertyNames(before: PlayerUiState, after: Pla
+          +yerUiState): Set<String> = buildSet {                         
+      121 +        if (statusOf(before) != statusOf(after)) add("Playback
+          +Status")                                                      
+      122 +        if (trackOf(before) != trackOf(after)) add("Metadata")
+      123 +        if (before.speed != after.speed) add("Rate")          
+      124 +        if (before.hasNext != after.hasNext) add("CanGoNext") 
+      125 +        if (before.hasPrevious != after.hasPrevious) add("CanG
+          +oPrevious")                                                   
+      126 +        if (before.hasMedia != after.hasMedia) {              
+      127 +            add("CanPlay")                                    
+      128 +            add("CanPause")                                   
+      129 +        }                                                     
+      130 +        if (canSeek(before) != canSeek(after)) add("CanSeek") 
+      131 +    }                                                         
+      132 +                                                              
+      133 +    /**                                                       
+      134       * Whether a seek request is worth honouring.
+      135       *
+      136       * MPRIS clients send absolute positions for a track id th
+           ey last saw, and a stale id means the
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/MprisService.kt)
+  ⎿  Added 4 lines, removed 24 lines
+      258          }
+      259      }
+      260  
+      261 +    /** Names from the pure mapping, paired with the current w
+          +ire values. */                                                
+      262      private fun changedProperties(before: PlayerUiState, after
+           : PlayerUiState): Map<String, Variant<*>> {
+      263 +        val names = Mpris.changedPropertyNames(before, after) 
+      264 +        if (names.isEmpty()) return emptyMap()                
+      265          val all = playerProperties()
+      263 -        return buildMap {                                     
+      264 -            if (Mpris.statusOf(before) != Mpris.statusOf(after
+          -)) {                                                          
+      265 -                all["PlaybackStatus"]?.let { put("PlaybackStat
+          -us", it) }                                                    
+      266 -            }                                                 
+      267 -            if (Mpris.trackOf(before) != Mpris.trackOf(after))
+          - {                                                            
+      268 -                all["Metadata"]?.let { put("Metadata", it) }  
+      269 -            }                                                 
+      270 -            if (before.speed != after.speed) all["Rate"]?.let 
+          -{ put("Rate", it) }                                           
+      271 -            if (before.hasNext != after.hasNext) all["CanGoNex
+          -t"]?.let { put("CanGoNext", it) }                             
+      272 -            if (before.hasPrevious != after.hasPrevious) {    
+      273 -                all["CanGoPrevious"]?.let { put("CanGoPrevious
+          -", it) }                                                      
+      274 -            }                                                 
+      275 -            if (before.hasMedia != after.hasMedia) {          
+      276 -                all["CanPlay"]?.let { put("CanPlay", it) }    
+      277 -                all["CanPause"]?.let { put("CanPause", it) }  
+      278 -            }                                                 
+      279 -            // Compared on its own rather than folded into the
+          - hasMedia branch above: a chapter                             
+      280 -            // whose API metadata carries no duration starts a
+          -s CanSeek=false and flips to true the                         
+      281 -            // moment the engine reports one, with hasMedia un
+          -changed throughout. Clients cache                             
+      282 -            // these flags, so missing that edge leaves seekin
+          -g greyed out for the whole chapter.                           
+      283 -            if (canSeek(before) != canSeek(after)) all["CanSee
+          -k"]?.let { put("CanSeek", it) }                               
+      284 -        }                                                     
+      266 +        return names.mapNotNull { name -> all[name]?.let { nam
+          +e to it } }.toMap()                                           
+      267      }
+      268  
+      287 -    private fun canSeek(state: PlayerUiState): Boolean = state
+          -.hasMedia && state.durationMs > 0                             
+      288 -                                                              
+      269      /**
+      270       * Whether the position moved by more than playback alone 
+           explains.
+      271       *
+
+● Now tests for all three fixes. Let me check the existing test conventions
+  first.
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/player/MprisStateTest.kt
+        )
+  ⎿  Added 47 lines
+      157      fun `artwork is published so the desktop can draw a cover`
+           () {
+      158          assertEquals("https://server.example/covers/3.jpg", Mp
+           ris.trackOf(playing())?.artUrl)
+      159      }
+      160 +                                                              
+      161 +    // --- Which transitions are announced -------------------
+          +-------------------------------------                         
+      162 +                                                              
+      163 +    @Test                                                     
+      164 +    fun `a chapter that learns its duration announces CanSeek`
+          +() {                                                          
+      165 +        // The API gave no audio_duration, so the chapter star
+          +ts unseekable; the engine reports a                           
+      166 +        // duration a moment later. hasMedia is true throughou
+          +t, which is exactly why this edge was                         
+      167 +        // missed: a client that caches the flag would leave s
+          +eeking greyed out for the whole                               
+      168 +        // chapter.                                           
+      169 +        val unknown = playing(durationMs = 0)                 
+      170 +        val known = playing(durationMs = 600_000)             
+      171 +                                                              
+      172 +        assertFalse(Mpris.canSeek(unknown))                   
+      173 +        assertTrue(Mpris.canSeek(known))                      
+      174 +        assertTrue("CanSeek" in Mpris.changedPropertyNames(unk
+          +nown, known))                                                 
+      175 +    }                                                         
+      176 +                                                              
+      177 +    @Test                                                     
+      178 +    fun `a position tick alone announces nothing`() {         
+      179 +        // Position is excluded from PropertiesChanged by the 
+          +spec, so the 250 ms tick must be                              
+      180 +        // silent on the bus or the player becomes a signal st
+          +orm.                                                          
+      181 +        val before = playing(positionMs = 61_000)             
+      182 +        val after = playing(positionMs = 61_250)              
+      183 +                                                              
+      184 +        assertEquals(emptySet(), Mpris.changedPropertyNames(be
+          +fore, after))                                                 
+      185 +    }                                                         
+      186 +                                                              
+      187 +    @Test                                                     
+      188 +    fun `pausing announces the status and nothing else`() {   
+      189 +        val changed = Mpris.changedPropertyNames(playing(), pl
+          +aying(isPlaying = false))                                     
+      190 +        assertEquals(setOf("PlaybackStatus"), changed)        
+      191 +    }                                                         
+      192 +                                                              
+      193 +    @Test                                                     
+      194 +    fun `loading a chapter announces the transport flags and t
+          +he metadata`() {                                              
+      195 +        val changed = Mpris.changedPropertyNames(PlayerUiState
+          +(), playing())                                                
+      196 +        assertTrue(changed.containsAll(setOf("PlaybackStatus",
+          + "Metadata", "CanPlay", "CanPause", "CanSeek")))              
+      197 +    }                                                         
+      198 +                                                              
+      199 +    @Test                                                     
+      200 +    fun `changing chapter announces new metadata`() {         
+      201 +        val changed = Mpris.changedPropertyNames(             
+      202 +            playing(title = "Chapter 12", chapterId = 12),    
+      203 +            playing(title = "Chapter 13", chapterId = 13),    
+      204 +        )                                                     
+      205 +        assertTrue("Metadata" in changed)                     
+      206 +    }                                                         
+      207  }
+
+● Now a test for the sleep-timer-armed-while-paused bug.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now I'll add the regression test for arming while already paused, mirroring
+  that test's shape.
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/player/PlaybackPreferenc
+        esApplyTest.kt)
+  ⎿  Added 30 lines
+      268      }
+      269  
+      270      @Test
+      271 +    fun `a timer armed while already paused does not count dow
+          +n`() = runBlocking {                                          
+      272 +        val engine = FakePlaybackEngine()                     
+      273 +        val clock = FakeClock()                               
+      274 +        val timer = SleepTimer(clock)                         
+      275 +        val playback = controller(engine, sleepTimer = timer, 
+          +clock = clock)                                                
+      276 +                                                              
+      277 +        playback.playQueue(listOf(chapter(1)), startChapterId 
+          += 1, fiction = null)                                          
+      278 +        playback.await("playback to start") { it.hasMedia && i
+          +t.isPlaying }                                                 
+      279 +                                                              
+      280 +        // Pause *first*, then decide to set a timer. The free
+          +ze-on-pause path already ran, back                            
+      281 +        // when there was no deadline to freeze, and the tick 
+          +loop keeps running through a pause —                          
+      282 +        // so without arming into a frozen state this counts d
+          +own against silence.                                          
+      283 +        playback.togglePlayPause()                            
+      284 +        playback.await("the pause to land") { !it.isPlaying } 
+      285 +        playback.setSleepTimer(SleepTimerMode.Duration(30))   
+      286 +                                                              
+      287 +        clock.nowMs += 60 * 60_000L                           
+      288 +        delay(100)                                            
+      289 +        assertTrue(playback.state.value.sleepTimer.isArmed, "t
+          +he timer expired while paused")                               
+      290 +        assertEquals(30 * 60_000L, playback.state.value.sleepT
+          +imer.remainingMs)                                             
+      291 +                                                              
+      292 +        // And it starts running only once audio actually resu
+          +mes.                                                          
+      293 +        playback.togglePlayPause()                            
+      294 +        playback.await("playback to resume") { it.isPlaying } 
+      295 +        clock.nowMs += 10 * 60_000L                           
+      296 +        delay(100)                                            
+      297 +        assertEquals(20 * 60_000L, playback.state.value.sleepT
+          +imer.remainingMs)                                             
+      298 +    }                                                         
+      299 +                                                              
+      300 +    @Test                                                     
+      301      fun `stopping disarms the timer so the next chapter is not
+            silenced`() = runBlocking {
+      302          val engine = FakePlaybackEngine()
+      303          val playback = controller(engine)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Let me verify these tests actually catch the bugs by temporarily reverting one
+  fix.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The test genuinely catches the bug. Fix restored — now the full gate before
+  pushing.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Green. Let me also re-verify MPRIS live, since I changed the
+  property-publishing code.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● MPRIS still healthy after the refactor. Committing and pushing.
+
+  Pushed to phase-6-playback-preferences, commented on PR #24, ran 1 shell command (ctrl+o to expand)
+
+● CI green. Let me check whether Codex re-reviewed the new commit.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Only the original three findings, all addressed. Let me trigger a re-review to
+  confirm.
+
+  Commented on PR #24 (ctrl+o to expand)
+
+● While Codex re-reviews, let me get back to Phase 7.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The git add -A on the Phase 6 branch swept in my untracked Phase 7 file. Let
+  me check.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Confirmed — AppDirectories.kt is incomplete Phase 7 groundwork that doesn't
+  belong in the Phase 6 PR (it's unused there, which is why the build stayed
+  green). Let me correct that.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Force-push is blocked by policy — that's fine, I'll do it as an ordinary
+  follow-up commit instead.
+
+  Pushed to phase-6-playback-preferences, ran 1 shell command (ctrl+o to expand)
+● Remote is correct. Now back to Phase 7 — let me sync it and restore the file
+  where it belongs.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Clean. Now let me build out Phase 7's foundation properly — wiring
+  AppDirectories into the existing config path, plus the cache-key identity
+  layer.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/SessionStore.kt)
+  ⎿  Added 5 lines, removed 19 lines
+      267          /**
+      268           * Per-user config directory, per platform convention.
+      269           *
+      270 -         * [osName], [userHome] and [env] are parameters so th
+          -e path rules — in particular the XDG                          
+      271 -         * Base Directory spec on Linux, where honouring `$XDG
+          -_CONFIG_HOME` is the difference                               
+      272 -         * between respecting a user's layout and ignoring it 
+          -— can be tested without a Linux box.                          
+      270 +         * Delegates to [AppDirectories], which owns the platf
+          +orm rules for all three roots (config,                        
+      271 +         * data, cache) so the downloads added in phase 7 cann
+          +ot drift from where the session file                          
+      272 +         * lives. Kept here as a named entry point because sev
+          +eral stores already resolve their file                        
+      273 +         * through it.                                        
+      274           */
+      275          fun configDir(
+      276              osName: String = System.getProperty("os.name").orE
+           mpty(),
+      277              userHome: String = System.getProperty("user.home")
+           .orEmpty(),
+      278              env: (String) -> String? = System::getenv,
+      278 -        ): File {                                             
+      279 -            val os = osName.lowercase()                       
+      280 -            val base = when {                                 
+      281 -                os.contains("win") ->                         
+      282 -                    env("APPDATA")?.takeIf { it.isNotBlank() }
+          -?.let { File(it) }                                            
+      283 -                        ?: File(userHome, "AppData/Roaming")  
+      284 -                                                              
+      285 -                os.contains("mac") || os.contains("darwin") ->
+          - File(userHome, "Library/Application Support")                
+      286 -                                                              
+      287 -                // XDG Base Directory spec: config goes in $XD
+          -G_CONFIG_HOME, and the spec says a                            
+      288 -                // relative value must be ignored rather than 
+          -resolved against the cwd.                                     
+      289 -                else -> env("XDG_CONFIG_HOME")?.takeIf { it.is
+          -NotBlank() && it.startsWith("/") }?.let { File(it) }          
+      290 -                    ?: File(userHome, ".config")              
+      291 -            }                                                 
+      292 -            return File(base, "TTSRoad")                      
+      293 -        }                                                     
+      279 +        ): File = AppDirectories.configDir(osName, userHome, e
+          +nv)                                                           
+      280      }
+      281  }
+
+● Now the identity/keying layer — the part the issue is most specific about.
+
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/StorageIdentity.kt)
+  ⎿  Wrote 147 lines to
+     src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/StorageIdentity.kt
+       1 package dk.perspektiva.ttsroad.desktop.data
+       2 
+       4 import java.util.Locale
+       5 
+       6 /**
+          they live in.
+       8  *
+       9  * The issue's rule is that content is namespaced by *stable ser
+      10  * and *chapter id* — never by fiction name, raw connect URL, or
+          a filename the server chose. Each
+     … +193 lines (ctrl+o to expand)
+
+● Now the tests for this foundation, covering the issue's specific acceptance
+  criteria around keys and path safety.
+
+● Write(src/test/kotlin/dk/perspektiva/ttsroad/desktop/data/StorageIdentityTest.
+       kt)
+  ⎿  Wrote 188 lines to src/test/kotlin/dk/perspektiva/ttsroad/desktop/data
+     /StorageIdentityTest.kt
+       1 package dk.perspektiva.ttsroad.desktop.data
+       2 
+       3 import kotlin.test.assertEquals
+       4 import kotlin.test.assertFalse
+       5 import kotlin.test.assertNotEquals
+       6 import kotlin.test.assertTrue
+       7 import org.junit.jupiter.api.Test
+       8 
+       9 /**
+      10  * Cache keys and the path safety that hangs off them.
+     … +227 lines (ctrl+o to expand)
+
+● Write(src/test/kotlin/dk/perspektiva/ttsroad/desktop/data/AppDirectoriesTest.k
+       t)
+  ⎿  Wrote 109 lines to src/test/kotlin/dk/perspektiva/ttsroad/desktop/data
+     /AppDirectoriesTest.kt
+       1 package dk.perspektiva.ttsroad.desktop.data
+       2 
+       3 import kotlin.test.assertEquals
+       4 import kotlin.test.assertNotEquals
+       5 import kotlin.test.assertTrue
+       6 import org.junit.jupiter.api.Test
+       7 
+       8 /**
+       9  * The three storage roots, asserted from any platform.
+      10  *
+     … +132 lines (ctrl+o to expand)
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● That line is garbled — let me fix it.
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/data/StorageIdentityTest
+        .kt)
+  ⎿  Added 4 lines, removed 3 lines
+      175      @Test
+      176      fun `a hostile content hash cannot introduce a path separa
+           tor`() {
+      177          val name = chapterFileName(512, "../../etc/passwd")
+      178 -        assertFalse(name.contains('/'))                       
+      179 -        assertFalse(name.contains('.', startIndex = 0).let { n
+          -ame.contains("..") })                                         
+      180 -        assertTrue(name.startsWith("512-"))                   
+      178 +        assertFalse(name.contains('/'), name)                 
+      179 +        assertFalse(name.contains(".."), name)                
+      180 +        assertFalse(name.contains('\\'), name)                
+      181 +        assertTrue(name.startsWith("512-"), name)             
+      182      }
+      183  
+      184      @Test
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● 27 tests green. Let me commit this checkpoint before building the next layer.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me check on the Codex re-review of PR #24 before continuing.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Codex hasn't re-posted yet. Continuing with Phase 7's next layer — the
+  download index.
+
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadModels.k
+       t)
+  ⎿  Wrote 105 lines to src/main/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/DownloadModels.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       4  * What has happened to one chapter's audio on this disk.
+       5  *
+       6  * The states are the ones the issue names, and the distinction 
+       7  * [Downloading] and [Downloaded]: only the latter may be report
+         ed as available offline, and a
+       8  * chapter reaches it only after the bytes have been validated. 
+       9  */
+      10 enum class DownloadState {
+     … +129 lines (ctrl+o to expand)
+
+● Now the transactional, versioned index itself.
+
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadIndex.kt
+       )
+  ⎿  Wrote 310 lines to src/main/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/DownloadIndex.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import com.squareup.moshi.Moshi
+       4 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactor
+         y
+       6 import dk.perspektiva.ttsroad.desktop.security.SecureFiles
+       7 import java.io.File
+       8 import kotlinx.coroutines.flow.MutableStateFlow
+       9 import kotlinx.coroutines.flow.StateFlow
+      10 import kotlinx.coroutines.flow.asStateFlow
+     … +376 lines (ctrl+o to expand)
+
+● Now tests for the index — crash recovery, reconciliation, path safety, and
+  "next 10".
+
+● Write(src/test/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadIndexTes
+       t.kt)
+  ⎿  Wrote 228 lines to src/test/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/DownloadIndexTest.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import kotlin.test.assertEquals
+       4 import kotlin.test.assertFalse
+       5 import kotlin.test.assertNull
+       6 import kotlin.test.assertTrue
+       7 import org.junit.jupiter.api.Test
+       8 
+       9 /**
+      10  * The download index's rules.
+     … +257 lines (ctrl+o to expand)
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● The code looks right. Let me diagnose directly.
+
+  Ran 1 shell command (ctrl+o to expand)
+● Found it — the space literal was written as a NUL byte ('\x00'), so the check
+  never matched. Let me replace that fragile character test with an explicit
+  whitelist, which is stronger anyway.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadIndex.k
+        t)
+  ⎿  Added 10 lines, removed 8 lines
+      294           *
+      295           * The index is a plain file that an attacker with wri
+           te access — or a corrupted disk — can
+      296           * edit, and every name in it is later resolved agains
+           t the download root. A traversal here
+      297 -         * would let `../../../.ssh/id_rsa` be "deleted as a d
+          -ownload". Names this app generates are                        
+      298 -         * `<id>.mp3` or `<id>-<hash>.mp3`, so anything with a
+          - separator or a dot-dot is rejected                           
+      299 -         * outright rather than sanitised into something adjac
+          -ent.                                                          
+      297 +         * would let `../../../.ssh/id_rsa` be "deleted as a d
+          +ownload".                                                     
+      298 +         *                                                    
+      299 +         * A **whitelist**, not a list of forbidden characters
+          +. Every name this app generates is                            
+      300 +         * `<id>.mp3`, `<id>-<hash>.mp3`, or one of those plus
+          + `.part`, so the safe set is known                            
+      301 +         * exactly — and blacklisting is how these checks rot,
+          + one separator, encoding or reserved                          
+      302 +         * name at a time. The dot-dot and leading-dot rules s
+          +tay on top because `..` is spelled                            
+      303 +         * entirely with permitted characters.                
+      304           */
+      305 +        private val SafeName = Regex("[A-Za-z0-9][A-Za-z0-9._-
+          +]*")                                                          
+      306 +                                                              
+      307          fun isSafeName(name: String): Boolean =
+      302 -            name.isNotBlank() &&                              
+      303 -                !name.contains('/') &&                        
+      304 -                !name.contains('\\') &&                       
+      308 +            SafeName.matches(name) &&                         
+      309                  !name.contains("..") &&
+      306 -                !name.startsWith('.') &&                      
+      307 -                name.none { it == '' } &&                     
+      310                  File(name).name == name
+      311      }
+      312  }
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● That corruption could be lurking elsewhere — let me scan all files I've
+  written this session.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The wrapper jar is binary (expected), but StorageIdentityTest.kt has one — and
+  that's already committed. Let me find it.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now let me run the full gate on the Phase 7 work so far.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Let me check the Codex re-review on PR #24 now.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Two more P2 findings. Let me verify the first against the actual loop
+  structure.
+
+  Read 1 file (ctrl+o to expand)
+
+● Confirmed — SleptOff ends the job, so the tick loop that polls position and
+  drains engine events is gone. Let me see the tick loop to fix it at the right
+  level.
+
+  Read 1 file (ctrl+o to expand)
+
+● Now I'll fix it at the tick loop, so the monitoring loop survives the sleep
+  pause.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Added 13 lines, removed 1 line
+      458              // The timer is driven by this tick rather than by
+            a scheduler of its own, which is
+      459              // what makes the fade and the expiry deterministi
+           c in tests: no wall-clock race, and
+      460              // the fade gain is recomputed on exactly the cade
+           nce the position is.
+      461 -            if (sleepTimer.tick() == SleepTimerEvent.Expired) 
+          -return AttemptResult.SleptOff                                 
+      461 +            //                                                
+      462 +            // Expiry pauses *inside* the loop rather than ret
+          +urning out of it. Returning would end                         
+      463 +            // the only job that polls the position and drains
+          + engine events, so the morning's                              
+      464 +            // "resume" would restart the audio into a dead co
+          +ntroller: no progress updates, and an                         
+      465 +            // end-of-stream that never advances the queue. A 
+          +sleep pause has to look exactly like                          
+      466 +            // a manual one, and a manual one keeps this loop 
+          +running.                                                      
+      467 +            if (sleepTimer.tick() == SleepTimerEvent.Expired) 
+          +{                                                             
+      468 +                engine.pause()                                
+      469 +                _state.update { it.copy(isPlaying = false) }  
+      470 +                lastSavedMs = lastKnownPositionMs             
+      471 +                saveProgress(chapter, lastKnownPositionMs, isP
+          +layed = false)                                                
+      472 +                recordHistory()                               
+      473 +            }                                                 
+      474  
+      475              val position = engine.positionMs()
+      476              if (position > 0) lastKnownPositionMs = position
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Removed 10 lines
+      369                  // The job was cancelled: a new chapter, a sto
+           p, or shutdown superseded this.
+      370                  is AttemptResult.Stopped -> return ChapterOutc
+           ome.Stopped
+      371  
+      372 -                is AttemptResult.SleptOff -> {                
+      373 -                    // A pause, not a stop: the queue and the 
+          -position stay exactly where they are                          
+      374 -                    // so the morning's "resume" is one keypre
+          -ss, not a search for the chapter.                             
+      375 -                    engine.pause()                            
+      376 -                    _state.update { it.copy(isPlaying = false)
+          - }                                                            
+      377 -                    saveProgressNow()                         
+      378 -                    recordHistory()                           
+      379 -                    return ChapterOutcome.Stopped             
+      380 -                }                                             
+      381 -                                                              
+      372                  is AttemptResult.SessionExpired -> {
+      373                      _state.update { it.copy(isPlaying = false,
+            error = result.failure.message, canRetry = false) }
+      374                      // Same door as a 401 on an API call: drop
+            the token and return to login rather
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Removed 2 lines
+      402          data object Completed : AttemptResult
+      403          data object Stopped : AttemptResult
+      404  
+      405 -        /** The sleep timer ran out mid-chapter. Distinct from
+          - [Stopped] so it can pause, not tear down. */                 
+      406 -        data object SleptOff : AttemptResult                  
+      405          data class Transient(val message: String) : AttemptRes
+           ult
+      406          data class Fatal(val message: String) : AttemptResult
+      407          data class SessionExpired(val failure: PlaybackFailure
+           .SessionExpired) : AttemptResult
+
+● Now the media-key semantics finding. Let me check how MPRIS already handles
+  idempotent play/pause and mirror it.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/nav/Shortcuts.kt)
+  ⎿  Added 13 lines, removed 1 line
+      21      /** Escape — closes the top dialog or sheet first, and only
+           navigates if there was none. */
+      22      Dismiss,
+      23  
+      24 -    /** Space. */                                              
+      24 +    /** Space, and the transport row's combined play/pause key.
+         + */                                                            
+      25      PlayPause,
+      26  
+      27 +    /**                                                        
+      28 +     * The dedicated `MediaPlay` key, which is a request to *pl
+         +ay* — not to toggle.                                           
+      29 +     *                                                         
+      30 +     * Idempotent on purpose. A keyboard that sends distinct Pl
+         +ay and Pause keys means them                                   
+      31 +     * literally, so mapping both onto a toggle makes the Play 
+         +key pause audio that is already                                
+      32 +     * playing. The MPRIS `Play` and `Pause` methods already ha
+         +ve exactly this shape.                                         
+      33 +     */                                                        
+      34 +    Play,                                                      
+      35 +                                                               
+      36 +    /** The dedicated `MediaPause` key. Idempotent; see [Play].
+         + */                                                            
+      37 +    Pause,                                                     
+      38 +                                                               
+      39      /** Left — back by the configured skip interval. */
+      40      SeekBackward,
+      41  
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/nav/Shortcuts.kt)
+  ⎿  Added 3 lines
+      73      val firesWhileTyping: Boolean
+      74          get() = when (this) {
+      75              Back, Refresh, Dismiss, OpenLibrary, OpenSettings, 
+          ShowShortcuts -> true
+      76 +            // The transport keys are not text-editing keys, so
+         + a focused search box has no claim                             
+      77 +            // on them — a media key must work wherever the car
+         +et happens to be.                                              
+      78 +            Play, Pause -> true                                
+      79              PlayPause, SeekBackward, SeekForward, PreviousChapt
+          er, NextChapter -> false
+      80          }
+      81  }
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/nav/Shortcuts.kt)
+  ⎿  Added 5 lines, removed 2 lines
+      135  
+      136          // The keys a keyboard's transport row sends when the 
+           app itself has focus. With no focus
+      137          // they go to the desktop, which routes them over MPRI
+           S instead — same actions, other door.
+      138 -        key == Key.MediaPlayPause || key == Key.MediaPlay || k
+          -ey == Key.MediaPause ->                                       
+      139 -            AppShortcut.PlayPause                             
+      138 +        // The dedicated Play and Pause keys stay distinct fro
+          +m the combined one: they are requests                         
+      139 +        // for a *state*, and toggling on them makes Play paus
+          +e audio that is already playing.                              
+      140 +        key == Key.MediaPlayPause -> AppShortcut.PlayPause    
+      141 +        key == Key.MediaPlay -> AppShortcut.Play              
+      142 +        key == Key.MediaPause -> AppShortcut.Pause            
+      143          key == Key.MediaNext -> AppShortcut.NextChapter
+      144          key == Key.MediaPrevious -> AppShortcut.PreviousChapte
+           r
+      145  
+
+● Now wire the two new shortcuts in App.kt with idempotent semantics.
+
+  Read 1 file (ctrl+o to expand)
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/App.kt)
+  ⎿  Added 8 lines
+      169              AppShortcut.Dismiss -> dismissOrGoBack()
+      170  
+      171              AppShortcut.PlayPause -> whenPlaying(playback::tog
+           glePlayPause)
+      172 +                                                              
+      173 +            // Idempotent, unlike the toggle above: these arri
+          +ve from a keyboard that has separate                          
+      174 +            // Play and Pause keys and means them literally. A
+          +lready playing and Play pressed is a                          
+      175 +            // no-op that still counts as handled — the key wa
+          +s for this app, and letting it fall                           
+      176 +            // through would hand a transport key to whatever 
+          +button has focus.                                             
+      177 +            AppShortcut.Play -> whenPlaying { if (!playerState
+          +.isPlaying) playback.togglePlayPause() }                      
+      178 +            AppShortcut.Pause -> whenPlaying { if (playerState
+          +.isPlaying) playback.togglePlayPause() }                      
+      179 +                                                              
+      180              AppShortcut.SeekBackward -> whenPlaying(playback::
+           skipBackward)
+      181              AppShortcut.SeekForward -> whenPlaying(playback::s
+           kipForward)
+      182              AppShortcut.PreviousChapter -> whenPlaying(playbac
+           k::skipToPreviousChapter)
+
+● Now tests for both fixes.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/nav/ShortcutsTest.kt)
+  ⎿  Added 18 lines
+      105          assertEquals(AppShortcut.PreviousChapter, shortcutFor(
+           Key.MediaPrevious, KeyEventType.KeyDown))
+      106      }
+      107  
+      108 +    @Test                                                     
+      109 +    fun `dedicated play and pause keys are not the toggle`() {
+      110 +        // A keyboard with separate Play and Pause keys means 
+          +them literally. Mapping both onto the                         
+      111 +        // toggle makes the Play key pause audio that is alrea
+          +dy playing — the exact opposite of                            
+      112 +        // what was pressed.                                  
+      113 +        assertEquals(AppShortcut.Play, shortcutFor(Key.MediaPl
+          +ay, KeyEventType.KeyDown))                                    
+      114 +        assertEquals(AppShortcut.Pause, shortcutFor(Key.MediaP
+          +ause, KeyEventType.KeyDown))                                  
+      115 +        assertNotEquals(AppShortcut.PlayPause, shortcutFor(Key
+          +.MediaPlay, KeyEventType.KeyDown))                            
+      116 +    }                                                         
+      117 +                                                              
+      118 +    @Test                                                     
+      119 +    fun `media keys still fire while a text field has focus`()
+          + {                                                            
+      120 +        // A transport key is not a text-editing key, so the s
+          +earch box has no claim on it.                                 
+      121 +        for (key in listOf(Key.MediaPlay, Key.MediaPause)) {  
+      122 +            assertNotNull(shortcutFor(key, KeyEventType.KeyDow
+          +n, textInputFocused = true))                                  
+      123 +        }                                                     
+      124 +    }                                                         
+      125 +                                                              
+      126      // --- Typing safety -------------------------------------
+           -------------------------------------
+      127  
+      128      @Test
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/nav/ShortcutsTest.kt)
+  ⎿  Added 2 lines
+       3  import androidx.compose.ui.input.key.Key
+       4  import androidx.compose.ui.input.key.KeyEventType
+       5  import kotlin.test.assertEquals
+       6 +import kotlin.test.assertNotEquals                             
+       7 +import kotlin.test.assertNotNull                               
+       8  import kotlin.test.assertNull
+       9  import kotlin.test.assertTrue
+      10  import org.junit.jupiter.api.Test
+
+● Now the regression test for the sleep-expiry loop fix — the more consequential
+  of the two.
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/player/PlaybackPreferenc
+        esApplyTest.kt)
+  ⎿  Added 27 lines
+      298      }
+      299  
+      300      @Test
+      301 +    fun `resuming after the timer expired still tracks progres
+          +s and advances`() = runBlocking {                             
+      302 +        // Expiry pauses; the morning's resume must land in a 
+          +live controller. If expiry ended the                          
+      303 +        // playback job, the audio would restart with nothing 
+          +polling position and nothing draining                         
+      304 +        // engine events — so the UI would freeze and end-of-s
+          +tream would never advance the queue.                          
+      305 +        val engine = FakePlaybackEngine()                     
+      306 +        val clock = FakeClock()                               
+      307 +        val timer = SleepTimer(clock)                         
+      308 +        val playback = controller(engine, sleepTimer = timer, 
+          +clock = clock)                                                
+      309 +                                                              
+      310 +        playback.playQueue(listOf(chapter(1), chapter(2)), sta
+          +rtChapterId = 1, fiction = null)                              
+      311 +        playback.await("playback to start") { it.hasMedia && i
+          +t.isPlaying }                                                 
+      312 +                                                              
+      313 +        playback.setSleepTimer(SleepTimerMode.Duration(5))    
+      314 +        clock.nowMs += 5 * 60_000L                            
+      315 +        playback.await("the timer to pause playback") { !it.is
+          +Playing }                                                     
+      316 +        assertFalse(playback.state.value.sleepTimer.isArmed, "
+          +the timer should disarm on expiry")                           
+      317 +                                                              
+      318 +        // Resume, then let the chapter end on its own: the qu
+          +eue must still advance.                                       
+      319 +        playback.togglePlayPause()                            
+      320 +        playback.await("playback to resume") { it.isPlaying } 
+      321 +        engine.completeChapter()                              
+      322 +        playback.await("the next chapter to start") { it.curre
+          +ntIndex == 1 }                                                
+      323 +                                                              
+      324 +        assertEquals(2, engine.prepareCount.get(), "the queue 
+          +did not advance after a sleep pause")                         
+      325 +    }                                                         
+      326 +                                                              
+      327 +    @Test                                                     
+      328      fun `stopping disarms the timer so the next chapter is not
+            silenced`() = runBlocking {
+      329          val engine = FakePlaybackEngine()
+      330          val playback = controller(engine)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me align my test with the actual fake API.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● await exists; end-of-stream is EngineEvent.Completed. Let me fix my test.
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/player/PlaybackPreferenc
+        esApplyTest.kt)
+  ⎿  Added 4 lines, removed 5 lines
+      315          playback.await("the timer to pause playback") { !it.is
+           Playing }
+      316          assertFalse(playback.state.value.sleepTimer.isArmed, "
+           the timer should disarm on expiry")
+      317  
+      318 -        // Resume, then let the chapter end on its own: the qu
+          -eue must still advance.                                       
+      318 +        // Resume, then let the chapter end on its own: the qu
+          +eue must still advance, which it can                          
+      319 +        // only do if a loop is still draining engine events. 
+      320          playback.togglePlayPause()
+      321          playback.await("playback to resume") { it.isPlaying }
+      321 -        engine.completeChapter()                              
+      322 -        playback.await("the next chapter to start") { it.curre
+          -ntIndex == 1 }                                                
+      323 -                                                              
+      324 -        assertEquals(2, engine.prepareCount.get(), "the queue 
+          -did not advance after a sleep pause")                         
+      322 +        engine.emit(EngineEvent.Completed)                    
+      323 +        awaitCondition("the second chapter to start") { engine
+          +.prepareCount.get() >= 2 }                                    
+      324      }
+      325  
+      326      @Test
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me confirm the loop-fix test genuinely catches the bug by reverting the
+  fix.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The test genuinely catches it. Now the full gate before pushing.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● 617 tests green. These two fixes are to Phase 6 code, so they belong on PR
+  #24, not Phase 7. Let me move them across.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All five are Phase 6 files — clean to move.
+
+  Pushed to phase-6-playback-preferences, commented on PR #24, ran 3 shell commands (ctrl+o to expand)
+
+● CI green. Let me sync Phase 7 and check for any further Codex findings.
+
+  Commented on PR #24, ran 2 shell commands (ctrl+o to expand)
+
+● Here's where things stand.
+
+  Phase 6 — PR #24 (https://github.com/jonarihen/TTSRoad-Desktop/pull/24), CI 
+  green
+
+  The implementation was already in your working tree; I verified it, found and
+  fixed real bugs, and shipped it.
+
+  Bugs I found by running the packaged image against a real session bus (neither
+  was catchable by the existing gates):
+  - jdk.security.auth was missing from the jlink module list. dbus-java reads
+  the uid via com.sun.security.auth.module.UnixSystem by reflection, so
+  inference missed it. The packaged app started, played audio, and logged "no 
+  MPRIS integration on this desktop" — indistinguishable from a machine with no
+  bus — while ./gradlew run worked fine. --smoke-test now asserts the class
+  resolves.
+  - Properties.Get returned variant.value, dropping the a{sv} signature. Every
+  scalar property worked and Metadata alone failed, so GetAll looked healthy
+  while a client reading properties one at a time got an error instead of a
+  title.
+
+  Your CI was broken and had been since Phase 5. The GStreamer element check
+  called gst-inspect-1.0 while the install step listed only plugin packages, so
+  it died with command not found and reported it as missing GStreamer element: 
+  appsrc. That step runs before the tests, so clean check had never actually run
+  in CI — master included. Adding gstreamer1.0-tools produced the first green
+  run since #22.
+
+  Codex review, two rounds, all five findings confirmed and fixed. The most
+  serious: sleep-timer expiry returned out of the attempt loop, ending the only
+  job polling position and draining engine events — so pressing play in the
+  morning restarted audio into a dead controller that never advanced the queue.
+  I verified each regression test by reverting its fix and watching it fail.
+
+  617 tests, 0 failures. I've asked Codex for a final pass; nothing back yet.
+
+  Phase 7 — started, branch phase-7-offline-downloads
+
+  Two layers committed and green:
+  - Storage roots — downloads under the data root (never cache-evicted),
+  rebuildable bytes under cache; LOCALAPPDATA not APPDATA on Windows so a
+  roaming profile doesn't drag an audiobook library across the network at login.
+  - Cache keys — namespaced by advertised base_url rather than connect URL, so
+  moving a server from a LAN address to a public hostname doesn't orphan every
+  download.
+  - Download index — crash recovery (no in-flight state survives a restart as
+  itself), filesystem reconciliation, and a filename whitelist so a corrupt
+  index can't get ../../../.ssh/id_rsa "deleted as a download".
+
+  Still to build: the downloader itself (concurrency, .part/range resume,
+  validation, free-space), offline-first playback, the per-row and "next 10" UI,
+  and Settings totals. That's the bulk of the phase.
+
+  Two things worth flagging: I couldn't verify the Cinnamon applet and hardware
+  media keys end-to-end — that needs your private server and a physical desktop
+  — though the bus-level contract they consume is verified. And a force-push was
+  blocked by policy when I tried to correct a stray file, so that fix landed as
+  an ordinary commit (bd34f84) instead.
+
+✻ Crunched for 54m 53s
+
+❯ are you asking something? if not just contiunuye                              
+  ⎿  UserPromptSubmit hook error
+  ⎿  Failed with non-blocking status code: /bin/sh: line 1: node: command not 
+     found
+
+● Continuing with Phase 7 — next is the storage layer that owns the download
+  root and its safety rules.
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadStorage.
+       kt)
+  ⎿  Wrote 164 lines to src/main/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/DownloadStorage.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.data.AppDirectories
+       4 import dk.perspektiva.ttsroad.desktop.data.AppLog
+       5 import dk.perspektiva.ttsroad.desktop.data.StorageIdentity
+       6 import dk.perspektiva.ttsroad.desktop.security.SecureFiles
+       7 import java.io.File
+       8 import java.io.IOException
+       9 import java.nio.file.Files
+      10 import java.nio.file.LinkOption
+     … +203 lines (ctrl+o to expand)
+
+● Now the downloader itself — resumable, validated, atomic.
+
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/ChapterDownloade
+       r.kt)
+  ⎿  Wrote 253 lines to src/main/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/ChapterDownloader.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+       4 import dk.perspektiva.ttsroad.desktop.data.describeNetworkFailur
+         e
+       6 import dk.perspektiva.ttsroad.desktop.security.SecureFiles
+       7 import java.io.File
+       8 import java.io.IOException
+       9 import java.io.RandomAccessFile
+      10 import java.nio.file.Files
+     … +309 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Compiles clean. Let me check what HTTP test infrastructure exists.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● MockWebServer is available. Let me look at an existing test's setup to match
+  conventions.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the downloader tests against a real HTTP server.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Write(src/test/kotlin/dk/perspektiva/ttsroad/desktop/download/ChapterDownloade
+       rTest.kt)
+  ⎿  Wrote 293 lines to src/test/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/ChapterDownloaderTest.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.FakeRepository
+       4 import dk.perspektiva.ttsroad.desktop.authedClient
+       5 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
+       6 import dk.perspektiva.ttsroad.desktop.data.SessionState
+       7 import java.io.File
+       8 import kotlin.test.assertContains
+       9 import kotlin.test.assertEquals
+      10 import kotlin.test.assertFalse
+     … +368 lines (ctrl+o to expand)
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/download/ChapterDownload
+        erTest.kt)
+  ⎿  Added 2 lines, removed 3 lines
+      242  
+      243      @Test
+      244      fun `a chapter larger than the free space is refused befor
+           e any bytes are fetched`() = runBlocking {
+      245 -        val tiny = object : DownloadStorage(storage.root) {}  
+      246 -        // A size no disk has free, so the margin check must r
+          -efuse it.                                                     
+      245 +        // A size no disk has free, so the margin check must r
+          +efuse it before opening a connection.                         
+      246          val result = downloader().download("/audio/s/1.mp3", "
+           1.mp3", expectedBytes = Long.MAX_VALUE / 2)
+      247  
+      248          assertIs<DownloadResult.Failed>(result)
+      249          assertIs<DownloadFailure.OutOfSpace>(result.failure)
+      250          assertEquals(0, server.requestCount, "no bytes should 
+           be fetched when there is no room")
+      252 -        assertFalse(tiny.root.resolve("1.mp3").exists())      
+      251 +        assertFalse(storage.resolve("1.mp3").exists())        
+      252      }
+      253  
+      254      // --- Path safety ---------------------------------------
+           ---------------------------------------
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● MockResponse's string constructor won't take binary. Let me use the builder.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● Builder.body(Buffer) is what I need. Let me convert the test to use it.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● Let me get the actual failure reason.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Real bug in my code, not the test: restrictToOwner sets rw-------, and a
+  directory without the execute bit can't be entered. Let me fix it properly in
+  SecureFiles.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/security/SecureFiles.kt)
+  ⎿  Added 22 lines, removed 4 lines
+      60       *
+      61       * Returns false when the filesystem supports neither view 
+          (some FAT/exFAT mounts), so the
+      62       * caller can decide whether that is fatal.
+      63 +     *                                                         
+      64 +     * For a **directory**, use [restrictDirectoryToOwner]: `rw
+         +-------` on a directory removes the                            
+      65 +     * traverse bit, and nothing can then be created or read in
+         +side it.                                                       
+      66       */
+      64 -    fun restrictToOwner(path: Path): Boolean {                 
+      67 +    fun restrictToOwner(path: Path): Boolean = restrict(path, e
+         +xecutable = false)                                             
+      68 +                                                               
+      69 +    /**                                                        
+      70 +     * The directory form of [restrictToOwner]: `rwx------`.   
+      71 +     *                                                         
+      72 +     * The execute bit on a directory is *permission to enter i
+         +t*, not permission to run anything.                            
+      73 +     * Applying the file mask to a directory produces one that 
+         +cannot be listed or written to — the                           
+      74 +     * app's own writes fail with "Permission denied" while loo
+         +king, from the outside, like a                                 
+      75 +     * corrupted download.                                     
+      76 +     */                                                        
+      77 +    fun restrictDirectoryToOwner(path: Path): Boolean = restric
+         +t(path, executable = true)                                     
+      78 +                                                               
+      79 +    private fun restrict(path: Path, executable: Boolean): Bool
+         +ean {                                                          
+      80          val posix = Files.getFileAttributeView(path, PosixFileA
+          ttributeView::class.java)
+      81          if (posix != null) {
+      67 -            return runCatching {                               
+      68 -                posix.setPermissions(setOf(PosixFilePermission.
+         -OWNER_READ, PosixFilePermission.OWNER_WRITE))                  
+      69 -            }.isSuccess                                        
+      82 +            val permissions = buildSet {                       
+      83 +                add(PosixFilePermission.OWNER_READ)            
+      84 +                add(PosixFilePermission.OWNER_WRITE)           
+      85 +                if (executable) add(PosixFilePermission.OWNER_E
+         +XECUTE)                                                        
+      86 +            }                                                  
+      87 +            return runCatching { posix.setPermissions(permissio
+         +ns) }.isSuccess                                                
+      88          }
+      89  
+      90          val acl = Files.getFileAttributeView(path, AclFileAttri
+          buteView::class.java) ?: return false
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadStorage
+        .kt)
+  ⎿  Added 4 lines, removed 1 line
+      41          val created = runCatching { Files.createDirectories(roo
+          t.toPath()) }
+      42              .onFailure { AppLog.warn("could not create the down
+          load directory", it) }
+      43          if (created.isFailure) return false
+      44 -        return SecureFiles.restrictToOwner(root.toPath())      
+      44 +        // The *directory* form: a download root without its tr
+         +averse bit cannot be written to at                             
+      45 +        // all, and the resulting "Permission denied" looks lik
+         +e a broken download rather than a                              
+      46 +        // permission mask this app applied to itself.         
+      47 +        return SecureFiles.restrictDirectoryToOwner(root.toPath
+         +())                                                            
+      48      }
+      49  
+      50      /**
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now tests for DownloadStorage itself — the traversal and symlink defences.
+
+● Write(src/test/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadStorageT
+       est.kt)
+  ⎿  Wrote 187 lines to src/test/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/DownloadStorageTest.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.data.StorageIdentity
+       4 import java.io.File
+       5 import java.nio.file.Files
+       6 import java.nio.file.attribute.PosixFileAttributeView
+       7 import java.nio.file.attribute.PosixFilePermission
+       8 import kotlin.test.assertEquals
+       9 import kotlin.test.assertFailsWith
+      10 import kotlin.test.assertFalse
+     … +218 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me run the full gate and commit this layer.
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Let me check on Codex's final review of PR #24 while continuing.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Two more findings. Let me verify the first against play()/playQueue().
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Confirmed — play()/playQueue() replace queue before begin() records. Let me
+  check whether progress-saving has the same flaw.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● saveProgressNow() has the identical flaw — it would save the old position
+  against a chapter from the new queue, corrupting server-side progress. Let me
+  fix both on the Phase 6 branch.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the queue-replacement fix — making "leaving the current chapter" happen
+  before any mutation.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Added 4 lines, removed 1 line
+      153                  .copy(error = "This chapter has no audio yet")
+      154              return
+      155          }
+      156 +        // Before the queue changes, not after: `leaveCurrentC
+          +hapter` reads queue[queueIndex], and                          
+      157 +        // once the new queue is in place that index names a d
+          +ifferent chapter — or nothing at all.                         
+      158 +        leaveCurrentChapter()                                 
+      159          queue = listOf(chapter)
+      160          queueFiction = fiction
+      158 -        begin(0, resumeMsOf(chapter))                         
+      161 +        begin(0, resumeMsOf(chapter), leaveCurrent = false)   
+      162      }
+      163  
+      164      override suspend fun playQueue(
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Added 4 lines, removed 1 line
+      173              _state.update { it.copy(error = "No playable chapt
+           ers yet") }
+      174              return
+      175          }
+      176 +        // See `play`: the chapter being left has to be record
+          +ed while it is still the one the queue                        
+      177 +        // and the index point at.                            
+      178 +        leaveCurrentChapter()                                 
+      179          queue = playable
+      180          queueFiction = fiction
+      181          val startIndex = playable.indexOfFirst { it.resolvedCh
+           apterId == startChapterId }.coerceAtLeast(0)
+      179 -        begin(startIndex, resumeMsOf(playable[startIndex]))   
+      182 +        begin(startIndex, resumeMsOf(playable[startIndex]), le
+          +aveCurrent = false)                                           
+      183      }
+      184  
+      185      override fun togglePlayPause() {
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Added 19 lines, removed 1 line
+      316       * One job owns a chapter from prepare to end-of-stream, i
+           ncluding its retries, so cancelling
+      317       * it is all that is needed to abandon everything in fligh
+           t.
+      318       */
+      319 -    private suspend fun begin(startIndex: Int, startMs: Long) 
+          -{                                                             
+      319 +    /**                                                       
+      320 +     * Stops the current chapter and files what the listener h
+          +ad reached.                                                   
+      321 +     *                                                        
+      322 +     * Must be called while `queue` and `queueIndex` still des
+          +cribe the chapter being left. A caller                        
+      323 +     * that is about to *replace* the queue has to do this fir
+          +st and pass `leaveCurrent = false` to                         
+      324 +     * [begin] — otherwise the save and the snapshot are attri
+          +buted to whatever chapter now happens                         
+      325 +     * to sit at the old index, which is a different chapter o
+          +r none.                                                       
+      326 +     */                                                       
+      327 +    private suspend fun leaveCurrentChapter() {               
+      328          playJob?.cancelAndJoin()
+      329 +        playJob = null                                        
+      330          // Leaving the previous chapter is one of the required
+            save points.
+      331          saveProgressNow()
+      332          recordHistory()
+      333 +    }                                                         
+      334 +                                                              
+      335 +    private suspend fun begin(startIndex: Int, startMs: Long, 
+          +leaveCurrent: Boolean = true) {                               
+      336 +        if (leaveCurrent) {                                   
+      337 +            leaveCurrentChapter()                             
+      338 +        } else {                                              
+      339 +            playJob?.cancelAndJoin()                          
+      340 +            playJob = null                                    
+      341 +        }                                                     
+      342          queueIndex = startIndex
+      343          lastKnownPositionMs = startMs
+      344          publishMetadata(startIndex, startMs)
+
+● Now the read-modify-write races in the stores.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackHistory.kt)
+  ⎿  Added 3 lines
+      143      private val _history = MutableStateFlow(initial)
+      144      override val history: StateFlow<List<PlaybackSnapshot>> = 
+           _history.asStateFlow()
+      145  
+      146 +    @Synchronized                                             
+      147      override fun record(snapshot: PlaybackSnapshot) {
+      148          _history.value = PlaybackHistory.record(_history.value
+           , snapshot)
+      149      }
+      150  
+      151 +    @Synchronized                                             
+      152      override fun dismiss(key: String) {
+      153          _history.value = PlaybackHistory.dismiss(_history.valu
+           e, key)
+      154      }
+      155  
+      156 +    @Synchronized                                             
+      157      override fun clear() {
+      158          _history.value = emptyList()
+      159      }
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackHistory.kt)
+  ⎿  Added 11 lines
+      179      private val _history = MutableStateFlow(read())
+      180      override val history: StateFlow<List<PlaybackSnapshot>> = 
+           _history.asStateFlow()
+      181  
+      182 +    /**                                                       
+      183 +     * Every mutation is read-modify-write, and the readers an
+          +d writers are on different threads:                           
+      184 +     * the controller records from its own scope while the UI 
+          +dismisses from the Compose thread.                            
+      185 +     * Unsynchronised, two of them can derive from the same li
+          +st and the later write wins outright —                        
+      186 +     * which loses a dismissal, because a stale `record` carri
+          +es `dismissed = false` and the whole                          
+      187 +     * point of the inheritance rule is that a progress save m
+          +ust never undo one. Synchronising the                         
+      188 +     * mutation *and* the file write also keeps the file order
+          +ed the same way as the flow.                                  
+      189 +     */                                                       
+      190 +    @Synchronized                                             
+      191      override fun record(snapshot: PlaybackSnapshot) {
+      192          write(PlaybackHistory.record(_history.value, snapshot)
+           )
+      193      }
+      194  
+      195 +    @Synchronized                                             
+      196      override fun dismiss(key: String) {
+      197          write(PlaybackHistory.dismiss(_history.value, key))
+      198      }
+      199  
+      200 +    @Synchronized                                             
+      201      override fun clear() {
+      202          write(emptyList())
+      203      }
+
+● The preferences store has the same shape — MPRIS volume and the Compose thread
+  both write it.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackPreferences
+        .kt)
+  ⎿  Added 1 line
+      148      private val _preferences = MutableStateFlow(initial)
+      149      override val preferences: StateFlow<PlaybackPreferences> =
+            _preferences.asStateFlow()
+      150  
+      151 +    @Synchronized                                             
+      152      override fun update(transform: (PlaybackPreferences) -> Pl
+           aybackPreferences) {
+      153          _preferences.value = transform(_preferences.value).san
+           itised()
+      154      }
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackPreferences
+        .kt)
+  ⎿  Added 7 lines
+      172      private val _preferences = MutableStateFlow(read())
+      173      override val preferences: StateFlow<PlaybackPreferences> =
+            _preferences.asStateFlow()
+      174  
+      175 +    /**                                                       
+      176 +     * Synchronised because `update` is read-modify-write and 
+          +three threads reach it: the Compose                           
+      177 +     * thread from Settings, the controller when it stores a s
+          +peed, and dbus-java's reader thread                           
+      178 +     * when a shell sets the volume. Two overlapping updates w
+          +ould otherwise each derive from the                           
+      179 +     * same value and the later write would drop the other's f
+          +ield entirely.                                                
+      180 +     */                                                       
+      181 +    @Synchronized                                             
+      182      override fun update(transform: (PlaybackPreferences) -> Pl
+           aybackPreferences) {
+      183          val next = transform(_preferences.value).sanitised()
+      184          if (next == _preferences.value) return
+
+● Now a regression test for the queue-replacement bug.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/player/PlaybackPreferenc
+        esApplyTest.kt)
+  ⎿  Added 38 lines
+      377      }
+      378  
+      379      @Test
+      380 +    fun `switching to another fiction records the chapter bein
+          +g left, not one from the new queue`() =                       
+      381 +        runBlocking {                                         
+      382 +            // playQueue replaces the queue before begin() run
+          +s, so anything that reads                                     
+      383 +            // queue[queueIndex] afterwards is describing the 
+          +*new* queue with the *old* index —                            
+      384 +            // which is a different chapter, or none at all wh
+          +en the new queue is shorter.                                  
+      385 +            val engine = FakePlaybackEngine()                 
+      386 +            val history = InMemoryPlaybackHistoryStore()      
+      387 +            val playback = controller(engine, history = histor
+          +y)                                                            
+      388 +                                                              
+      389 +            // Start deep enough into the first serial that th
+          +e old index does not exist in the new                         
+      390 +            // queue: index 2 here, and the serial we switch t
+          +o has a single chapter.                                       
+      391 +            playback.playQueue(                               
+      392 +                listOf(chapter(1), chapter(2), chapter(3)),   
+      393 +                startChapterId = 3,                           
+      394 +                fiction = null,                               
+      395 +            )                                                 
+      396 +            playback.await("the third chapter to load") { it.h
+          +asMedia }                                                     
+      397 +            engine.setDuration(600_000)                       
+      398 +            engine.setPosition(90_000)                        
+      399 +            awaitCondition("a position") { playback.state.valu
+          +e.positionMs > 0 }                                            
+      400 +                                                              
+      401 +            playback.play(chapter(99), fiction = null)        
+      402 +            playback.await("the new chapter to load") { it.que
+          +ue.singleOrNull()?.chapterId == 99 }                          
+      403 +                                                              
+      404 +            val left = history.history.value.firstOrNull { it.
+          +chapterId == 3 }                                              
+      405 +            assertTrue(                                       
+      406 +                left != null,                                 
+      407 +                "the chapter being left was never recorded; hi
+          +story was ${history.history.value}",                          
+      408 +            )                                                 
+      409 +            assertEquals(90.0, left.positionSeconds, 0.001)   
+      410 +            // And the position must not have been filed again
+          +st the chapter we switched *to*.                              
+      411 +            assertTrue(                                       
+      412 +                history.history.value.none { it.chapterId == 9
+          +9 && it.positionSeconds > 0 },                                
+      413 +                "the old position was recorded against the new
+          + chapter",                                                    
+      414 +            )                                                 
+      415 +        }                                                     
+      416 +                                                              
+      417 +    @Test                                                     
+      418      fun `nothing is recorded when nothing has loaded`() = runB
+           locking {
+      419          val history = InMemoryPlaybackHistoryStore()
+      420          val playback = controller(FakePlaybackEngine(), histor
+           y = history)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me verify the new test catches the bug by reverting the fix.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Confirmed. Full gate, then push.
+
+  Pushed to phase-6-playback-preferences, commented on PR #24, commented on PR #24, ran 2 shell commands (ctrl+o to expand)
+
+● The same race applies to my Phase 7 download index — let me fix it there too
+  before it repeats.
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadIndex.k
+        t)
+  ⎿  Added 3 lines
+      133      private val _entries = MutableStateFlow(initial)
+      134      override val entries: StateFlow<List<DownloadEntry>> = _en
+           tries.asStateFlow()
+      135  
+      136 +    @Synchronized                                             
+      137      override fun put(entry: DownloadEntry) {
+      138          _entries.value = DownloadIndex.put(_entries.value, ent
+           ry)
+      139      }
+      140  
+      141 +    @Synchronized                                             
+      142      override fun remove(chapterId: Int) {
+      143          _entries.value = DownloadIndex.remove(_entries.value, 
+           chapterId)
+      144      }
+      145  
+      146 +    @Synchronized                                             
+      147      override fun clear() {
+      148          _entries.value = emptyList()
+      149      }
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadIndex.k
+        t)
+  ⎿  Added 9 lines
+      197      private val _entries = MutableStateFlow(load())
+      198      override val entries: StateFlow<List<DownloadEntry>> = _en
+           tries.asStateFlow()
+      199  
+      200 +    /**                                                       
+      201 +     * Synchronised for the same reason the history store is: 
+          +every mutation is read-modify-write,                          
+      202 +     * and here there are more writers than anywhere else in t
+          +he app — one per concurrent download                          
+      203 +     * worker, plus the Compose thread queueing and cancelling
+          +. Two workers reporting progress from                         
+      204 +     * the same base list would each drop the other's row, and
+          + "transactional" would mean nothing.                          
+      205 +     */                                                       
+      206 +    @Synchronized                                             
+      207      override fun put(entry: DownloadEntry) {
+      208          write(DownloadIndex.put(_entries.value, entry))
+      209      }
+      210  
+      211 +    @Synchronized                                             
+      212      override fun remove(chapterId: Int) {
+      213          write(DownloadIndex.remove(_entries.value, chapterId))
+      214      }
+      215  
+      216 +    @Synchronized                                             
+      217      override fun clear() {
+      218          write(emptyList())
+      219      }
+
+● Now the download manager — the queue with bounded concurrency that ties the
+  index, storage and downloader together.
+
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadManager.
+       kt)
+  ⎿  Wrote 236 lines to src/main/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/DownloadManager.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.data.AppLog
+       4 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+       5 import dk.perspektiva.ttsroad.desktop.data.chapterFileName
+       6 import dk.perspektiva.ttsroad.desktop.data.resolvedChapterId
+       7 import dk.perspektiva.ttsroad.desktop.data.resolvedFictionId
+       8 import dk.perspektiva.ttsroad.desktop.data.resolvedTitle
+       9 import java.util.concurrent.ConcurrentHashMap
+      10 import kotlinx.coroutines.CoroutineDispatcher
+     … +277 lines (ctrl+o to expand)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● They're member properties, not extensions — the imports are wrong.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadManager
+        .kt)
+  ⎿  Removed 3 lines
+       3  import dk.perspektiva.ttsroad.desktop.data.AppLog
+       4  import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+       5  import dk.perspektiva.ttsroad.desktop.data.chapterFileName
+       6 -import dk.perspektiva.ttsroad.desktop.data.resolvedChapterId   
+       7 -import dk.perspektiva.ttsroad.desktop.data.resolvedFictionId   
+       8 -import dk.perspektiva.ttsroad.desktop.data.resolvedTitle       
+       6  import java.util.concurrent.ConcurrentHashMap
+       7  import kotlinx.coroutines.CoroutineDispatcher
+       8  import kotlinx.coroutines.CoroutineScope
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now tests for the manager — queue behaviour, cancel/remove semantics, and
+  retry.
+
+● Write(src/test/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadManagerT
+       est.kt)
+  ⎿  Wrote 287 lines to src/test/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/DownloadManagerTest.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.FakeRepository
+       4 import dk.perspektiva.ttsroad.desktop.authedClient
+       5 import dk.perspektiva.ttsroad.desktop.data.AudioInfo
+       6 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+       7 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
+       8 import dk.perspektiva.ttsroad.desktop.data.SessionState
+       9 import java.io.File
+      10 import kotlin.test.assertEquals
+     … +328 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Two problems: my tests close the manager before downloads finish, and retry()
+  has a real bug — it sets Queued, then enqueue skips it because Queued counts
+  as active. Let me fix the code first.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadManager
+        .kt)
+  ⎿  Added 34 lines, removed 21 lines
+      54       * supply them at the moment of asking.
+      55       */
+      56      fun enqueue(chapters: List<ChapterSummary>, fictionTitle: S
+          tring) {
+      57 -        for (chapter in chapters) {                            
+      58 -            val id = chapter.resolvedChapterId                 
+      59 -            if (id <= 0 || chapter.audio?.url.isNullOrBlank()) 
+         -continue                                                       
+      57 +        for (chapter in chapters) queueOne(chapter, fictionTitl
+         +e, replaceFailed = false)                                      
+      58 +    }                                                          
+      59  
+      61 -            val existing = DownloadIndex.find(index.entries.val
+         -ue, id)                                                        
+      62 -            if (existing?.state == DownloadState.Downloaded || 
+         -existing?.state?.isActive == true) continue                    
+      60 +    /**                                                        
+      61 +     * Files one chapter as [DownloadState.Queued] and gives it
+         + a worker.                                                     
+      62 +     *                                                         
+      63 +     * [replaceFailed] is what separates Retry from Download: a
+         +n ordinary enqueue leaves an                                   
+      64 +     * already-queued or in-flight chapter alone, while a retry
+         + is explicitly asking to start over                            
+      65 +     * from a failed row. Neither ever restarts something alrea
+         +dy [DownloadState.Downloaded].                                 
+      66 +     */                                                        
+      67 +    private fun queueOne(chapter: ChapterSummary, fictionTitle:
+         + String, replaceFailed: Boolean) {                             
+      68 +        val id = chapter.resolvedChapterId                     
+      69 +        if (id <= 0 || chapter.audio?.url.isNullOrBlank()) retu
+         +rn                                                             
+      70  
+      64 -            index.put(                                         
+      65 -                DownloadEntry(                                 
+      66 -                    chapterId = id,                            
+      67 -                    fictionId = chapter.resolvedFictionId,     
+      68 -                    fictionTitle = fictionTitle,               
+      69 -                    chapterTitle = chapter.resolvedTitle,      
+      70 -                    state = DownloadState.Queued,              
+      71 -                    // Kept from any earlier attempt so a resum
+         -e shows the right starting point.                              
+      72 -                    bytesDownloaded = existing?.bytesDownloaded
+         - ?: 0L,                                                        
+      73 -                    totalBytes = chapter.audioFilesize,        
+      74 -                    fileName = chapterFileName(id),            
+      75 -                    updatedAtMs = clock(),                     
+      76 -                ),                                             
+      77 -            )                                                  
+      78 -            start(chapter, id)                                 
+      79 -        }                                                      
+      71 +        val existing = DownloadIndex.find(index.entries.value, 
+         +id)                                                            
+      72 +        if (existing?.state == DownloadState.Downloaded) return
+      73 +        // A live worker owns this chapter; a second one would 
+         +fight it for the same .part file.                              
+      74 +        if (jobs.containsKey(id)) return                       
+      75 +        if (!replaceFailed && existing?.state?.isActive == true
+         +) return                                                       
+      76 +                                                               
+      77 +        index.put(                                             
+      78 +            DownloadEntry(                                     
+      79 +                chapterId = id,                                
+      80 +                fictionId = chapter.resolvedFictionId,         
+      81 +                fictionTitle = fictionTitle,                   
+      82 +                chapterTitle = chapter.resolvedTitle,          
+      83 +                state = DownloadState.Queued,                  
+      84 +                // Kept from any earlier attempt so a resume sh
+         +ows the right starting point.                                  
+      85 +                bytesDownloaded = existing?.bytesDownloaded ?: 
+         +0L,                                                            
+      86 +                totalBytes = chapter.audioFilesize,            
+      87 +                fileName = chapterFileName(id),                
+      88 +                failureMessage = null,                         
+      89 +                updatedAtMs = clock(),                         
+      90 +            ),                                                 
+      91 +        )                                                      
+      92 +        start(chapter, id)                                     
+      93      }
+      94  
+      95      /** Queues one chapter. */
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadManager
+        .kt)
+  ⎿  Added 8 lines, removed 8 lines
+      124          }
+      125      }
+      126  
+      127 -    /** Retries a failed chapter. Distinct from [enqueue] only
+          - in that it clears the failure first. */                      
+      128 -    fun retry(chapter: ChapterSummary, fictionTitle: String) {
+      129 -        val id = chapter.resolvedChapterId                    
+      130 -        DownloadIndex.find(index.entries.value, id)?.let { exi
+          -sting ->                                                      
+      131 -            index.put(existing.copy(state = DownloadState.Queu
+          -ed, failureMessage = null, updatedAtMs = clock()))            
+      132 -        }                                                     
+      133 -        enqueue(listOf(chapter), fictionTitle)                
+      134 -    }                                                         
+      127 +    /**                                                       
+      128 +     * Retries a failed chapter.                              
+      129 +     *                                                        
+      130 +     * Distinct from [enqueue] in that it is allowed to replac
+          +e a row that is already sitting in a                          
+      131 +     * non-Downloaded state — which is the whole point, since 
+          +the row it is retrying is a failed one.                       
+      132 +     */                                                       
+      133 +    fun retry(chapter: ChapterSummary, fictionTitle: String) =
+      134 +        queueOne(chapter, fictionTitle, replaceFailed = true) 
+      135  
+      136      /** Deletes every download for this account and returns th
+           e bytes reclaimed. */
+      137      suspend fun deleteAll(): Long {
+
+● Now restructure the tests so the manager's lifetime spans the whole test.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● Let me check Codex's latest verdict on PR #24.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Round 4, three findings. Let me verify each against the current code — finding
+  2 may already be fixed.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Master has moved — let me check whether PR #24 was merged.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● PR #24 was merged at 10:30 — before my round-3 fixes landed. So master is
+  missing them, and Codex reviewed that older state. Let me confirm which
+  findings are still live.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All three assessed: #1 and #3 are real, #2 is already fixed but stranded off
+  master. Let me build a follow-up branch.
+
+  Cherry-picked 7faa100 (ctrl+o to expand)
+● Now finding 1 — a new chapter starts the engine without resuming a frozen
+  timer.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Added 4 lines
+      463          drainEngineEvents()?.let { return it }
+      464  
+      465          engine.play()
+      466 +        // Audio is starting here, not only in togglePlayPause
+          +, so this is where a frozen countdown                         
+      467 +        // has to start running again. Without it, a timer arm
+          +ed while paused stays frozen while a                          
+      468 +        // newly-started or retried chapter plays on indefinit
+          +ely. A no-op when nothing is frozen.                          
+      469 +        sleepTimer.onPlaybackResumed()                        
+      470          // A successful attempt clears whatever the previous o
+           ne complained about.
+      471          _state.update {
+      472              it.copy(
+
+● Now finding 3 — the cross-account history disclosure. Let me see how the store
+  is wired.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The store is shared across accounts. Let me scope snapshots by owner.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackHistory.kt)
+  ⎿  Added 15 lines, removed 3 lines
+      30      val durationSeconds: Double,
+      31      val recordedAtMs: Long,
+      32      val dismissed: Boolean = false,
+      33 +    /**                                                        
+      34 +     * Which signed-in account this snapshot belongs to — see [
+         +PlaybackHistory.ownerKeyFor].                                  
+      35 +     *                                                         
+      36 +     * The file is machine-local and outlives every session, bu
+         +t its *contents* are not: fiction and                          
+      37 +     * chapter titles are the second user's business only if th
+         +ey are the second user's titles.                               
+      38 +     * Without this, signing out and signing in as somebody els
+         +e on the same desktop showed them the                          
+      39 +     * previous account's reading history in the "Jump back in"
+         + strip. It is a hash, so it scopes                             
+      40 +     * without naming the server or the person.                
+      41 +     */                                                        
+      42 +    val ownerKey: String = "",                                 
+      43  ) {
+      44      /**
+      45       * Identity for thinning and for dismissal.
+      46       *
+      37 -     * A chapter, not a playback session: listening to chapter 
+         -12 twice is one thing to offer to                              
+      38 -     * resume, and a dismissal of it should survive the positio
+         -n moving.                                                      
+      47 +     * A chapter *of one account's library*, not a playback ses
+         +sion: listening to chapter 12 twice                            
+      48 +     * is one thing to offer to resume, and a dismissal of it s
+         +hould survive the position moving.                             
+      49 +     * The owner is part of it because fiction ids are only uni
+         +que within a server, so two accounts                           
+      50 +     * can hold the same id for different content.             
+      51       */
+      40 -    val key: String get() = "$fictionId:$chapterId"            
+      52 +    val key: String get() = "$ownerKey:$fictionId:$chapterId"  
+      53  
+      54      /** How far in, 0..1. Zero when the duration is unknown, so
+           a bar cannot render nonsense. */
+      55      val progress: Float
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackHistory.kt)
+  ⎿  Added 22 lines, removed 3 lines
+      109          existing.map { if (it.key == key) it.copy(dismissed = 
+           true) else it }
+      110  
+      111      /**
+      112 -     * The single thing to offer as "last heard", or null.    
+      112 +     * The owner key for a session: a hash of the server and t
+          +he account.                                                   
+      113       *
+      114 +     * Hashed rather than stored plainly so the file scopes hi
+          +story without also becoming a record                          
+      115 +     * of which servers this machine talks to and under what n
+          +ame — the same reasoning that keeps                           
+      116 +     * URLs out of [PlaybackSnapshot] entirely.               
+      117 +     */                                                       
+      118 +    fun ownerKeyFor(serverUrl: String, username: String?): Str
+          +ing {                                                         
+      119 +        val identity = "${serverUrl.trim().trimEnd('/').lowerc
+          +ase()}|${username?.trim()?.lowercase().orEmpty()}"            
+      120 +        return java.security.MessageDigest.getInstance("SHA-25
+          +6")                                                           
+      121 +            .digest(identity.toByteArray(Charsets.UTF_8))     
+      122 +            .joinToString("") { "%02x".format(it) }           
+      123 +            .take(32)                                         
+      124 +    }                                                         
+      125 +                                                              
+      126 +    /**                                                       
+      127 +     * The single thing to offer as "last heard" to [ownerKey]
+          +, or null.                                                    
+      128 +     *                                                        
+      129       * Skips dismissed entries and ones that are effectively f
+           inished, so the card is always an
+      130       * offer the listener can act on rather than one they have
+            to dismiss again.
+      131 +     *                                                        
+      132 +     * A snapshot written before this build carries no owner a
+          +nd is therefore shown to nobody. That                         
+      133 +     * is deliberate: losing the strip once is a far better ou
+          +tcome than showing one account's                              
+      134 +     * reading history to the next person who signs in on the 
+          +same desktop.                                                 
+      135       */
+      117 -    fun lastHeard(existing: List<PlaybackSnapshot>): PlaybackS
+          -napshot? =                                                    
+      118 -        existing.filter { it.isResumable }.maxByOrNull { it.re
+          -cordedAtMs }                                                  
+      136 +    fun lastHeard(existing: List<PlaybackSnapshot>, ownerKey: 
+          +String): PlaybackSnapshot? =                                  
+      137 +        existing.filter { it.isOwnedBy(ownerKey) && it.isResum
+          +able }.maxByOrNull { it.recordedAtMs }                        
+      138  
+      139      /**
+      140       * Up to [limit] things to jump back to, newest first, at 
+           most one per fiction.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackHistory.kt)
+  ⎿  Added 6 lines, removed 1 line
+      145       */
+      146      fun jumpBackChoices(
+      147          existing: List<PlaybackSnapshot>,
+      148 +        ownerKey: String,                                     
+      149          limit: Int = JumpBackChoices,
+      150      ): List<PlaybackSnapshot> =
+      150 -        existing.filter { it.isResumable }                    
+      151 +        existing.filter { it.isOwnedBy(ownerKey) && it.isResum
+          +able }                                                        
+      152              .sortedByDescending { it.recordedAtMs }
+      153              .distinctBy { it.fictionId }
+      154              .take(limit)
+      155  
+      156      private val PlaybackSnapshot.isResumable: Boolean
+      157          get() = !dismissed && progress < ResumableCeiling
+      158 +                                                              
+      159 +    /** Never true for a blank key on either side, so an unown
+          +ed snapshot is shown to nobody. */                            
+      160 +    private fun PlaybackSnapshot.isOwnedBy(ownerKey: String): 
+          +Boolean =                                                     
+      161 +        ownerKey.isNotBlank() && this.ownerKey == ownerKey    
+      162  }
+      163  
+      164  /** Seam so tests never touch the real user config directory. 
+           */
+
+● Now the persistence field and the controller/UI wiring.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Added 5 lines
+      67      private val historyStore: PlaybackHistoryStore = InMemoryPl
+          aybackHistoryStore(),
+      68      private val sleepTimer: SleepTimer = SleepTimer(),
+      69      private val clock: () -> Long = System::currentTimeMillis,
+      70 +    /**                                                        
+      71 +     * Which account a history snapshot belongs to. Read at rec
+         +ord time rather than at construction,                          
+      72 +     * because a sign-out and a sign-in as somebody else happen
+         + without rebuilding this controller.                           
+      73 +     */                                                        
+      74 +    private val ownerKey: () -> String = { "" },               
+      75      /** Overridable so tests do not wait real seconds for the r
+          etry ladder. */
+      76      private val retryDelaysMs: List<Long> = listOf(2_000, 5_000
+          , 15_000),
+      77      private val tickIntervalMs: Long = 250,
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/player/QueuePlaybackCont
+        roller.kt)
+  ⎿  Added 1 line
+      597                  positionSeconds = lastKnownPositionMs / 1000.0
+           ,
+      598                  durationSeconds = current.durationMs / 1000.0,
+      599                  recordedAtMs = clock(),
+      600 +                ownerKey = ownerKey(),                        
+      601              ),
+      602          )
+      603      }
+
+● Now the container and the UI.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now the LibraryScreen side.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Expected call-site updates. Let me fix the tests.
+
+  Ran 6 shell commands (ctrl+o to expand)
+
+● Now tests for the two new fixes.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackHistoryTest
+        .kt)
+  ⎿  Added 51 lines
+      233          assertTrue(store.history.value.isEmpty())
+      234          assertTrue(FilePlaybackHistoryStore(file).history.valu
+           e.isEmpty())
+      235      }
+      236 +                                                              
+      237 +    // --- Account scoping -----------------------------------
+          +-------------------------------------                         
+      238 +                                                              
+      239 +    @Test                                                     
+      240 +    fun `one account never sees another's reading history`() {
+      241 +        // The file is machine-local and outlives every sessio
+          +n, but its contents are not: signing                          
+      242 +        // out and signing in as somebody else on the same des
+          +ktop must not expose what the previous                        
+      243 +        // person was reading.                                
+      244 +        var history = PlaybackHistory.record(emptyList(), snap
+          +shot(fictionId = 1, ownerKey = Owner))                        
+      245 +        history = PlaybackHistory.record(history, snapshot(fic
+          +tionId = 2, ownerKey = OtherOwner))                           
+      246 +                                                              
+      247 +        assertEquals(listOf(1), PlaybackHistory.jumpBackChoice
+          +s(history, Owner).map { it.fictionId })                       
+      248 +        assertEquals(listOf(2), PlaybackHistory.jumpBackChoice
+          +s(history, OtherOwner).map { it.fictionId })                  
+      249 +        assertEquals(1, PlaybackHistory.lastHeard(history, Own
+          +er)?.fictionId)                                               
+      250 +        assertEquals(2, PlaybackHistory.lastHeard(history, Oth
+          +erOwner)?.fictionId)                                          
+      251 +    }                                                         
+      252 +                                                              
+      253 +    @Test                                                     
+      254 +    fun `a snapshot from an older build belongs to nobody`() {
+      255 +        // Losing the strip once is a much better outcome than
+          + showing one account's titles to the                          
+      256 +        // next person who signs in.                          
+      257 +        val history = PlaybackHistory.record(emptyList(), snap
+          +shot(ownerKey = ""))                                          
+      258 +                                                              
+      259 +        assertTrue(PlaybackHistory.jumpBackChoices(history, Ow
+          +ner).isEmpty())                                               
+      260 +        assertNull(PlaybackHistory.lastHeard(history, Owner)) 
+      261 +        // And a blank *current* owner — a signed-out screen —
+          + sees nothing either.                                         
+      262 +        assertTrue(PlaybackHistory.jumpBackChoices(history, ""
+          +).isEmpty())                                                  
+      263 +    }                                                         
+      264 +                                                              
+      265 +    @Test                                                     
+      266 +    fun `two accounts holding the same fiction id keep separat
+          +e rows and dismissals`() {                                    
+      267 +        // Fiction ids are unique only within a server, so the
+          + identity has to carry the owner.                             
+      268 +        var history = PlaybackHistory.record(emptyList(), snap
+          +shot(fictionId = 5, chapterId = 5, ownerKey = Owner))         
+      269 +        history = PlaybackHistory.record(history, snapshot(fic
+          +tionId = 5, chapterId = 5, ownerKey = OtherOwner))            
+      270 +        assertEquals(2, history.size, "one account's snapshot 
+          +replaced the other's")                                        
+      271 +                                                              
+      272 +        history = PlaybackHistory.dismiss(history, "$Owner:5:5
+          +")                                                            
+      273 +        assertEquals(1, PlaybackHistory.jumpBackChoices(histor
+          +y, OtherOwner).size)                                          
+      274 +        assertTrue(PlaybackHistory.jumpBackChoices(history, Ow
+          +ner).isEmpty())                                               
+      275 +    }                                                         
+      276 +                                                              
+      277 +    @Test                                                     
+      278 +    fun `the owner key names neither the server nor the accoun
+          +t`() {                                                        
+      279 +        val key = PlaybackHistory.ownerKeyFor("https://host.ex
+          +ample", "alice")                                              
+      280 +        assertFalse(key.contains("host.example"))             
+      281 +        assertFalse(key.contains("alice"))                    
+      282 +        assertTrue(key.all { it in "0123456789abcdef" })      
+      283 +        // Same session, same key; a different account, a diff
+          +erent key.                                                    
+      284 +        assertEquals(key, PlaybackHistory.ownerKeyFor("https:/
+          +/host.example/", "Alice"))                                    
+      285 +        assertFalse(key == PlaybackHistory.ownerKeyFor("https:
+          +//host.example", "bob"))                                      
+      286 +    }                                                         
+      287  }
+
+● Now the frozen-timer regression test.
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/player/PlaybackPreferenc
+        esApplyTest.kt)
+  ⎿  Added 31 lines
+      298      }
+      299  
+      300      @Test
+      301 +    fun `starting another chapter unfreezes a timer armed whil
+          +e paused`() = runBlocking {                                   
+      302 +        // Only togglePlayPause used to resume a frozen countd
+          +own, but audio also starts when a new                         
+      303 +        // chapter begins or a failed one is retried. Without 
+          +unfreezing there, the timer sat still                         
+      304 +        // while playback ran on indefinitely — the display fr
+          +ozen and the sleep never arriving.                            
+      305 +        val engine = FakePlaybackEngine()                     
+      306 +        val clock = FakeClock()                               
+      307 +        val timer = SleepTimer(clock)                         
+      308 +        val playback = controller(engine, sleepTimer = timer, 
+          +clock = clock)                                                
+      309 +                                                              
+      310 +        playback.playQueue(listOf(chapter(1), chapter(2)), sta
+          +rtChapterId = 1, fiction = null)                              
+      311 +        playback.await("playback to start") { it.hasMedia && i
+          +t.isPlaying }                                                 
+      312 +                                                              
+      313 +        playback.togglePlayPause()                            
+      314 +        playback.await("the pause to land") { !it.isPlaying } 
+      315 +        playback.setSleepTimer(SleepTimerMode.Duration(30))   
+      316 +        assertEquals(30 * 60_000L, playback.state.value.sleepT
+          +imer.remainingMs)                                             
+      317 +                                                              
+      318 +        // Starting a different chapter is a resume as far as 
+          +the timer is concerned.                                       
+      319 +        playback.skipToNextChapter()                          
+      320 +        playback.await("the next chapter to play") { it.isPlay
+          +ing && it.currentIndex == 1 }                                 
+      321 +                                                              
+      322 +        clock.nowMs += 10 * 60_000L                           
+      323 +        delay(100)                                            
+      324 +        assertEquals(                                         
+      325 +            20 * 60_000L,                                     
+      326 +            playback.state.value.sleepTimer.remainingMs,      
+      327 +            "the timer stayed frozen while a new chapter playe
+          +d",                                                           
+      328 +        )                                                     
+      329 +    }                                                         
+      330 +                                                              
+      331 +    @Test                                                     
+      332      fun `stopping disarms the timer so the next chapter is not
+            silenced`() = runBlocking {
+      333          val engine = FakePlaybackEngine()
+      334          val playback = controller(engine)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The intermediate assertion races the state collector. Let me read the timer
+  directly there.
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/player/PlaybackPreferenc
+        esApplyTest.kt)  ⎿  Added 3 lines, removed 1 line
+      313          playback.togglePlayPause()
+      314          playback.await("the pause to land") { !it.isPlaying }
+      315          playback.setSleepTimer(SleepTimerMode.Duration(30))
+      316 -        assertEquals(30 * 60_000L, playback.state.value.sleepT
+          -imer.remainingMs)                                             
+      316 +        // Read from the timer rather than the published state
+          +: the controller mirrors it through a                         
+      317 +        // collector, which has not necessarily run yet on thi
+          +s line.                                                       
+      318 +        assertEquals(30 * 60_000L, timer.state.value.remaining
+          +Ms)                                                           
+      319  
+      320          // Starting a different chapter is a resume as far as 
+           the timer is concerned.
+      321          playback.skipToNextChapter()
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me verify both new tests catch their bugs.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Both tests catch their bugs. Full gate, then push.
+
+  Pushed to phase-6-followup-fixes, created PR #25, ran 2 shell commands (ctrl+o to expand)
+
+● PR #25 is green. Now let me restack Phase 7 cleanly on top of it.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Clean restack. Let me verify the combined state builds.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Restacked and green: 661 tests. Here's where things stand.
+
+  Phase 6 — merged, plus a follow-up PR that needs your attention
+
+  PR #24 is merged. Worth flagging: it merged at 10:30, while my round-3 review
+  fixes were still in flight — so master went out missing them. Codex's round-4
+  review then ran against that older state.
+
+  PR #25 (https://github.com/jonarihen/TTSRoad-Desktop/pull/25) is open and 
+  green with everything master is missing:
+
+  - Progress written against the wrong chapter. play()/playQueue() replace the
+  queue before begin() records, so switching fiction filed your position against
+  whichever chapter sat at the old index. Codex flagged the history half;
+  saveProgressNow() had the same bug and is worse — it wrote the bad position to
+  the server, corrupting the resume point.
+  - A sleep timer armed while paused never restarted when playback resumed via a
+  new chapter or a retry, since those bypass togglePlayPause. Audio ran on
+  indefinitely with the countdown standing still.
+  - Playback history leaked across accounts — signing out and in as someone else
+  on the same desktop showed the previous account's fiction and chapter titles.
+  Snapshots now carry a hashed owner key; a snapshot from an older build
+  belongs to nobody, because losing the strip once beats showing one person's
+  reading history to the next.
+  - Read-modify-write races in the history and preferences stores.
+
+  Four Codex rounds, ten findings — all confirmed against the code before
+  fixing, and every regression test verified by reverting its fix and watching
+  it fail.
+
+  Phase 7 — restacked on #25, three layers in
+
+  Branch phase-7-offline-downloads, 661 tests green:
+
+  - Storage roots and cache keys — downloads under the data root (never
+  cache-evicted), namespaced by advertised base_url so moving a server doesn't
+  orphan the library.
+  - Download index — crash recovery, filesystem reconciliation, filename
+  whitelist.
+  - Storage and transfer — resumable .part files, range-ignoring servers
+  handled, fsync before an atomic rename, MP3 header validation that rejects the
+  captive-portal HTML page that would otherwise be stored as audio.
+  - Download queue — concurrency capped at 2, typed failures, backoff.
+
+  Two bugs my own tests caught along the way: restrictToOwner applied rw-------
+  to a directory, removing the traverse bit so every download failed with
+  "Permission denied"; and retry() was a no-op on every failed chapter because
+  it set Queued, which enqueue then skipped as already-active.
+
+  Still to build: offline-first playback (wiring FileMediaSource into the source
+  factory), the per-row and "download next 10" UI, Settings totals with
+  delete/clear actions, and offline metadata browsing.
+
+  Two things for you: PR #25 should land before Phase 7, since Phase 7 is
+  stacked on it. And Codex may post a round 5 on #25 — I haven't checked since
+  pushing.
+
+✻ Churned for 46m 53s
+
+❯ there some codex comments on the pr can you make sure and review them         
+  ⎿  UserPromptSubmit hook error
+  ⎿  Failed with non-blocking status code: /bin/sh: line 1: node: command not 
+     found
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Two P1 findings, both on the owner-key code I just wrote. Let me verify them —
+  and check where username actually comes from, since I lowercase that too.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Both confirmed. Also worth noting: username is the server's canonical value,
+  so lowercasing it only risks merging two genuinely distinct accounts. Let me
+  fix all three.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackHistory.kt)
+  ⎿  Added 28 lines, removed 1 line
+      116       * URLs out of [PlaybackSnapshot] entirely.
+      117       */
+      118      fun ownerKeyFor(serverUrl: String, username: String?): Str
+           ing {
+      119 -        val identity = "${serverUrl.trim().trimEnd('/').lowerc
+          -ase()}|${username?.trim()?.lowercase().orEmpty()}"            
+      119 +        // The username is *not* case-folded: it is `response.
+          +user.username` as the server spelled                          
+      120 +        // it, so it is already canonical, and folding it woul
+          +d merge two genuinely distinct                                
+      121 +        // accounts on a server that treats case as significan
+          +t (Django's default). Throughout this                         
+      122 +        // function the rule is that merging two identities is
+          + far worse than splitting one —                               
+      123 +        // splitting costs a lost strip, merging discloses one
+          + person's reading to another.                                 
+      124 +        val identity = "${canonicalServer(serverUrl)}|${userna
+          +me?.trim().orEmpty()}"                                        
+      125          return java.security.MessageDigest.getInstance("SHA-25
+           6")
+      126              .digest(identity.toByteArray(Charsets.UTF_8))
+      127              .joinToString("") { "%02x".format(it) }
+     ...
+      129      }
+      130  
+      131      /**
+      132 +     * Lowercases only the parts of a URL that are genuinely c
+          +ase-insensitive.                                              
+      133 +     *                                                        
+      134 +     * Scheme and host are; **the path is not**. `normalizeBas
+          +eUrl` keeps whatever path the user                            
+      135 +     * configured and Retrofit supports path-based base URLs, 
+          +so `https://host/TTSRoad/` and                                
+      136 +     * `https://host/ttsroad/` are two different deployments. 
+          +Folding the whole URL made them one                           
+      137 +     * owner, and two people with the same username on those i
+          +nstances would have seen and dismissed                        
+      138 +     * each other's history.                                  
+      139 +     */                                                       
+      140 +    private fun canonicalServer(serverUrl: String): String {  
+      141 +        val trimmed = serverUrl.trim().trimEnd('/')           
+      142 +        val schemeEnd = trimmed.indexOf("://")                
+      143 +        if (schemeEnd <= 0) return trimmed                    
+      144 +                                                              
+      145 +        val scheme = trimmed.substring(0, schemeEnd).lowercase
+          +(java.util.Locale.ROOT)                                       
+      146 +        val rest = trimmed.substring(schemeEnd + 3)           
+      147 +        val authorityEnd = rest.indexOf('/').takeIf { it >= 0 
+          +} ?: rest.length                                              
+      148 +        val authority = rest.substring(0, authorityEnd).lowerc
+          +ase(java.util.Locale.ROOT)                                    
+      149 +        val path = rest.substring(authorityEnd)               
+      150 +        return "$scheme://$authority$path"                    
+      151 +    }                                                         
+      152 +                                                              
+      153 +    /**                                                       
+      154       * The single thing to offer as "last heard" to [ownerKey]
+           , or null.
+      155       *
+      156       * Skips dismissed entries and ones that are effectively f
+           inished, so the card is always an
+
+● Now finding 2 — capturing the owner when the queue loads rather than reading
+  the live session after a suspending save.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now tests for both.
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/data/PlaybackHistoryTest
+        .kt)
+  ⎿  Added 31 lines, removed 2 lines
+      280          assertFalse(key.contains("host.example"))
+      281          assertFalse(key.contains("alice"))
+      282          assertTrue(key.all { it in "0123456789abcdef" })
+      283 -        // Same session, same key; a different account, a diff
+          -erent key.                                                    
+      284 -        assertEquals(key, PlaybackHistory.ownerKeyFor("https:/
+          -/host.example/", "Alice"))                                    
+      283          assertFalse(key == PlaybackHistory.ownerKeyFor("https:
+           //host.example", "bob"))
+      284      }
+      285 +                                                              
+      286 +    @Test                                                     
+      287 +    fun `scheme and host are case-insensitive but the path is 
+          +not`() {                                                      
+      288 +        val canonical = PlaybackHistory.ownerKeyFor("https://h
+          +ost.example", "alice")                                        
+      289 +        // Scheme, host and a trailing slash are noise.       
+      290 +        assertEquals(canonical, PlaybackHistory.ownerKeyFor("H
+          +TTPS://Host.Example/", "alice"))                              
+      291 +                                                              
+      292 +        // The path is not. Retrofit supports path-based base 
+          +URLs and normalizeBaseUrl keeps                               
+      293 +        // whatever the user configured, so these are two depl
+          +oyments — and folding them together                           
+      294 +        // would let two people with the same username read an
+          +d dismiss each other's history.                               
+      295 +        assertFalse(                                          
+      296 +            PlaybackHistory.ownerKeyFor("https://host.example/
+          +TTSRoad/", "alice") ==                                        
+      297 +                PlaybackHistory.ownerKeyFor("https://host.exam
+          +ple/ttsroad/", "alice"),                                      
+      298 +        )                                                     
+      299 +        // A path still identifies one deployment consistently
+          +.                                                             
+      300 +        assertEquals(                                         
+      301 +            PlaybackHistory.ownerKeyFor("https://host.example/
+          +TTSRoad/", "alice"),                                          
+      302 +            PlaybackHistory.ownerKeyFor("https://HOST.example/
+          +TTSRoad", "alice"),                                           
+      303 +        )                                                     
+      304 +    }                                                         
+      305 +                                                              
+      306 +    @Test                                                     
+      307 +    fun `usernames differing only in case are different accoun
+          +ts`() {                                                       
+      308 +        // The stored username is what the server called the a
+          +ccount, so it is already canonical;                           
+      309 +        // folding it would merge two real accounts on a case-
+          +sensitive server. Splitting one                               
+      310 +        // identity costs a lost strip, merging two discloses 
+          +one person's reading to another.                              
+      311 +        assertFalse(                                          
+      312 +            PlaybackHistory.ownerKeyFor("https://host.example"
+          +, "Alice") ==                                                 
+      313 +                PlaybackHistory.ownerKeyFor("https://host.exam
+          +ple", "alice"),                                               
+      314 +        )                                                     
+      315 +    }                                                         
+      316  }
+
+● Now the controller test for the captured owner — the sign-out-mid-save race.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Update(src/test/kotlin/dk/perspektiva/ttsroad/desktop/player/PlaybackPreferenc
+        esApplyTest.kt)
+  ⎿  Added 27 lines
+      424          }
+      425  
+      426      @Test
+      427 +    fun `a snapshot is filed under the account that was listen
+          +ing, not the one signed in now`() =                           
+      428 +        runBlocking {                                         
+      429 +            // stop() is fire-and-forget and records history *
+          +after* a suspending server save. If                           
+      430 +            // account A signs out and B signs in while that r
+          +equest is in flight, resolving the                            
+      431 +            // owner live would file A's chapter titles under 
+          +B's key — the exact cross-account                             
+      432 +            // disclosure the owner key exists to prevent.    
+      433 +            val engine = FakePlaybackEngine()                 
+      434 +            val history = InMemoryPlaybackHistoryStore()      
+      435 +            var signedIn = "owner-a"                          
+      436 +            val playback = controller(engine, history = histor
+          +y, ownerKey = { signedIn })                                   
+      437 +                                                              
+      438 +            playback.playQueue(listOf(chapter(1)), startChapte
+          +rId = 1, fiction = null)                                      
+      439 +            playback.await("media to load") { it.hasMedia }   
+      440 +                                                              
+      441 +            // The session changes underneath a queue that is 
+          +still A's.                                                    
+      442 +            signedIn = "owner-b"                              
+      443 +            playback.togglePlayPause()                        
+      444 +            awaitCondition("a snapshot") { history.history.val
+          +ue.isNotEmpty() }                                             
+      445 +                                                              
+      446 +            assertEquals(                                     
+      447 +                "owner-a",                                    
+      448 +                history.history.value.single().ownerKey,      
+      449 +                "the chapter was filed under whoever happened 
+          +to be signed in at record time",                              
+      450 +            )                                                 
+      451 +        }                                                     
+      452 +                                                              
+      453 +    @Test                                                     
+      454      fun `nothing is recorded when nothing has loaded`() = runB
+           locking {
+      455          val history = InMemoryPlaybackHistoryStore()
+      456          val playback = controller(FakePlaybackEngine(), histor
+           y = history)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me verify both new tests catch their bugs.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All three tests catch their bugs. Full gate, then push.
+
+  Pushed to phase-6-followup-fixes, commented on PR #25, ran 1 shell command (ctrl+o to expand)
+
+● Now let me restack Phase 7 and apply the same identity lesson there —
+  StorageIdentity has the analogous flaw.
+
+  Rebased onto phase-6-followup-fixes (ctrl+o to expand)
+● Phase 7's StorageIdentity has the same flaw — and there it's worse, since a
+  merge means one server's audio served for another's chapter.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/StorageIdentity.kt)
+  ⎿  Added 8 lines, removed 4 lines
+      73          }
+      74  
+      75          /**
+      76 -         * Account component. Usernames are compared case-insen
+         -sitively and trimmed, because a                                
+      77 -         * server that treats `Alice` and `alice` as one login 
+         -must not give them two download                                
+      78 -         * directories on this machine.                        
+      76 +         * Account component.                                  
+      77 +         *                                                     
+      78 +         * Trimmed but **not** case-folded. The name stored in 
+         +the session is                                                 
+      79 +         * `response.user.username` — the server's own spelling
+         + — so folding it would buy nothing                             
+      80 +         * and would merge two genuinely distinct accounts on a
+         + server that treats case as                                    
+      81 +         * significant, which is Django's default. Two accounts
+         + sharing a download directory is a                             
+      82 +         * disclosure; one account occasionally splitting is a 
+         +re-download.                                                   
+      83           */
+      84          fun accountKey(username: String?): String {
+      81 -            val name = username?.trim()?.lowercase(Locale.ROOT)
+         -.orEmpty()                                                     
+      85 +            val name = username?.trim().orEmpty()              
+      86              if (name.isEmpty()) return AnonymousAccount
+      87              return digest("account:$name")
+      88          }
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/data/StorageIdentity.kt)
+  ⎿  Added 24 lines, removed 10 lines
+       88          }
+       89  
+       90          /**
+       91 -         * Scheme, host and port, lowercased, with the default
+          - port dropped and any path removed.                           
+       91 +         * Scheme, host, port **and path**, with only the case
+          +-insensitive parts folded.                                    
+       92           *
+       93 -         * Deliberately *not* a general URL parser. `https://H
+          -ost.Example/` and `https://host.example`                      
+       94 -         * are the same server, and a trailing `/api/` slippin
+          -g into the identity would split one                           
+       95 -         * server's downloads in two the first time a caller p
+          -assed a full endpoint instead of a                            
+       96 -         * base. The scheme is kept: `http://host` and `https:
+          -//host` may genuinely be different                            
+       97 -         * deployments, and guessing otherwise risks mixing tw
+          -o libraries.                                                  
+       93 +         * Deliberately *not* a general URL parser, and delibe
+          +rately not origin-only. Scheme and                            
+       94 +         * host are case-insensitive, so `https://Host.Example
+          +/` and `https://host.example` are one                         
+       95 +         * server. A **path is not**, and it is part of the id
+          +entity: `normalizeBaseUrl` keeps                              
+       96 +         * whatever path the user configured and Retrofit supp
+          +orts path-based base URLs, so                                 
+       97 +         * `https://host/ttsroad/` and `https://host/other/` a
+          +re two deployments that may hold                              
+       98 +         * completely different libraries under the same chapt
+          +er ids.                                                       
+       99 +         *                                                    
+      100 +         * Dropping the path would have merged them into one d
+          +ownload directory, where one server's                         
+      101 +         * audio is served for the other's chapter. That is th
+          +e failure this whole type exists to                           
+      102 +         * prevent, and it is strictly worse than the alternat
+          +ive: an identity that splits when it                          
+      103 +         * should not costs a re-download, an identity that me
+          +rges serves the wrong content. Every                          
+      104 +         * ambiguous call here is resolved that way.          
+      105 +         *                                                    
+      106 +         * The scheme is kept for the same reason — `http://ho
+          +st` and `https://host` may genuinely                          
+      107 +         * be different deployments.                          
+      108           */
+      109          fun canonicalOrigin(url: String): String {
+      100 -            val trimmed = url.trim()                          
+      110 +            val trimmed = url.trim().trimEnd('/')             
+      111              val schemeEnd = trimmed.indexOf("://")
+      102 -            if (schemeEnd <= 0) return trimmed.lowercase(Local
+          -e.ROOT).trimEnd('/')                                          
+      112 +            if (schemeEnd <= 0) return trimmed.lowercase(Local
+          +e.ROOT)                                                       
+      113  
+      114              val scheme = trimmed.substring(0, schemeEnd).lower
+           case(Locale.ROOT)
+      115              val rest = trimmed.substring(schemeEnd + 3)
+      106 -            val authority = rest.substringBefore('/').substrin
+          -gBefore('?').substringBefore('#')                             
+      116 +            val authorityEnd = rest.indexOf('/').takeIf { it >
+          += 0 } ?: rest.length                                          
+      117 +            val authority = rest.substring(0, authorityEnd)   
+      118              // Credentials in a URL are not identity and must 
+           never reach a directory name.
+      119              val hostPort = authority.substringAfterLast('@').l
+           owercase(Locale.ROOT)
+      120  
+     ...
+      122              val host = hostPort.substringBeforeLast(':', hostP
+           ort)
+      123              val port = hostPort.substringAfterLast(':', "").ta
+           keIf { it != hostPort }.orEmpty()
+      124              val normalisedPort = if (port.isEmpty() || port ==
+            defaultPort) "" else ":$port"
+      114 -            return "$scheme://$host$normalisedPort"           
+      125 +                                                              
+      126 +            // Case preserved, and the query/fragment dropped 
+          +— neither names a deployment.                                 
+      127 +            val path = rest.substring(authorityEnd).substringB
+          +efore('?').substringBefore('#').trimEnd('/')                  
+      128 +            return "$scheme://$host$normalisedPort$path"      
+      129          }
+      130  
+      131          /**
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● I reviewed the Codex comments on PR #25. Both were P1 and both were real —
+  they targeted the owner-key fix I'd written in the previous round.
+
+  Finding 1: lowercasing the whole server URL
+
+  Scheme and host are case-insensitive; a path is not. normalizeBaseUrl keeps
+  whatever path you configure and Retrofit supports path-based base URLs, so
+  https://host/TTSRoad/ and https://host/ttsroad/ are two deployments — and they
+  collapsed to one owner key. Two people with the same username on those
+  instances would have read and dismissed each other's history.
+
+  The same reasoning applies to the username, which Codex didn't raise. It's
+  stored as response.user.username — the server's own spelling — so folding it
+  bought nothing and merged two genuinely distinct accounts on a case-sensitive
+  server (Django's default). Both are now unfolded.
+
+  The rule I settled on and wrote into the code: merging two identities is far 
+  worse than splitting one. A split costs a lost strip; a merge discloses one
+  person's reading to another.
+
+  Finding 2: resolving the owner too late
+
+  recordHistory read the live session, but it runs after a suspending progress
+  save, and stop() is fire-and-forget. If account A signed out and B signed in
+  during that window, A's chapter titles were filed under B's key — exactly the
+  disclosure the owner key exists to prevent. The owner is now captured
+  alongside the queue it belongs to, and cleared with it.
+
+  The part that mattered most
+
+  That same identity flaw existed in Phase 7's StorageIdentity, and there it's 
+  worse. canonicalOrigin dropped the path entirely, so two path-based
+  deployments on one host shared a download directory — meaning one server's
+  audio served for another server's chapter, which is precisely the acceptance
+  criterion that says overlapping content must never collide. accountKey folded
+  the username the same way. Both fixed, with the split-vs-merge rule written
+  down where the decision is made.
+
+  Codex only reviewed the Phase 6 branch, so it never saw the Phase 7 code. I
+  wouldn't have caught that one without generalising the finding.
+
+  State: PR #25 is green with three regression tests, each verified by reverting
+  its fix (the controller one fails expected: <owner-a> but was: <owner-b>).
+  Phase 7 is rebased on top, 665 tests passing, with the identity fix committed.
+
+  PR #25 still needs to land before Phase 7 — and it's worth merging promptly
+  this time, since the last one merged while fixes were mid-flight.
+
+✻ Cooked for 14m 55s
+
+❯ merged please contiue                                                         
+  ⎿  UserPromptSubmit hook error
+  ⎿  Failed with non-blocking status code: /bin/sh: line 1: node: command not 
+     found
+
+  Rebased onto origin/master (ctrl+o to expand)
+
+● Cleanly rebased on master. Now the architecturally important piece —
+  offline-first playback.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The seam only receives a URL, but deciding "is this downloaded?" needs the
+  chapter id. Let me check the call sites before changing it.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Only four sites. Let me widen the seam to carry the chapter id.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now the offline-first source, including what happens when the index and the
+  disk disagree.
+
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/OfflineFirstMedi
+       aSource.kt)
+  ⎿  Wrote 56 lines to src/main/kotlin/dk/perspektiva/ttsroad/desktop/downl
+     oad/OfflineFirstMediaSource.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.data.AppLog
+       4 import dk.perspektiva.ttsroad.desktop.player.FileMediaSource
+       5 import dk.perspektiva.ttsroad.desktop.player.MediaSource
+       7 
+       8 /**
+       9  * Plays a downloaded chapter from disk, and anything else from 
+         the network.
+      10  *
+     … +62 lines (ctrl+o to expand)
+
+● Write(src/test/kotlin/dk/perspektiva/ttsroad/desktop/download/OfflineFirstMedi
+       aSourceTest.kt)
+  ⎿  Wrote 149 lines to src/test/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/OfflineFirstMediaSourceTest.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.player.FileMediaSource
+       4 import dk.perspektiva.ttsroad.desktop.player.MediaSource
+       5 import dk.perspektiva.ttsroad.desktop.player.MediaSourceFactory
+       6 import dk.perspektiva.ttsroad.desktop.player.MediaStream
+       7 import java.io.File
+       8 import kotlin.test.assertEquals
+       9 import kotlin.test.assertIs
+      10 import kotlin.test.assertNull
+     … +173 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the coordinator that binds downloads to the signed-in account and rebuilds
+  on account change.
+
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadCoordina
+       tor.kt)
+  ⎿  Wrote 138 lines to src/main/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/DownloadCoordinator.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.data.AppDirectories
+       4 import dk.perspektiva.ttsroad.desktop.data.AppLog
+       5 import dk.perspektiva.ttsroad.desktop.data.SessionState
+       6 import dk.perspektiva.ttsroad.desktop.data.SessionStore
+       7 import dk.perspektiva.ttsroad.desktop.data.StorageIdentity
+       8 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
+       9 import java.io.File
+      10 import kotlinx.coroutines.CoroutineDispatcher
+     … +156 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now wire it into the composition root and test the account-switching
+  behaviour.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Write(src/test/kotlin/dk/perspektiva/ttsroad/desktop/download/DownloadCoordina
+       torTest.kt)
+  ⎿  Wrote 134 lines to src/test/kotlin/dk/perspektiva/ttsroad/desktop/down
+     load/DownloadCoordinatorTest.kt
+       1 package dk.perspektiva.ttsroad.desktop.download
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.FakeRepository
+       4 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
+       5 import dk.perspektiva.ttsroad.desktop.data.SessionState
+       6 import java.io.File
+       7 import kotlin.test.assertEquals
+       8 import kotlin.test.assertNotEquals
+       9 import kotlin.test.assertNull
+      10 import kotlin.test.assertTrue
+     … +147 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me run the full gate and commit this layer.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now the UI — per-row actions and "Download next 10". Let me look at the
+  chapter list screen.
+
+  Ran 1 shell command (ctrl+o to expand)
+● There's already a ChapterDownloadSlot — let me see what's there.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The slot was reserved for exactly this. Let me build the row model and
+  actions.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/ui/FictionDetailScreen.k
+        t)
+  ⎿  Added 38 lines, removed 4 lines
+       97  private const val ChapterListHeaderItems = 1
+       98  
+       99  /**
+      100 - * Whether a chapter is available offline.                    
+      100 + * Where a chapter stands with the download queue.            
+      101   *
+      102 - * The offline phase owns this; the chapter row already reserv
+          -es the slot so that landing it is a                           
+      103 - * change to one function rather than to the row's layout. [Un
+          -available] renders nothing at all —                           
+      104 - * shipping a greyed-out download button that cannot be presse
+          -d would be worse than shipping none.                          
+      102 + * [Unavailable] renders nothing at all — shipping a greyed-ou
+          +t download button that cannot be                              
+      103 + * pressed would be worse than shipping none — and is what a s
+          +igned-out session or a machine with no                        
+      104 + * writable data directory reports.                           
+      105   */
+      106  enum class ChapterDownloadState {
+      107      Unavailable,
+      108      NotDownloaded,
+      109 +    Queued,                                                   
+      110      Downloading,
+      111      Downloaded,
+      112 +    Failed,                                                   
+      113 +    Removing,                                                 
+      114  }
+      115  
+      116  /**
+      117 + * One chapter's download state as the row draws it.          
+      118 + *                                                            
+      119 + * [progress] is null when the server never reported a size: a
+          + determinate bar filling from a total                         
+      120 + * this app invented would be a lie, so those rows show an ind
+          +eterminate one instead.                                       
+      121 + */                                                           
+      122 +data class ChapterDownloadUi(                                 
+      123 +    val state: ChapterDownloadState = ChapterDownloadState.Una
+          +vailable,                                                     
+      124 +    val progress: Float? = null,                              
+      125 +    val failureMessage: String? = null,                       
+      126 +)                                                             
+      127 +                                                              
+      128 +/**                                                           
+      129 + * What the chapter list can ask the download queue to do.    
+      130 + *                                                            
+      131 + * Bundled rather than passed as six separate lambdas so the s
+          +creen's signature stays readable and                          
+      132 + * so a caller cannot wire half of them. Every action defaults
+          + to a no-op, which — combined with                            
+      133 + * `available = false` — is what makes the whole feature absen
+          +t rather than broken on a build or a                          
+      134 + * session that has no download storage.                      
+      135 + */                                                           
+      136 +data class ChapterDownloadsUi(                                
+      137 +    val available: Boolean = false,                           
+      138 +    val stateFor: (ChapterSummary) -> ChapterDownloadUi = { Ch
+          +apterDownloadUi() },                                          
+      139 +    val onDownload: (ChapterSummary) -> Unit = {},            
+      140 +    val onCancel: (ChapterSummary) -> Unit = {},              
+      141 +    val onDelete: (ChapterSummary) -> Unit = {},              
+      142 +    val onRetry: (ChapterSummary) -> Unit = {},               
+      143 +    /** "Download next 10", counted from the resume position r
+          +ather than from the top of the list. */                       
+      144 +    val onDownloadNext: () -> Unit = {},                      
+      145 +)                                                             
+      146 +                                                              
+      147 +/**                                                           
+      148   * One fiction and its chapters.
+      149   *
+      150   * The list is a [LazyColumn] whose only eager content is the 
+           header item, so a thousand-chapter
+
+● Now the row control itself — each state paired with the action it offers.
+
+● Update(src/main/kotlin/dk/perspektiva/ttsroad/desktop/ui/FictionDetailScreen.k
+        t)
+  ⎿  Added 92 lines, removed 13 lines
+      672  }
+      673  
+      674  /**
+      675 - * Reports offline availability; draws nothing when there is n
+          -othing to report.                                             
+      675 + * The row's download control: state and the one action that s
+          +tate affords.                                                 
+      676   *
+      677 - * Both [ChapterDownloadState.Unavailable] and [ChapterDownloa
+          -dState.NotDownloaded] are silent, for                         
+      678 - * different reasons: the first means this build cannot downlo
+          -ad anything, the second means this                            
+      679 - * chapter simply is not downloaded and there is (yet) no acti
+          -on to offer. The *download* control                           
+      680 - * itself belongs to the offline phase; this slot only ever re
+          -ports state.                                                  
+      677 + * Each state offers exactly one action, because a row that sh
+          +ows Download *and* Cancel *and* Delete                        
+      678 + * is a row nobody can read at a glance. [ChapterDownloadState
+          +.Removing] deliberately offers none —                         
+      679 + * the deletion is already happening and a second press would 
+          +have nothing to do.                                           
+      680 + *                                                            
+      681 + * The whole slot is absent for [ChapterDownloadState.Unavaila
+          +ble], which is what a session with no                         
+      682 + * download storage reports.                                  
+      683   */
+      684  @Composable
+      683 -private fun ChapterDownloadSlot(state: ChapterDownloadState) {
+      684 -    val (icon, description) = when (state) {                  
+      685 -        ChapterDownloadState.Unavailable, ChapterDownloadState
+          -.NotDownloaded -> return                                      
+      686 -        ChapterDownloadState.Downloading -> Icons.Default.Down
+          -loading to "Downloading"                                      
+      687 -        ChapterDownloadState.Downloaded -> Icons.Default.Offli
+          -nePin to "Available offline"                                  
+      685 +private fun ChapterDownloadSlot(                              
+      686 +    download: ChapterDownloadUi,                              
+      687 +    onDownload: () -> Unit,                                   
+      688 +    onCancel: () -> Unit,                                     
+      689 +    onDelete: () -> Unit,                                     
+      690 +    onRetry: () -> Unit,                                      
+      691 +) {                                                           
+      692 +    when (download.state) {                                   
+      693 +        ChapterDownloadState.Unavailable -> return            
+      694 +                                                              
+      695 +        ChapterDownloadState.NotDownloaded ->                 
+      696 +            RowIconAction(Icons.Default.Download, "Download", 
+          +AarisColor.InkDim, onDownload)                                
+      697 +                                                              
+      698 +        // A queued row has nothing to show but the fact that 
+          +it is waiting, and the useful action                          
+      699 +        // is the same one an in-flight row offers.           
+      700 +        ChapterDownloadState.Queued ->                        
+      701 +            RowIconAction(Icons.Default.Downloading, "Queued f
+          +or download — cancel", AarisColor.InkDim, onCancel)           
+      702 +                                                              
+      703 +        ChapterDownloadState.Downloading -> DownloadProgressAc
+          +tion(download.progress, onCancel)                             
+      704 +                                                              
+      705 +        ChapterDownloadState.Downloaded ->                    
+      706 +            RowIconAction(Icons.Default.OfflinePin, "Available
+          + offline — delete", AarisColor.Ok, onDelete)                  
+      707 +                                                              
+      708 +        ChapterDownloadState.Failed ->                        
+      709 +            RowIconAction(                                    
+      710 +                Icons.Default.ErrorOutline,                   
+      711 +                // The reason travels in the accessible descri
+          +ption rather than a tooltip, so a                             
+      712 +                // screen reader gets it too and a UI test can
+          + assert on it.                                                
+      713 +                download.failureMessage?.let { "Download faile
+          +d: $it — retry" } ?: "Download failed — retry",               
+      714 +                AarisColor.Danger,                            
+      715 +                onRetry,                                      
+      716 +            )                                                 
+      717 +                                                              
+      718 +        ChapterDownloadState.Removing ->                      
+      719 +            Box(Modifier.size(30.dp), contentAlignment = Align
+          +ment.Center) {                                                
+      720 +                CircularProgressIndicator(                    
+      721 +                    modifier = Modifier.size(14.dp).semantics 
+          +{ contentDescription = "Removing download" },                 
+      722 +                    strokeWidth = 2.dp,                       
+      723 +                    color = AarisColor.InkDim,                
+      724 +                )                                             
+      725 +            }                                                 
+      726      }
+      689 -    Box(Modifier.size(30.dp), contentAlignment = Alignment.Cen
+          -ter) {                                                        
+      690 -        Icon(icon, contentDescription = description, tint = Aa
+          -risColor.Ok, modifier = Modifier.size(18.dp))                 
+      691 -    }                                                         
+      727      Spacer(Modifier.width(4.dp))
+      728  }
+      729  
+      730 +/**                                                           
+      731 + * An in-flight download: a ring showing how far along it is, 
+          +and a click to cancel.                                        
+      732 + *                                                            
+      733 + * Indeterminate when the server never reported a size — a det
+          +erminate ring filling from a total                            
+      734 + * this app invented would be worse than an honest spinner.   
+      735 + */                                                           
+      736 +@Composable                                                   
+      737 +private fun DownloadProgressAction(progress: Float?, onCancel:
+          + () -> Unit) {                                                
+      738 +    val percent = progress?.let { " ${(it * 100).toInt()}%" }.
+          +orEmpty()                                                     
+      739 +    val interaction = remember { MutableInteractionSource() } 
+      740 +    val pointerOver by interaction.collectIsHoveredAsState()  
+      741 +    val focused by interaction.collectIsFocusedAsState()      
+      742 +    val active = pointerOver || focused                       
+      743 +    val description = "Downloading$percent — cancel"          
+      744 +    Box(                                                      
+      745 +        Modifier                                              
+      746 +            .size(30.dp)                                      
+      747 +            .background(if (active) AarisColor.BgHover else Co
+          +lor.Transparent)                                              
+      748 +            .border(1.dp, if (focused) AarisColor.Accent else 
+          +Color.Transparent)                                            
+      749 +            .hoverable(interaction)                           
+      750 +            .pointerHoverIcon(PointerIcon.Hand)               
+      751 +            .clickable(                                       
+      752 +                interactionSource = interaction,              
+      753 +                indication = null,                            
+      754 +                role = Role.Button,                           
+      755 +                onClick = onCancel,                           
+      756 +            )                                                 
+      757 +            .semantics { contentDescription = description },  
+      758 +        contentAlignment = Alignment.Center,                  
+      759 +    ) {                                                       
+      760 +        if (progress == null) {                               
+      761 +            CircularProgressIndicator(Modifier.size(16.dp), st
+          +rokeWidth = 2.dp, color = AarisColor.Accent)                  
+      762 +        } else {                                              
+      763 +            CircularProgressIndicator(                        
+      764 +                progress = { progress },                      
+      765 +                modifier = Modifier.size(16.dp),              
+      766 +                strokeWidth = 2.dp,                           
+      767 +                color = AarisColor.Accent,                    
+      768 +                trackColor = AarisColor.BgHover,              
+      769 +            )                                                 
+      770 +        }                                                     
+      771 +    }                                                         
+      772 +}                                                             
+      773 +                                                              
+      774  /** Borderless icon action used inside list rows. Always prese
+           nt; brightens on hover or focus. */
+      775  @Composable
+      776  private fun RowIconAction(
+
+● Now thread it through the screen, row, and bulk controls.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● Now the "Download next 10" bulk action alongside the existing bulk controls.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● Now wire the real download state into the screen from App.kt.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the binding between the download index and the row model.
+
+● Write(src/main/kotlin/dk/perspektiva/ttsroad/desktop/ui/ChapterDownloadsBindin
+       g.kt)
+  ⎿  Wrote 96 lines to src/main/kotlin/dk/perspektiva/ttsroad/desktop/ui/Ch
+     apterDownloadsBinding.kt
+       1 package dk.perspektiva.ttsroad.desktop.ui
+       2 
+       3 import androidx.compose.runtime.Composable
+       4 import androidx.compose.runtime.collectAsState
+       5 import androidx.compose.runtime.getValue
+       7 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+       8 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+       9 import dk.perspektiva.ttsroad.desktop.data.playbackOrder
+      10 import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinat
+         or
+     … +112 lines (ctrl+o to expand)
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● Now tests — the pure binding logic plus the row UI.
+
+● Write(src/test/kotlin/dk/perspektiva/ttsroad/desktop/ui/ChapterDownloadsBindin
+       gTest.kt)
+  ⎿  Wrote 154 lines to src/test/kotlin/dk/perspektiva/ttsroad/desktop/ui/C
+     hapterDownloadsBindingTest.kt
+       1 package dk.perspektiva.ttsroad.desktop.ui
+       2 
+       3 import dk.perspektiva.ttsroad.desktop.data.AudioInfo
+       4 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+       5 import dk.perspektiva.ttsroad.desktop.data.PlaybackInfo
+       6 import dk.perspektiva.ttsroad.desktop.download.DownloadEntry
+       7 import dk.perspektiva.ttsroad.desktop.download.DownloadState
+       8 import kotlin.test.assertEquals
+       9 import kotlin.test.assertNull
+      10 import kotlin.test.assertTrue
+     … +188 lines (ctrl+o to expand)
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● Now a UI test that the row actually renders each state and fires the right
+  action.
+
+  Ran 2 shell commands (ctrl+o to expand)
+  ⎿  You've hit your weekly limit · resets 1am (UTC)
+     /upgrade to increase your usage limit.
+
+✻ Sautéed for 18m 54s
