@@ -84,6 +84,8 @@ import dk.perspektiva.ttsroad.desktop.ui.PlayerScreen
 import dk.perspektiva.ttsroad.desktop.ui.ReaderScreen
 import dk.perspektiva.ttsroad.desktop.ui.SearchScreen
 import dk.perspektiva.ttsroad.desktop.ui.SearchStateHolder
+import dk.perspektiva.ttsroad.desktop.ui.ServerQueueScreen
+import dk.perspektiva.ttsroad.desktop.ui.ServerQueueStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.SettingsScreen
 import dk.perspektiva.ttsroad.desktop.ui.SettingsSection
 import dk.perspektiva.ttsroad.desktop.ui.SettingsStateHolder
@@ -92,6 +94,7 @@ import dk.perspektiva.ttsroad.desktop.ui.WindowSizeClass
 import dk.perspektiva.ttsroad.desktop.ui.fictionForHit
 import dk.perspektiva.ttsroad.desktop.ui.hasSession
 import dk.perspektiva.ttsroad.desktop.ui.rememberChapterDownloads
+import dk.perspektiva.ttsroad.desktop.ui.rememberChapterQueue
 import dk.perspektiva.ttsroad.desktop.ui.UpdateStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.windowSizeClassFor
@@ -129,6 +132,11 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     // the reader and *read* on a destination the user may never open, so a holder owned by the
     // bookmarks screen would give Ctrl+B nowhere to put anything.
     val bookmarks = rememberStateHolder(repository) { BookmarksStateHolder(repository) }
+    // Hoisted for the same reason: "Add to queue" is pressed on a chapter list, so the queue has to
+    // exist and report what happened whether or not the queue screen was ever opened.
+    val serverQueue = rememberStateHolder(repository, playback) {
+        ServerQueueStateHolder(repository, playback)
+    }
 
     // Capability discovery is the only source of the server's stable advertised identity. Feed it
     // into the download namespace as soon as it arrives; using it only for feature flags would
@@ -153,6 +161,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             Destination.Settings, Destination.Devices -> settings.refreshCurrentSection()
             Destination.Search -> search.refresh()
             Destination.Bookmarks -> bookmarks.refresh()
+            Destination.Queue -> serverQueue.refresh()
             Destination.Player, is Destination.Reader -> Unit
         }
     }
@@ -283,6 +292,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             settings.sessionEnded()
             search.sessionEnded()
             bookmarks.sessionEnded()
+            serverQueue.sessionEnded()
         } else {
             // Cheap, and it is what makes optional UI correct after a restart, where login did
             // not run but a keyring-backed session was restored.
@@ -355,6 +365,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                         // where the server cannot answer, rather than one that leads to a 404.
                         showBookmarks = capabilities.bookmarks,
                         compact = sizeClass == WindowSizeClass.Compact,
+                        queueAvailable = capabilities.queue,
                         onBack = { nav.back() },
                         onRefresh = ::refreshCurrentScreen,
                         onSelect = { nav.open(it) },
@@ -427,6 +438,11 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                             Destination.Reader(chapter.resolvedChapterId, chapter.resolvedTitle),
                                         )
                                     },
+                                    queue = rememberChapterQueue(
+                                        holder = serverQueue,
+                                        available = capabilities.queue,
+                                        fictionId = destination.fiction.id,
+                                    ),
                                 )
 
                                 Destination.Player -> PlayerScreen(
@@ -470,6 +486,21 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                                 Destination.Settings
                                             },
                                         )
+                                    },
+                                )
+
+                                Destination.Queue -> ServerQueueScreen(
+                                    holder = serverQueue,
+                                    playback = playback,
+                                    onBack = { nav.back() },
+                                    // A queue row routinely names a fiction the user has never
+                                    // opened, so the cached library is often a miss. Prefer its
+                                    // richer summary when it is there, and fall back to the one
+                                    // the row itself carries rather than doing nothing.
+                                    onOpenFiction = { item ->
+                                        val known = cache.library.value.value?.fictions
+                                            ?.firstOrNull { it.id == item.fictionId }
+                                        nav.open(Destination.Fiction(known ?: item.toFictionSummary()))
                                     },
                                 )
 
@@ -520,7 +551,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
 private val Destination.isRefreshable: Boolean
     get() = when (this) {
         Destination.Library, is Destination.Fiction, Destination.Settings, Destination.Devices,
-        Destination.Bookmarks,
+        Destination.Bookmarks, Destination.Queue,
         -> true
         // Refresh re-runs the query the results belong to; it is dead until one has been run, but
         // enabling it is cheaper to reason about than a state-dependent header button.
@@ -536,6 +567,8 @@ private fun HeaderBar(
     canRefresh: Boolean,
     showBookmarks: Boolean,
     compact: Boolean,
+    /** Capability-gated: no entry at all on a server with no shared queue. */
+    queueAvailable: Boolean,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSelect: (Destination) -> Unit,
@@ -594,6 +627,9 @@ private fun HeaderBar(
                 NavItem("Bookmarks", active = current == Destination.Bookmarks) {
                     onSelect(Destination.Bookmarks)
                 }
+            }
+            if (queueAvailable) {
+                NavItem("Queue", active = current == Destination.Queue) { onSelect(Destination.Queue) }
             }
             NavItem(
                 "Settings",

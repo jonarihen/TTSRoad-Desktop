@@ -41,6 +41,7 @@ class AppNavigationTest {
             Destination.Player,
             Destination.Reader(101, "Chapter 3"),
             Destination.Bookmarks,
+            Destination.Queue,
             Destination.Settings,
             Destination.Devices,
         )
@@ -56,6 +57,19 @@ class AppNavigationTest {
         stack = stack.navigateTo(Destination.Bookmarks)
 
         assertEquals(listOf(Destination.Library, Destination.Bookmarks), stack)
+    /**
+     * The queue is a place, so re-opening it pops back rather than stacking a second copy — the
+     * same rule every other destination follows, and what keeps Back predictable after
+     * Library → Queue → Fiction → Queue.
+     */
+    @Test
+    fun `re-opening the queue pops back to it`() {
+        val stack = rootBackStack
+            .navigateTo(Destination.Queue)
+            .navigateTo(fiction(7))
+            .navigateTo(Destination.Queue)
+
+        assertEquals(listOf(Destination.Library, Destination.Queue), stack)
     }
 
     // --- Push / pop ------------------------------------------------------------------------

@@ -2,6 +2,11 @@ package dk.perspektiva.ttsroad.desktop.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,23 +17,41 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -43,6 +66,60 @@ import coil3.compose.SubcomposeAsyncImageContent
 val ContentMaxWidth = 1200.dp
 val NarrowMaxWidth = 560.dp
 val PageGutter = 28.dp
+
+/**
+ * Borderless icon action used inside list rows. Always present; brightens on hover or focus.
+ *
+ * Shared rather than per-screen so a chapter row and a queue row afford their actions identically —
+ * same hit target, same focus border, same "the clickable node carries the description" rule that
+ * screen readers and tests both depend on.
+ */
+@Composable
+fun RowIconAction(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pointerOver by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    val active = (pointerOver || focused) && enabled
+    // Bound to a local before entering the semantics lambda: inside it, the bare name resolves to
+    // the write-only semantics property rather than to this parameter.
+    val description = contentDescription
+    Box(
+        Modifier
+            .size(30.dp)
+            .background(if (active) AarisColor.BgHover else Color.Transparent)
+            .border(1.dp, if (focused && enabled) AarisColor.Accent else Color.Transparent)
+            .hoverable(interaction, enabled = enabled)
+            .let { if (enabled) it.pointerHoverIcon(PointerIcon.Hand) else it }
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            // On the clickable node rather than on the icon: that is the node a screen reader
+            // lands on and the node a test asks for by description.
+            .semantics { this.contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = when {
+                !enabled -> AarisColor.Dim
+                active -> AarisColor.Ink
+                else -> tint
+            },
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
 
 @Composable
 fun SectionTitle(kicker: String, title: String) {
@@ -223,4 +300,72 @@ fun formatDuration(ms: Long): String {
     val m = (total % 3600) / 60
     val sec = total % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+}
+
+/**
+ * The one dialog every irreversible action goes through.
+ *
+ * Keyboard behaviour is the point of the extra wiring: Escape dismisses (explicitly, rather than
+ * relying on the platform mapping), and focus lands on CANCEL — so the key a user hits reflexively
+ * is the safe one, never the destructive one.
+ *
+ * Shared rather than owned by Settings so every screen that asks before destroying something asks
+ * the same way; a second copy is a second place for the focus rule to be forgotten.
+ */
+@Composable
+fun ConfirmDialog(
+    title: String,
+    body: String,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val cancelFocus = remember { FocusRequester() }
+    LaunchedEffect(title) { runCatching { cancelFocus.requestFocus() } }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .semantics { paneTitle = title },
+        containerColor = AarisColor.BgRaise,
+        title = { Text(title, style = MaterialTheme.typography.titleLarge, color = AarisColor.Ink) },
+        text = { Text(body, style = MaterialTheme.typography.bodyMedium, color = AarisColor.Muted) },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                shape = RectangleShape,
+                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+            ) { Text(confirmLabel) }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RectangleShape,
+                modifier = Modifier.focusRequester(cancelFocus).pointerHoverIcon(PointerIcon.Hand),
+            ) { Text("CANCEL") }
+        },
+    )
+}
+
+/**
+ * A bulk action above a list.
+ *
+ * Disabled — rather than hidden — when there is nothing left to change, so the affordance stays in
+ * the same place and a keyboard user's tab order does not shift under them mid-session.
+ */
+@Composable
+fun BulkAction(label: String, enabled: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RectangleShape,
+        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+    ) { MetaText(label, color = if (enabled) AarisColor.Ink else AarisColor.Dim) }
 }

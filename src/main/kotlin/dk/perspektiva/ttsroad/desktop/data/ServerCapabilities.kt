@@ -52,6 +52,14 @@ data class ServerCapabilities(
      */
     val follows: Boolean = false,
     val deviceManagement: Boolean = false,
+    /**
+     * A server-side cross-library queue this client can read and mutate.
+     *
+     * False means the account has no shared queue at all on that server — not that it is empty — so
+     * the surface is hidden rather than shown holding nothing. The local per-fiction queue the
+     * player builds is unaffected either way; the two are different things (see [ServerQueueItem]).
+     */
+    val queue: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -82,6 +90,7 @@ data class ServerCapabilities(
             audioContentHash = response.capabilities.flag("audio_content_hash"),
             follows = response.capabilities.flag("follows"),
             deviceManagement = response.capabilities.flag("device_management"),
+            queue = response.capabilities.flag("queue"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
         )

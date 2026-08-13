@@ -145,4 +145,18 @@ interface TtsRoadApi {
     /** Soft delete, idempotent: a second call answers the first one's tombstone, not a 404. */
     @DELETE("api/mobile/bookmarks/{bookmark_id}")
     suspend fun deleteBookmark(@Path("bookmark_id") bookmarkId: Int): BookmarkDeleteResponse
+
+    /**
+     * The account's cross-library queue. Advertised as the `queue` capability; 404 on an older
+     * server, which is the only signal available because the endpoint is additive.
+     */
+    @GET("api/mobile/queue")
+    suspend fun queue(): ServerQueueResponse
+
+    /**
+     * Every queue mutation. The response is the whole queue as the server now holds it, so the
+     * caller replaces its copy rather than predicting what the action did.
+     */
+    @POST("api/mobile/queue")
+    suspend fun updateQueue(@Body request: ServerQueueRequest): ServerQueueResponse
 }

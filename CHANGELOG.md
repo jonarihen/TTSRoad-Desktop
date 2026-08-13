@@ -18,6 +18,16 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The account's cross-library queue, shared with the web client, as a browsable surface of its own.
+  Chapter rows gain "Play next" and "Add to queue", the chapter list gains "Queue unplayed", and the
+  queue screen can reorder, remove and clear. Shown only on a server that advertises the capability.
+
+  Playing from the queue starts that chapter's fiction through the ordinary player, so what happens
+  at the end of a chapter — including offline — is unchanged. The account's "when the queue is
+  empty" preference is therefore displayed rather than acted on; see `docs/adr/0011`.
+
 ## [1.0.2] - 2026-08-10
 
 ### Fixed

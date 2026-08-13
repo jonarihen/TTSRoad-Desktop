@@ -163,6 +163,20 @@ apply to audio.
   `/api/me/preferences` keys. PATCH must never echo unrelated account settings. Preserve the server
   ranges (font 14–30, line height 1.3–2.4) and dark/sepia/light + sentence/word/off vocabularies.
 
+### The server queue, which is not the player's queue
+
+`data/ServerQueue.kt` + `ui/ServerQueueStateHolder.kt` model the account's cross-library queue
+(`/api/mobile/queue`, capability `queue`). It is a **browsable surface**: playing a row opens that
+row's fiction and starts it through the ordinary player, so end-of-chapter behaviour is untouched
+and the local queue keeps working offline. `advance` is deliberately never called — it would put the
+network in the path of auto-advance — so `queue_when_empty` is displayed and not honoured, and the
+screen says so. The `Server` prefix separates it from `player.QueueItem`: one is a curated
+cross-fiction list, the other is derived reading order for one book. Every mutation republishes the
+server's whole answer rather than predicting it; `reorder` sends the complete order and an
+out-of-range move answers the *same* list; removal addresses queue-row ids, never chapter ids,
+because the same chapter can be queued twice. A 404 is null ("no shared queue on this server") and
+is not an empty queue. See ADR 0011.
+
 ### MPRIS
 
 `player/MprisState.kt` is pure Kotlin with no D-Bus type in it — that's where the audiobook mapping
@@ -312,7 +326,7 @@ device sessions and Settings (0003), navigation (0004), chapter browsing (0005),
 preferences / sleep timer / MPRIS / shortcuts (0006). Read the relevant one before changing any of
 the invariants above; offline storage and caching are in 0007, read-along is in 0008, and Debian
 packaging/operations are in 0009, and releases/update checking are in 0010. They exist because
-the alternative was tried or measured.
+the alternative was tried or measured. The cross-library server queue is in 0011.
 
 ## CI
 

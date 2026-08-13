@@ -27,6 +27,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Check
@@ -153,6 +155,25 @@ data class ChapterDownloadsUi(
 )
 
 /**
+ * The chapter list's link to the account's server-side queue.
+ *
+ * Absent by default and hidden entirely when [available] is false, so a server without the `queue`
+ * capability shows a chapter list with no controls that would 404. [notice] is the holder's, not
+ * this screen's: the queue is hoisted above navigation, so "Added 2 chapters to the queue" is the
+ * same message whether the user is looking at the chapter list or the queue when it arrives.
+ */
+data class ChapterQueueUi(
+    val available: Boolean = false,
+    val busy: Boolean = false,
+    val notice: String? = null,
+    val error: String? = null,
+    val onAddToQueue: (List<Int>) -> Unit = {},
+    val onPlayNext: (List<Int>) -> Unit = {},
+    /** Server-side `fill` from this fiction's unplayed chapters — the server picks, not the client. */
+    val onQueueUnplayed: () -> Unit = {},
+)
+
+/**
  * One fiction and its chapters.
  *
  * The list is a [LazyColumn] whose only eager content is the header item, so a thousand-chapter
@@ -169,6 +190,7 @@ fun FictionDetailScreen(
     onBack: () -> Unit,
     onOpenReader: (ChapterSummary) -> Unit = {},
     downloads: ChapterDownloadsUi = ChapterDownloadsUi(),
+    queue: ChapterQueueUi = ChapterQueueUi(),
     nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     val scope = rememberCoroutineScope()
@@ -309,6 +331,14 @@ fun FictionDetailScreen(
                         Spacer(Modifier.height(12.dp))
                         Text(message, color = MaterialTheme.colorScheme.error)
                     }
+                    queue.error?.let { message ->
+                        Spacer(Modifier.height(12.dp))
+                        Text(message, color = MaterialTheme.colorScheme.error)
+                    }
+                    queue.notice?.let { message ->
+                        Spacer(Modifier.height(12.dp))
+                        MetaText(message, color = AarisColor.Ok)
+                    }
 
                     when {
                         loaded == null && error != null -> {
@@ -334,6 +364,7 @@ fun FictionDetailScreen(
                                 onMarkAllUnplayed = { mark(unplayedAllIds, played = false) },
                                 downloadsAvailable = downloads.available,
                                 onDownloadNext = downloads.onDownloadNext,
+                                queue = queue,
                             )
                             Spacer(Modifier.height(8.dp))
                         }
@@ -372,6 +403,7 @@ fun FictionDetailScreen(
                         readAlongAvailable = capabilities.readAlong,
                         readAlongTimed = chapter.hasTimings,
                         download = downloads.stateFor(chapter),
+                        queue = queue,
                         onPlay = { play(chapter) },
                         onMarkPlayed = { played -> mark(listOf(chapter.resolvedChapterId), played) },
                         onMarkPrevious = {
@@ -423,6 +455,7 @@ private fun ChapterListControls(
     onMarkAllUnplayed: () -> Unit,
     downloadsAvailable: Boolean,
     onDownloadNext: () -> Unit,
+    queue: ChapterQueueUi,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -452,6 +485,11 @@ private fun ChapterListControls(
                     onClick = onDownloadNext,
                 )
             }
+            // Server-side `fill`: the backend picks this fiction's unplayed chapters itself, which
+            // is both fewer round trips and the same answer every client gets.
+            if (queue.available) {
+                BulkAction("Queue unplayed", enabled = !queue.busy, onClick = queue.onQueueUnplayed)
+            }
         }
     }
 }
@@ -476,22 +514,6 @@ private fun SegmentTab(label: String, selected: Boolean, onSelect: () -> Unit) {
     ) {
         MetaText(label, color = if (selected) AarisColor.Accent else AarisColor.Muted)
     }
-}
-
-/**
- * A bulk mark.
- *
- * Disabled — rather than hidden — when there is nothing left to change, so the affordance stays in
- * the same place and a keyboard user's tab order does not shift under them mid-session.
- */
-@Composable
-private fun BulkAction(label: String, enabled: Boolean, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        shape = RectangleShape,
-        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-    ) { MetaText(label, color = if (enabled) AarisColor.Ink else AarisColor.Dim) }
 }
 
 /** Returns the reader to the chapter that is playing after they have scrolled away from it. */
@@ -696,6 +718,7 @@ private fun ChapterListRow(
     readAlongAvailable: Boolean,
     readAlongTimed: Boolean,
     download: ChapterDownloadUi,
+    queue: ChapterQueueUi,
     onPlay: () -> Unit,
     onMarkPlayed: (Boolean) -> Unit,
     onMarkPrevious: () -> Unit,
@@ -777,6 +800,26 @@ private fun ChapterListRow(
             onDelete = onDeleteDownload,
             onRetry = onRetryDownload,
         )
+        // Only for a chapter that can actually be queued: the server drops an id with no audio, so
+        // offering the action on a converting chapter would be a button that reports nothing added.
+        if (queue.available && playable) {
+            RowIconAction(
+                icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                contentDescription = "Play ${chapter.resolvedTitle} next",
+                tint = if (active) AarisColor.Ink else AarisColor.Dim,
+                enabled = !queue.busy,
+                onClick = { queue.onPlayNext(listOf(chapter.resolvedChapterId)) },
+            )
+            Spacer(Modifier.width(4.dp))
+            RowIconAction(
+                icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                contentDescription = "Add ${chapter.resolvedTitle} to the queue",
+                tint = if (active) AarisColor.Ink else AarisColor.Dim,
+                enabled = !queue.busy,
+                onClick = { queue.onAddToQueue(listOf(chapter.resolvedChapterId)) },
+            )
+            Spacer(Modifier.width(4.dp))
+        }
         if (readAlongAvailable) {
             RowIconAction(
                 icon = Icons.AutoMirrored.Filled.MenuBook,
@@ -910,43 +953,6 @@ private fun DownloadProgressAction(progress: Float?, onCancel: () -> Unit) {
                 trackColor = AarisColor.BgHover,
             )
         }
-    }
-}
-
-/** Borderless icon action used inside list rows. Always present; brightens on hover or focus. */
-@Composable
-private fun RowIconAction(
-    icon: ImageVector,
-    contentDescription: String,
-    tint: Color,
-    onClick: () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val pointerOver by interaction.collectIsHoveredAsState()
-    val focused by interaction.collectIsFocusedAsState()
-    val active = pointerOver || focused
-    // Bound to a local before entering the semantics lambda: inside it, the bare name resolves to
-    // the write-only semantics property rather than to this parameter.
-    val description = contentDescription
-    Box(
-        Modifier
-            .size(30.dp)
-            .background(if (active) AarisColor.BgHover else Color.Transparent)
-            .border(1.dp, if (focused) AarisColor.Accent else Color.Transparent)
-            .hoverable(interaction)
-            .pointerHoverIcon(PointerIcon.Hand)
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                role = Role.Button,
-                onClick = onClick,
-            )
-            // On the clickable node rather than on the icon: that is the node a screen reader
-            // lands on and the node a test asks for by description.
-            .semantics { this.contentDescription = description },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, contentDescription = null, tint = if (active) AarisColor.Ink else tint, modifier = Modifier.size(18.dp))
     }
 }
 

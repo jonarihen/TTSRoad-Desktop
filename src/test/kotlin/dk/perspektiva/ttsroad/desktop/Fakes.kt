@@ -13,6 +13,8 @@ import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.PlaybackMarkResponse
 import dk.perspektiva.ttsroad.desktop.data.PlaybackStateRow
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
+import dk.perspektiva.ttsroad.desktop.data.ServerQueueRequest
+import dk.perspektiva.ttsroad.desktop.data.ServerQueueResponse
 import dk.perspektiva.ttsroad.desktop.data.SessionEnd
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.player.PlayerUiState
@@ -53,6 +55,8 @@ open class FakeRepository(
     var createBookmarkResult: Result<Bookmark?> = Result.success(Bookmark(id = 1)),
     var updateBookmarkResult: Result<Bookmark?> = Result.success(Bookmark(id = 1)),
     var deleteBookmarkResult: Result<Boolean> = Result.success(true),
+    /** `success(null)` is the server saying it has no queue API — not "the queue is empty". */
+    var queueResult: Result<ServerQueueResponse?> = Result.success(ServerQueueResponse()),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -87,6 +91,11 @@ open class FakeRepository(
 
     /** `(fictionId, following)` pairs passed to [setFollowing], in order. */
     val followCalls: MutableList<Pair<Int, Boolean>> = mutableListOf()
+    var queueCalls: Int = 0
+        private set
+
+    /** Every queue mutation body, in order — the action and what it addressed are both observable. */
+    val queueRequests: MutableList<ServerQueueRequest> = mutableListOf()
     val markedPlayed: MutableList<Pair<List<Int>, Boolean>> = mutableListOf()
     val savedProgress: MutableList<Triple<Int, Double, Boolean>> = mutableListOf()
 
@@ -233,6 +242,14 @@ open class FakeRepository(
     override suspend fun deleteBookmark(bookmarkId: Int): Boolean {
         deletedBookmarks += bookmarkId
         return deleteBookmarkResult.getOrThrow()
+    override suspend fun serverQueue(): ServerQueueResponse? {
+        queueCalls++
+        return queueResult.getOrThrow()
+    }
+
+    override suspend fun updateServerQueue(request: ServerQueueRequest): ServerQueueResponse? {
+        queueRequests += request
+        return queueResult.getOrThrow()
     }
 
     override suspend fun saveProgress(
