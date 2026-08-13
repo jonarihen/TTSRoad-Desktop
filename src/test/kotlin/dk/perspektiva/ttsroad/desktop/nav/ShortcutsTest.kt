@@ -155,6 +155,42 @@ class ShortcutsTest {
         }
     }
 
+    // --- Bookmarks ----------------------------------------------------------------------------
+
+    @Test
+    fun `Ctrl-B marks the spot and Ctrl-Shift-B opens the list`() {
+        assertEquals(AppShortcut.AddBookmark, shortcutFor(Key.B, KeyEventType.KeyDown, ctrl = true))
+        // Checked before the bare mark, so the list shortcut does not also bookmark on its way past.
+        assertEquals(
+            AppShortcut.OpenBookmarks,
+            shortcutFor(Key.B, KeyEventType.KeyDown, ctrl = true, shift = true),
+        )
+    }
+
+    @Test
+    fun `Cmd-B marks the spot, for the mac build`() {
+        assertEquals(AppShortcut.AddBookmark, shortcutFor(Key.B, KeyEventType.KeyDown, meta = true))
+    }
+
+    @Test
+    fun `an unmodified B is a letter, not a shortcut`() {
+        assertNull(shortcutFor(Key.B, KeyEventType.KeyDown))
+    }
+
+    @Test
+    fun `both bookmark shortcuts stay live while typing`() {
+        // Checked against the one text field that could plausibly claim Ctrl+B: the library's
+        // search box is a plain text field with no bold to toggle, so nothing consumes it.
+        assertEquals(
+            AppShortcut.AddBookmark,
+            shortcutFor(Key.B, KeyEventType.KeyDown, ctrl = true, textInputFocused = true),
+        )
+        assertEquals(
+            AppShortcut.OpenBookmarks,
+            shortcutFor(Key.B, KeyEventType.KeyDown, ctrl = true, shift = true, textInputFocused = true),
+        )
+    }
+
     @Test
     fun `the help table is not empty and every row is filled in`() {
         assertTrue(ShortcutHelpTable.isNotEmpty())

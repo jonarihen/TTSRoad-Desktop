@@ -39,6 +39,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,6 +60,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import dk.perspektiva.ttsroad.desktop.data.Bookmark
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
 import dk.perspektiva.ttsroad.desktop.nav.AppShortcut
@@ -69,6 +71,8 @@ import dk.perspektiva.ttsroad.desktop.nav.escapeAction
 import dk.perspektiva.ttsroad.desktop.nav.key
 import dk.perspektiva.ttsroad.desktop.nav.shortcutFor
 import dk.perspektiva.ttsroad.desktop.ui.AarisColor
+import dk.perspektiva.ttsroad.desktop.ui.BookmarksScreen
+import dk.perspektiva.ttsroad.desktop.ui.BookmarksStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.ContentMaxWidth
 import dk.perspektiva.ttsroad.desktop.ui.FictionDetailScreen
 import dk.perspektiva.ttsroad.desktop.ui.LibraryScreen
@@ -91,6 +95,7 @@ import dk.perspektiva.ttsroad.desktop.ui.rememberChapterDownloads
 import dk.perspektiva.ttsroad.desktop.ui.UpdateStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.windowSizeClassFor
+import kotlinx.coroutines.launch
 
 /**
  * Root composable. The object graph is *passed in*, not built here — see [AppContainer]. The
@@ -120,6 +125,10 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     // Hoisted for the same reason: following a hit and coming back must find the results still
     // there. A search you have to run twice to use is not a search.
     val search = rememberStateHolder(repository) { SearchStateHolder(repository) }
+    // Hoisted for a sharper reason than the other two: bookmarks are *written* from the player and
+    // the reader and *read* on a destination the user may never open, so a holder owned by the
+    // bookmarks screen would give Ctrl+B nowhere to put anything.
+    val bookmarks = rememberStateHolder(repository) { BookmarksStateHolder(repository) }
 
     // Capability discovery is the only source of the server's stable advertised identity. Feed it
     // into the download namespace as soon as it arrives; using it only for feature flags would
@@ -135,13 +144,45 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     val nav = remember { NavigationState(onDestinationDropped = screenState::removeState) }
     val playerState by playback.state.collectAsState()
 
+    val scope = rememberCoroutineScope()
+
     fun refreshCurrentScreen() {
         when (val destination = nav.current) {
             Destination.Library -> cache.refreshLibrary()
             is Destination.Fiction -> cache.refreshChapters(destination.fiction.id)
             Destination.Settings, Destination.Devices -> settings.refreshCurrentSection()
             Destination.Search -> search.refresh()
+            Destination.Bookmarks -> bookmarks.refresh()
             Destination.Player, is Destination.Reader -> Unit
+        }
+    }
+
+    /**
+     * Marks the spot that is playing.
+     *
+     * Takes the position from the player rather than from whatever screen is on top, so Ctrl+B in
+     * the library marks the chapter that is *playing* — the only position the app can honestly
+     * claim the user meant. The reader passes its own sentence text as a label; see below.
+     */
+    fun addBookmark(label: String? = null) {
+        val chapterId = playerState.queue.getOrNull(playerState.currentIndex)?.chapterId ?: 0
+        if (chapterId > 0) bookmarks.add(chapterId, playerState.positionMs, label)
+    }
+
+    /**
+     * Opens a mark: loads its fiction, queues it, and starts *at the mark* rather than at the
+     * chapter's saved resume position — the whole point of having clicked it.
+     *
+     * Fetched through the repository rather than the library cache because this screen has no
+     * fiction context at all: a bookmark can point at a serial the session has never opened.
+     */
+    fun openBookmark(bookmark: Bookmark) {
+        val fictionId = bookmark.fictionId ?: return
+        val chapterId = bookmark.chapterId ?: return
+        scope.launch {
+            val loaded = runCatching { repository.chapters(fictionId) }.getOrNull() ?: return@launch
+            playback.playQueue(loaded.chapters, chapterId, loaded.fiction, bookmark.positionMs)
+            nav.open(Destination.Player)
         }
     }
 
@@ -208,6 +249,15 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                 true
             }
 
+            // Both are inert on a server with no bookmark API, and report themselves unhandled so
+            // the key falls through rather than being silently swallowed by a feature that is not
+            // there.
+            AppShortcut.AddBookmark -> capabilities.bookmarks && whenPlaying { addBookmark() }
+
+            AppShortcut.OpenBookmarks -> capabilities.bookmarks.also {
+                if (it) nav.open(Destination.Bookmarks)
+            }
+
             AppShortcut.ShowShortcuts -> {
                 showShortcuts = true
                 true
@@ -232,6 +282,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             container.readAlongCache.clear()
             settings.sessionEnded()
             search.sessionEnded()
+            bookmarks.sessionEnded()
         } else {
             // Cheap, and it is what makes optional UI correct after a restart, where login did
             // not run but a keyring-backed session was restored.
@@ -300,6 +351,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                         current = nav.current,
                         canGoBack = nav.canGoBack,
                         canRefresh = nav.current.isRefreshable,
+                        // Gated the way the speed and skip-silence controls are: no entry at all
+                        // where the server cannot answer, rather than one that leads to a 404.
+                        showBookmarks = capabilities.bookmarks,
                         compact = sizeClass == WindowSizeClass.Compact,
                         onBack = { nav.back() },
                         onRefresh = ::refreshCurrentScreen,
@@ -380,9 +434,17 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     sizeClass = sizeClass,
                                     preferences = container.playbackPreferences,
                                     readAlongAvailable = capabilities.readAlong,
+                                    bookmarksAvailable = capabilities.bookmarks,
+                                    onAddBookmark = { addBookmark() },
                                     onOpenReader = { chapterId, title ->
                                         nav.open(Destination.Reader(chapterId, title))
                                     },
+                                    onBack = { nav.back() },
+                                )
+
+                                Destination.Bookmarks -> BookmarksScreen(
+                                    holder = bookmarks,
+                                    onOpen = ::openBookmark,
                                     onBack = { nav.back() },
                                 )
 
@@ -417,6 +479,14 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     cache = container.readAlongCache,
                                     preferences = container.readerPreferences,
                                     playback = playback,
+                                    bookmarksAvailable = capabilities.bookmarks,
+                                    // The reader knows which *sentence* is being narrated, so it
+                                    // supplies both a precise position and a label made of the
+                                    // words themselves — the thing this client can do that a
+                                    // phone reaching for a transport button cannot.
+                                    onAddBookmark = { positionMs, label ->
+                                        bookmarks.add(destination.chapterId, positionMs, label)
+                                    },
                                     onBack = { nav.back() },
                                     onChapterAdvanced = { chapterId, title ->
                                         nav.replaceTop(Destination.Reader(chapterId, title))
@@ -449,7 +519,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
 /** Whether the Refresh action means anything on this destination. */
 private val Destination.isRefreshable: Boolean
     get() = when (this) {
-        Destination.Library, is Destination.Fiction, Destination.Settings, Destination.Devices -> true
+        Destination.Library, is Destination.Fiction, Destination.Settings, Destination.Devices,
+        Destination.Bookmarks,
+        -> true
         // Refresh re-runs the query the results belong to; it is dead until one has been run, but
         // enabling it is cheaper to reason about than a state-dependent header button.
         Destination.Search -> true
@@ -462,6 +534,7 @@ private fun HeaderBar(
     current: Destination,
     canGoBack: Boolean,
     canRefresh: Boolean,
+    showBookmarks: Boolean,
     compact: Boolean,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
@@ -517,6 +590,11 @@ private fun HeaderBar(
                 "Library",
                 active = current == Destination.Library || current is Destination.Fiction,
             ) { onSelect(Destination.Library) }
+            if (showBookmarks) {
+                NavItem("Bookmarks", active = current == Destination.Bookmarks) {
+                    onSelect(Destination.Bookmarks)
+                }
+            }
             NavItem(
                 "Settings",
                 active = current == Destination.Settings || current == Destination.Devices,

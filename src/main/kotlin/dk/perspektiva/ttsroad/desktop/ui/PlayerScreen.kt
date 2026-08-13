@@ -91,6 +91,9 @@ fun PlayerScreen(
      */
     preferences: PlaybackPreferencesStore = remember { InMemoryPlaybackPreferencesStore() },
     readAlongAvailable: Boolean = false,
+    /** Capability-gated like read-along: no control at all where the server has no bookmark API. */
+    bookmarksAvailable: Boolean = false,
+    onAddBookmark: () -> Unit = {},
     onOpenReader: (chapterId: Int, title: String) -> Unit = { _, _ -> },
     onBack: () -> Unit,
 ) {
@@ -114,6 +117,8 @@ fun PlayerScreen(
                     preferences,
                     compact = true,
                     readAlongAvailable = readAlongAvailable,
+                    bookmarksAvailable = bookmarksAvailable,
+                    onAddBookmark = onAddBookmark,
                     onOpenReader = onOpenReader,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -131,6 +136,8 @@ fun PlayerScreen(
                         preferences,
                         compact = false,
                         readAlongAvailable = readAlongAvailable,
+                        bookmarksAvailable = bookmarksAvailable,
+                        onAddBookmark = onAddBookmark,
                         onOpenReader = onOpenReader,
                         modifier = Modifier.align(Alignment.TopCenter).widthIn(max = NarrowMaxWidth)
                             .fillMaxWidth().fillMaxHeight(),
@@ -153,6 +160,8 @@ private fun PlayerMain(
     preferences: PlaybackPreferencesStore,
     compact: Boolean,
     readAlongAvailable: Boolean,
+    bookmarksAvailable: Boolean,
+    onAddBookmark: () -> Unit,
     onOpenReader: (chapterId: Int, title: String) -> Unit,
     modifier: Modifier,
 ) {
@@ -188,16 +197,23 @@ private fun PlayerMain(
             MetaText(it)
         }
         val chapterId = s.queue.getOrNull(s.currentIndex)?.chapterId ?: 0
-        if (readAlongAvailable && chapterId > 0) {
+        if ((readAlongAvailable || bookmarksAvailable) && chapterId > 0) {
             Spacer(Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = { onOpenReader(chapterId, s.title) },
-                shape = androidx.compose.ui.graphics.RectangleShape,
-                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("READ ALONG")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (readAlongAvailable) {
+                    OutlinedButton(
+                        onClick = { onOpenReader(chapterId, s.title) },
+                        shape = androidx.compose.ui.graphics.RectangleShape,
+                        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("READ ALONG")
+                    }
+                }
+                // Enabled on loaded media rather than on "is playing": marking the spot you just
+                // paused at is the most ordinary reason to reach for this at all.
+                if (bookmarksAvailable) BookmarkAction(enabled = s.hasMedia, onClick = onAddBookmark)
             }
         }
         Spacer(Modifier.height(20.dp))

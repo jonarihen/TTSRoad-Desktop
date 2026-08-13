@@ -40,10 +40,22 @@ class AppNavigationTest {
             fiction(7),
             Destination.Player,
             Destination.Reader(101, "Chapter 3"),
+            Destination.Bookmarks,
             Destination.Settings,
             Destination.Devices,
         )
         assertEquals(destinations.size, destinations.map { it.key }.toSet().size)
+    }
+
+    @Test
+    fun `opening bookmarks twice reuses the one entry`() {
+        // Bookmarks carries no payload — the list lives in the hoisted holder — so re-opening it
+        // from the header after following a mark pops back rather than stacking a second copy.
+        var stack = rootBackStack.navigateTo(Destination.Bookmarks).navigateTo(Destination.Player)
+
+        stack = stack.navigateTo(Destination.Bookmarks)
+
+        assertEquals(listOf(Destination.Library, Destination.Bookmarks), stack)
     }
 
     // --- Push / pop ------------------------------------------------------------------------

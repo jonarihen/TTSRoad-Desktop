@@ -159,6 +159,43 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `opening a bookmark starts at the mark rather than at the saved position`() = runBlocking {
+        val engine = FakePlaybackEngine(completeOnPlay = true)
+        val controller = controllerFor(engine)
+
+        controller.playQueue(
+            listOf(chapter(101, "Chapter 3", durationSeconds = 900.0, position = 30.0)),
+            startChapterId = 101,
+            fiction = FictionSummary(id = 7, title = "A Test Serial"),
+            startPositionMs = 742_500L,
+        )
+        controller.await("playback to finish", ::finished)
+
+        // Resuming at 0:30 here would silently ignore the mark the user just clicked.
+        assertEquals(listOf(742_500L), engine.preparedPositions.toList())
+        controller.release()
+    }
+
+    @Test
+    fun `a bookmark on a chapter that is no longer playable falls back to the saved position`() = runBlocking {
+        val engine = FakePlaybackEngine(completeOnPlay = true)
+        val controller = controllerFor(engine)
+
+        controller.playQueue(
+            listOf(chapter(101, "Chapter 3", durationSeconds = 900.0, position = 30.0)),
+            // The chapter the mark points at has lost its audio, so the queue starts elsewhere —
+            // and seeking *that* chapter to the missing one's offset would be nonsense.
+            startChapterId = 999,
+            fiction = FictionSummary(id = 7, title = "A Test Serial"),
+            startPositionMs = 742_500L,
+        )
+        controller.await("playback to finish", ::finished)
+
+        assertEquals(listOf(30_000L), engine.preparedPositions.toList())
+        controller.release()
+    }
+
+    @Test
     fun `a chapter with no audio at all reports a clear error instead of playing`() = runBlocking {
         val controller = controllerFor(FakePlaybackEngine())
 

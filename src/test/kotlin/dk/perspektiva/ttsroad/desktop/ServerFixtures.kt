@@ -439,6 +439,112 @@ object ServerFixtures {
     val MARK_OK = """{"status": "ok", "played": true, "chapter_ids": [101], "count": 1}"""
 
     /**
+     * GET /api/mobile/bookmarks — 200, as `app/services/bookmarks.py` serialises it.
+     *
+     * Carries `user_id`, which this client deliberately does not model — every row already belongs
+     * to the account that asked. It also carries a tombstone the server would normally have
+     * filtered out and an `auto` breadcrumb, because the client must not depend on either being
+     * absent: the list query decides, and the jump-back marks the web player writes live in this
+     * same table.
+     */
+    val BOOKMARKS = """
+        {
+          "api_version": 1,
+          "server_time": "2027-01-01T12:00:00Z",
+          "updated_since": null,
+          "bookmarks": [
+            {
+              "id": 9,
+              "user_id": 1,
+              "chapter_id": 101,
+              "fiction_id": 7,
+              "position_seconds": 742.5,
+              "position_label": "12:22",
+              "label": "The bridge scene",
+              "note": "Come back to this for the epigraph.",
+              "color": null,
+              "kind": "manual",
+              "created_at": "2027-01-01T09:00:00Z",
+              "updated_at": "2027-01-01T09:00:00Z",
+              "deleted_at": null,
+              "chapter_title": "Chapter 3",
+              "chapter_number": 3,
+              "fiction_title": "A Test Serial",
+              "fiction_slug": "a-test-serial"
+            },
+            {
+              "id": 11,
+              "user_id": 1,
+              "chapter_id": null,
+              "fiction_id": null,
+              "position_seconds": 30.0,
+              "position_label": "0:30",
+              "label": "On a chapter that was deleted",
+              "note": null,
+              "color": null,
+              "kind": "manual",
+              "created_at": "2027-01-02T09:00:00Z",
+              "updated_at": "2027-01-02T09:00:00Z",
+              "deleted_at": null,
+              "chapter_title": null,
+              "chapter_number": null,
+              "fiction_title": null,
+              "fiction_slug": null
+            },
+            {
+              "id": 12,
+              "user_id": 1,
+              "chapter_id": 101,
+              "fiction_id": 7,
+              "position_seconds": 5.0,
+              "position_label": "0:05",
+              "label": null,
+              "note": null,
+              "color": null,
+              "kind": "manual",
+              "created_at": "2026-12-30T09:00:00Z",
+              "updated_at": "2027-01-03T09:00:00Z",
+              "deleted_at": "2027-01-03T09:00:00Z",
+              "chapter_title": "Chapter 3",
+              "chapter_number": 3,
+              "fiction_title": "A Test Serial",
+              "fiction_slug": "a-test-serial"
+            }
+          ],
+          "deleted": []
+        }
+    """.trimIndent()
+
+    /** POST /api/mobile/bookmarks — 201. */
+    val BOOKMARK_CREATED = """
+        {
+          "api_version": 1,
+          "bookmark": {
+            "id": 21,
+            "user_id": 1,
+            "chapter_id": 101,
+            "fiction_id": 7,
+            "position_seconds": 61.25,
+            "position_label": "1:01",
+            "label": null,
+            "note": null,
+            "color": null,
+            "kind": "manual",
+            "created_at": "2027-01-04T09:00:00Z",
+            "updated_at": "2027-01-04T09:00:00Z",
+            "deleted_at": null,
+            "chapter_title": "Chapter 3",
+            "chapter_number": 3,
+            "fiction_title": "A Test Serial",
+            "fiction_slug": "a-test-serial"
+          }
+        }
+    """.trimIndent()
+
+    /** DELETE /api/mobile/bookmarks/{id} — 200, and the same answer a second time. */
+    val BOOKMARK_DELETED = """{"api_version": 1, "status": "deleted", "id": 9, "deleted_at": "2027-01-04T10:00:00Z"}"""
+
+    /**
      * GET /api/mobile/search — 200, one hit in each of the three groups.
      *
      * Reproduces the shape `app/services/search.py` actually emits: one item type across all three

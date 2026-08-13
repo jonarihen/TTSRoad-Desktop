@@ -176,6 +176,27 @@ interface TtsRoadRepository {
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse
 
     /**
+     * This account's bookmarks, or **null when the server has no bookmark API**.
+     *
+     * Defaults to `manual` for the reason the backend documents: the same table holds the web
+     * player's jump-back breadcrumbs, and a day of listening buries the marks a reader chose under
+     * a few hundred automatic ones.
+     */
+    suspend fun bookmarks(
+        kind: String? = BookmarkKind.Manual,
+        fictionId: Int? = null,
+    ): List<Bookmark>?
+
+    /** The created bookmark, or null on a server with no bookmark API. */
+    suspend fun createBookmark(request: BookmarkCreateRequest): Bookmark?
+
+    /** The updated bookmark, or null when the server has no such bookmark (or no such API). */
+    suspend fun updateBookmark(bookmarkId: Int, request: BookmarkPatchRequest): Bookmark?
+
+    /** True once the mark is gone. A second delete is a success, not a 404 — it is idempotent. */
+    suspend fun deleteBookmark(bookmarkId: Int): Boolean
+
+    /**
      * Record a listening position and try to get it to the server.
      *
      * Queued to disk with a timestamp *before* being sent. That ordering is the fix for #36: if the
@@ -425,6 +446,38 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
         withAuthorizedApi { it.markPlayback(PlaybackMarkRequest(chapterIds, played)) }
+
+    override suspend fun bookmarks(kind: String?, fictionId: Int?): List<Bookmark>? =
+        ifEndpointExists { it.bookmarks(kind = kind, fictionId = fictionId) }?.bookmarks
+
+    override suspend fun createBookmark(request: BookmarkCreateRequest): Bookmark? =
+        ifEndpointExists {
+            it.createBookmark(
+                request.copy(
+                    // Bounded here so an over-long label is a shorter bookmark rather than a 400:
+                    // the server truncates to exactly these limits anyway.
+                    label = request.label?.take(BookmarkLimits.MaxLabelChars),
+                    note = request.note?.take(BookmarkLimits.MaxNoteChars),
+                    positionSeconds = request.positionSeconds.coerceAtLeast(0.0),
+                ),
+            )
+        }?.bookmark
+
+    override suspend fun updateBookmark(bookmarkId: Int, request: BookmarkPatchRequest): Bookmark? =
+        ifEndpointExists {
+            it.updateBookmark(
+                bookmarkId,
+                request.copy(
+                    label = request.label?.take(BookmarkLimits.MaxLabelChars),
+                    note = request.note?.take(BookmarkLimits.MaxNoteChars),
+                ),
+            )
+        }?.bookmark
+
+    override suspend fun deleteBookmark(bookmarkId: Int): Boolean =
+        // A 404 here is "already gone or never existed", which is the outcome the caller wanted
+        // either way — the delete is idempotent by design, so it is not worth surfacing.
+        ifEndpointExists { it.deleteBookmark(bookmarkId) } != null
 
     override suspend fun saveProgress(
         fictionId: Int,

@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
@@ -108,6 +109,7 @@ const val ReaderListTestTag: String = "readerList"
 const val ReaderFindFieldTestTag: String = "readerFindField"
 const val ReaderSettingsButtonTestTag: String = "readerSettingsButton"
 const val ReaderParagraphTestTag: String = "readerParagraph"
+const val ReaderBookmarkButtonTestTag: String = "readerBookmarkButton"
 
 data class ReaderPalette(
     val background: Color,
@@ -149,6 +151,51 @@ fun readerAutoScrollOffsetPx(viewportHeightPx: Int): Int =
 fun readerShouldPrefetch(positionMs: Long, durationMs: Long): Boolean =
     durationMs > 0L && positionMs.coerceAtLeast(0L).toDouble() / durationMs >= 0.8
 
+/** Where a bookmark made in the reader points, and what it ends up called. */
+data class ReaderBookmarkAnchor(val positionMs: Long, val label: String?)
+
+/**
+ * How long a sentence may be before it is elided into a label.
+ *
+ * A label is a row in a list, not the passage itself — the note field is where a whole paragraph
+ * belongs. Well under the server's 512-character limit on purpose: the truncation the user sees
+ * should be this one, made for readability, rather than a silent one made for a database column.
+ */
+const val ReaderBookmarkLabelChars: Int = 160
+
+/**
+ * Where a mark made from the reader points, or null when the reader cannot honestly place one.
+ *
+ * Pure, because the *judgement* is the interesting part and it has three distinct cases. Reading a
+ * chapter that is not playing, or one whose timings do not match the audio, gives no position at
+ * all — a bookmark at 0:00 on a chapter somebody was reading at leisure is worse than no bookmark,
+ * and this is the same rule that already disables highlighting.
+ *
+ * Given a position, the *sentence start* beats the millisecond the button was pressed: a listener
+ * marking a passage means the passage, not the syllable. Falling back to the raw position covers
+ * the gaps between cues, where there is no sentence to anchor to.
+ */
+fun readerBookmarkAnchor(
+    isPlayingThisChapter: Boolean,
+    timingsMatch: Boolean,
+    positionMs: Long,
+    sentenceStartSeconds: Double?,
+    sentenceText: String?,
+): ReaderBookmarkAnchor? {
+    if (!isPlayingThisChapter || !timingsMatch) return null
+    val anchored = sentenceStartSeconds
+        ?.takeIf { it.isFinite() && it >= 0.0 }
+        ?.let { (it * 1000.0).roundToLong() }
+        ?: positionMs
+    val label = sentenceText?.trim()?.replace(WhitespaceRun, " ")?.takeIf { it.isNotEmpty() }?.let {
+        if (it.length <= ReaderBookmarkLabelChars) it else it.take(ReaderBookmarkLabelChars).trimEnd() + "…"
+    }
+    return ReaderBookmarkAnchor(anchored.coerceAtLeast(0L), label)
+}
+
+/** Narration text is laid out with newlines in it; a label is one line. */
+private val WhitespaceRun = Regex("\\s+")
+
 /** Audio-linked reader that remains useful as a plain, selectable document with no playback. */
 @Composable
 fun ReaderScreen(
@@ -157,6 +204,9 @@ fun ReaderScreen(
     cache: ReadAlongCache,
     preferences: ReaderPreferencesStore,
     playback: PlaybackController,
+    /** Capability-gated like everywhere else: no control at all without the server API. */
+    bookmarksAvailable: Boolean = false,
+    onAddBookmark: (positionMs: Long, label: String?) -> Unit = { _, _ -> },
     onBack: () -> Unit,
     onChapterAdvanced: (chapterId: Int, title: String) -> Unit,
 ) {
@@ -226,6 +276,8 @@ fun ReaderScreen(
                 playback = playback,
                 prefs = prefs,
                 palette = palette,
+                bookmarksAvailable = bookmarksAvailable,
+                onAddBookmark = onAddBookmark,
                 onBack = onBack,
                 onOpenSettings = { showSettings = true },
             )
@@ -249,6 +301,8 @@ private fun ReaderDocumentPage(
     playback: PlaybackController,
     prefs: ReaderPreferences,
     palette: ReaderPalette,
+    bookmarksAvailable: Boolean,
+    onAddBookmark: (positionMs: Long, label: String?) -> Unit,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -264,6 +318,16 @@ private fun ReaderDocumentPage(
         else ReadAlongHighlight.None
     }
     val activeParagraph = highlight.word?.let { document.paragraphIndexAt(it.start) } ?: -1
+
+    val bookmarkAnchor = remember(document, highlight, isPlayingThisChapter, timingsMatch, player.positionMs) {
+        readerBookmarkAnchor(
+            isPlayingThisChapter = isPlayingThisChapter,
+            timingsMatch = timingsMatch,
+            positionMs = player.positionMs,
+            sentenceStartSeconds = highlight.sentence?.let { document.seekSecondsForOffset(it.start) },
+            sentenceText = highlight.sentence?.let { document.textIn(it) },
+        )
+    }
 
     LaunchedEffect(listState) {
         listState.interactionSource.interactions.collect { interaction ->
@@ -350,6 +414,13 @@ private fun ReaderDocumentPage(
             ReaderToolbar(
                 title = document.title.ifBlank { "Chapter" },
                 palette = palette,
+                // Present but inert while reading a chapter that is not playing: hiding it as the
+                // narration catches up would move the other toolbar buttons under the cursor.
+                bookmarkEnabled = bookmarksAvailable && bookmarkAnchor != null,
+                showBookmark = bookmarksAvailable,
+                onBookmark = {
+                    bookmarkAnchor?.let { onAddBookmark(it.positionMs, it.label) }
+                },
                 onBack = onBack,
                 onFind = { findOpen = !findOpen },
                 onSettings = onOpenSettings,
@@ -436,6 +507,9 @@ private fun ReaderDocumentPage(
 private fun ReaderToolbar(
     title: String,
     palette: ReaderPalette,
+    bookmarkEnabled: Boolean,
+    showBookmark: Boolean,
+    onBookmark: () -> Unit,
     onBack: () -> Unit,
     onFind: () -> Unit,
     onSettings: () -> Unit,
@@ -448,6 +522,19 @@ private fun ReaderToolbar(
             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = palette.ink)
         }
         Text(title, color = palette.ink, maxLines = 1, modifier = Modifier.weight(1f))
+        if (showBookmark) {
+            IconButton(
+                onClick = onBookmark,
+                enabled = bookmarkEnabled,
+                modifier = Modifier.testTag(ReaderBookmarkButtonTestTag),
+            ) {
+                Icon(
+                    Icons.Default.BookmarkAdd,
+                    "Bookmark this passage",
+                    tint = if (bookmarkEnabled) palette.ink else palette.muted,
+                )
+            }
+        }
         IconButton(onClick = onFind) { Icon(Icons.Default.Search, "Find in chapter", tint = palette.ink) }
         IconButton(onClick = onSettings, modifier = Modifier.testTag(ReaderSettingsButtonTestTag)) {
             Icon(Icons.Default.Settings, "Reading settings", tint = palette.ink)
