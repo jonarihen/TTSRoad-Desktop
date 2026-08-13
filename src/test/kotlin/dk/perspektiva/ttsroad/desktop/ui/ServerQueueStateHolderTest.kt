@@ -412,6 +412,59 @@ class ServerQueueStateHolderTest {
     }
 }
 
+/** The screen's pure label rules. */
+class ServerQueueLabelsTest {
+    private fun state(
+        loaded: List<ServerQueueItem>? = null,
+        unsupported: Boolean = false,
+    ) = ServerQueueUiState(loaded = loaded, unsupported = unsupported)
+
+    @Test
+    fun `an unloaded queue does not claim a count`() {
+        assertEquals("Up next", queueCountLabel(state()))
+    }
+
+    @Test
+    fun `an unsupported server says so rather than showing zero`() {
+        assertEquals("Up next — unavailable", queueCountLabel(state(unsupported = true)))
+    }
+
+    @Test
+    fun `one chapter is singular`() {
+        val one = listOf(ServerQueueItem(id = 1, chapterId = 1))
+
+        assertEquals("Up next — 1 chapter", queueCountLabel(state(loaded = one)))
+    }
+
+    @Test
+    fun `more than one chapter is plural`() {
+        val two = listOf(ServerQueueItem(id = 1, chapterId = 1), ServerQueueItem(id = 2, chapterId = 2))
+
+        assertEquals("Up next — 2 chapters", queueCountLabel(state(loaded = two)))
+    }
+
+    @Test
+    fun `an empty loaded queue is plural zero, not unavailable`() {
+        assertEquals("Up next — 0 chapters", queueCountLabel(state(loaded = emptyList())))
+    }
+
+    /**
+     * The honesty requirement: this client does not call `advance`, so the preference governs the
+     * other clients. Saying "other clients" is what stops a user reading it as a promise here.
+     */
+    @Test
+    fun `when-empty is explained as other clients' behaviour`() {
+        assertTrue(whenEmptyExplanation("continue").contains("other clients"))
+        assertTrue(whenEmptyExplanation("stop").contains("other clients"))
+    }
+
+    /** An unknown value from a newer server is shown verbatim rather than guessed at. */
+    @Test
+    fun `an unknown when-empty value is passed through`() {
+        assertEquals("When this queue empties: shuffle", whenEmptyExplanation("shuffle"))
+    }
+}
+
 /** The pure notice rule, which is where all the "do not claim more than happened" logic lives. */
 class AddedNoticeTest {
     @Test
