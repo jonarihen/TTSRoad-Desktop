@@ -14,3 +14,7 @@ Thumbs.db
 
 # Local config
 local.properties
+
+# Agent session transcripts, which land in the repo root as YYYY-MM-DD-HHMMSS-*.txt.
+# One has already been committed by mistake; they are work logs, not part of the project.
+/20[0-9][0-9]-[0-1][0-9]-[0-3][0-9]-*.txt
