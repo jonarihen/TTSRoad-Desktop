@@ -272,6 +272,39 @@ class ServerQueueStateHolderTest {
         assertFalse(holder.state.value.isBusy)
     }
 
+    /** At the cap the server drops further adds, so the screen has to be able to say so. */
+    @Test
+    fun `a queue at its cap reports itself full`() = runTest {
+        val full = ServerQueueResponse(items = listOf(item(1), item(2)), total = 2, maxItems = 2)
+        val holder = holder(FakeRepository(queueResult = Result.success(full)))
+
+        holder.ensureLoaded()
+
+        assertTrue(holder.state.value.isFull)
+    }
+
+    @Test
+    fun `a queue below its cap is not full`() = runTest {
+        val room = ServerQueueResponse(items = listOf(item(1)), total = 1, maxItems = 500)
+        val holder = holder(FakeRepository(queueResult = Result.success(room)))
+
+        holder.ensureLoaded()
+
+        assertFalse(holder.state.value.isFull)
+    }
+
+    /** A server that does not report a cap must not be treated as a queue with no room. */
+    @Test
+    fun `no advertised cap is never full`() = runTest {
+        val holder = holder(
+            FakeRepository(queueResult = Result.success(ServerQueueResponse(items = listOf(item(1))))),
+        )
+
+        holder.ensureLoaded()
+
+        assertFalse(holder.state.value.isFull)
+    }
+
     // --- Clearing ----------------------------------------------------------------------------
 
     @Test

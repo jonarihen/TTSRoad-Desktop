@@ -207,6 +207,12 @@ private fun QueueSummary(s: ServerQueueUiState) {
     )
     Column {
         if (parts.isNotEmpty()) MetaText(parts.joinToString("  ·  "))
+        // Worth saying out loud: past the cap the server drops further adds, and a control that
+        // silently does nothing is worse than one that explains why.
+        if (s.isFull) {
+            Spacer(Modifier.height(6.dp))
+            MetaText("The queue is full — remove something before adding more", color = AarisColor.Warning)
+        }
         s.whenEmpty?.let { whenEmpty ->
             Spacer(Modifier.height(6.dp))
             MetaText(whenEmptyExplanation(whenEmpty), color = AarisColor.Dim)
