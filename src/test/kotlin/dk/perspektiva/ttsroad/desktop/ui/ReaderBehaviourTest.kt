@@ -113,4 +113,51 @@ class ReaderBehaviourTest {
         assertEquals(61_400L, readerBookmarkAnchor(true, true, 61_400, -3.0, "x")?.positionMs)
         assertEquals(61_400L, readerBookmarkAnchor(true, true, 61_400, Double.NaN, "x")?.positionMs)
     }
+
+    // --- Distraction-free reading ---------------------------------------------------------------
+
+    @Test
+    fun `outside reading mode the chrome is simply always there`() {
+        assertTrue(readingModeChromeVisible(readingMode = false, pointerY = 400f, viewportHeightPx = 800f))
+        assertTrue(readingModeChromeVisible(readingMode = false, pointerY = null, viewportHeightPx = 800f))
+    }
+
+    @Test
+    fun `reaching for either edge brings the frame back`() {
+        fun visibleAt(y: Float?) =
+            readingModeChromeVisible(readingMode = true, pointerY = y, viewportHeightPx = 800f)
+
+        assertTrue(visibleAt(0f), "the very top edge")
+        assertTrue(visibleAt(ReadingModeRevealPx))
+        assertFalse(visibleAt(ReadingModeRevealPx + 1f))
+        assertFalse(visibleAt(400f), "the middle of the page is where reading happens")
+        assertTrue(visibleAt(800f - ReadingModeRevealPx))
+        assertTrue(visibleAt(800f), "the very bottom edge")
+    }
+
+    @Test
+    fun `a pointer that never moved or has left the window is not hovering an edge`() {
+        assertFalse(readingModeChromeVisible(readingMode = true, pointerY = null, viewportHeightPx = 800f))
+    }
+
+    @Test
+    fun `an overlay opened by keyboard pins the frame regardless of the pointer`() {
+        assertTrue(
+            readingModeChromeVisible(
+                readingMode = true,
+                pointerY = 400f,
+                viewportHeightPx = 800f,
+                pinned = true,
+            ),
+            "Ctrl+F must not put a search field under an invisible toolbar",
+        )
+    }
+
+    @Test
+    fun `a viewport that has not been measured yet does not strand the frame on screen`() {
+        // Before the first layout pass the height is zero, which would make every coordinate both
+        // "within revealPx of the top" and "past height - revealPx" if the rule were written the
+        // obvious way round.
+        assertFalse(readingModeChromeVisible(readingMode = true, pointerY = 400f, viewportHeightPx = 0f))
+    }
 }

@@ -33,6 +33,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -69,11 +73,13 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -110,6 +116,52 @@ const val ReaderFindFieldTestTag: String = "readerFindField"
 const val ReaderSettingsButtonTestTag: String = "readerSettingsButton"
 const val ReaderParagraphTestTag: String = "readerParagraph"
 const val ReaderBookmarkButtonTestTag: String = "readerBookmarkButton"
+const val ReaderToolbarTestTag: String = "readerToolbar"
+const val ReaderTransportTestTag: String = "readerTransport"
+const val ReaderModeButtonTestTag: String = "readerModeButton"
+
+/**
+ * The measure the text is set to.
+ *
+ * Ordinary reading keeps the existing 920 dp, which is what the chrome around it is proportioned
+ * for. Reading mode narrows to a typographic measure instead of a layout one: on a maximised 27"
+ * window 920 dp of 20 pt text is well past the line length anyone tracks comfortably, and the whole
+ * point of hiding the frame is that what remains should be *worth* the whole window.
+ */
+val ReaderMeasure = 920.dp
+val ReadingModeMeasure = 760.dp
+
+/** How close to an edge the pointer comes before hidden reading chrome returns, in pixels. */
+const val ReadingModeRevealPx: Float = 96f
+
+/**
+ * Whether the reader's own chrome — toolbar and transport — is on screen.
+ *
+ * Pure, because "the frame comes back when you reach for it" is a rule with four inputs and one
+ * genuinely surprising case: a pointer that has never moved. A window opened straight into reading
+ * mode reports no pointer at all, and treating that as "at the top edge" would show the chrome the
+ * mode exists to hide, while treating a *departed* pointer as hovering would strand it on screen.
+ * Both are the same `null`, and both want the chrome hidden.
+ *
+ * [pinned] is the keyboard's door in: the find bar and the settings dialog are opened by key, and a
+ * search field that appears under an invisible toolbar is worse than no reading mode at all.
+ */
+fun readingModeChromeVisible(
+    readingMode: Boolean,
+    pointerY: Float?,
+    viewportHeightPx: Float,
+    pinned: Boolean = false,
+    revealPx: Float = ReadingModeRevealPx,
+): Boolean {
+    if (!readingMode) return true
+    if (pinned) return true
+    val y = pointerY ?: return false
+    if (y <= revealPx) return true
+    // The measured height is a precondition of the bottom rule, not a number to subtract blindly:
+    // before the first layout pass it is zero, and `y >= 0 - revealPx` is true for every pointer
+    // on screen — which would show the chrome the mode exists to hide.
+    return viewportHeightPx > revealPx && y >= viewportHeightPx - revealPx
+}
 
 data class ReaderPalette(
     val background: Color,
@@ -207,6 +259,11 @@ fun ReaderScreen(
     /** Capability-gated like everywhere else: no control at all without the server API. */
     bookmarksAvailable: Boolean = false,
     onAddBookmark: (positionMs: Long, label: String?) -> Unit = { _, _ -> },
+    /**
+     * Distraction-free reading, owned by `App` because the app chrome is half of what it hides.
+     */
+    readingMode: Boolean = false,
+    onToggleReadingMode: () -> Unit = {},
     onBack: () -> Unit,
     onChapterAdvanced: (chapterId: Int, title: String) -> Unit,
 ) {
@@ -278,6 +335,11 @@ fun ReaderScreen(
                 palette = palette,
                 bookmarksAvailable = bookmarksAvailable,
                 onAddBookmark = onAddBookmark,
+                readingMode = readingMode,
+                onToggleReadingMode = onToggleReadingMode,
+                // The dialog is modal chrome of its own, so the toolbar behind it stays put
+                // rather than vanishing under the pointer that is about to close it.
+                settingsOpen = showSettings,
                 onBack = onBack,
                 onOpenSettings = { showSettings = true },
             )
@@ -303,6 +365,9 @@ private fun ReaderDocumentPage(
     palette: ReaderPalette,
     bookmarksAvailable: Boolean,
     onAddBookmark: (positionMs: Long, label: String?) -> Unit,
+    readingMode: Boolean,
+    onToggleReadingMode: () -> Unit,
+    settingsOpen: Boolean,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -394,10 +459,34 @@ private fun ReaderDocumentPage(
         else -> false
     }
 
+    var pointerY by remember { mutableStateOf<Float?>(null) }
+    var viewportHeightPx by remember { mutableIntStateOf(0) }
+    val chromeVisible = readingModeChromeVisible(
+        readingMode = readingMode,
+        pointerY = pointerY,
+        viewportHeightPx = viewportHeightPx.toFloat(),
+        pinned = findOpen || settingsOpen,
+    )
+
     val focusRequester = remember { FocusRequester() }
     Box(
         Modifier
             .fillMaxSize()
+            .onSizeChanged { viewportHeightPx = it.height }
+            // Watched on the *initial* pass, before the list and the paragraphs get the event.
+            // Whether the frame comes back must not depend on which descendant happens to be
+            // under the pointer, and a scrolling lazy list is a descendant that consumes.
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        pointerY = when (event.type) {
+                            PointerEventType.Exit -> null
+                            else -> event.changes.lastOrNull()?.position?.y ?: pointerY
+                        }
+                    }
+                }
+            }
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
@@ -410,21 +499,29 @@ private fun ReaderDocumentPage(
                 }
             },
     ) {
-        Column(Modifier.align(Alignment.TopCenter).fillMaxSize().widthIn(max = 920.dp)) {
-            ReaderToolbar(
-                title = document.title.ifBlank { "Chapter" },
-                palette = palette,
-                // Present but inert while reading a chapter that is not playing: hiding it as the
-                // narration catches up would move the other toolbar buttons under the cursor.
-                bookmarkEnabled = bookmarksAvailable && bookmarkAnchor != null,
-                showBookmark = bookmarksAvailable,
-                onBookmark = {
-                    bookmarkAnchor?.let { onAddBookmark(it.positionMs, it.label) }
-                },
-                onBack = onBack,
-                onFind = { findOpen = !findOpen },
-                onSettings = onOpenSettings,
-            )
+        Column(
+            Modifier.align(Alignment.TopCenter).fillMaxSize()
+                .widthIn(max = if (readingMode) ReadingModeMeasure else ReaderMeasure),
+        ) {
+            if (chromeVisible) {
+                ReaderToolbar(
+                    title = document.title.ifBlank { "Chapter" },
+                    palette = palette,
+                    // Present but inert while reading a chapter that is not playing: hiding it as
+                    // the narration catches up would move the other toolbar buttons under the
+                    // cursor.
+                    bookmarkEnabled = bookmarksAvailable && bookmarkAnchor != null,
+                    showBookmark = bookmarksAvailable,
+                    readingMode = readingMode,
+                    onBookmark = {
+                        bookmarkAnchor?.let { onAddBookmark(it.positionMs, it.label) }
+                    },
+                    onBack = onBack,
+                    onFind = { findOpen = !findOpen },
+                    onToggleReadingMode = onToggleReadingMode,
+                    onSettings = onOpenSettings,
+                )
+            }
             if (findOpen) {
                 ReaderFindBar(
                     query = query,
@@ -489,6 +586,20 @@ private fun ReaderDocumentPage(
             }
         }
 
+        // In reading mode the app's own now-playing bar is gone with the rest of the chrome, so
+        // the transport comes back with the toolbar rather than leaving the listener with no
+        // visible way to pause. Outside reading mode the bar below the screen already has it.
+        if (readingMode && chromeVisible && player.hasSession) {
+            ReadingModeTransport(
+                player = player,
+                palette = palette,
+                onPlayPause = playback::togglePlayPause,
+                onSkipBackward = playback::skipBackward,
+                onSkipForward = playback::skipForward,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+
         if (!followPlayback && activeParagraph >= 0) {
             OutlinedButton(
                 onClick = {
@@ -496,9 +607,57 @@ private fun ReaderDocumentPage(
                     scope.launch { scrollToActive() }
                 },
                 shape = RectangleShape,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = if (readingMode && chromeVisible && player.hasSession) 72.dp else 14.dp)
                     .background(palette.background).pointerHoverIcon(PointerIcon.Hand),
             ) { Text("BACK TO CURRENT", color = palette.accent) }
+        }
+    }
+}
+
+/**
+ * The minimum transport reading mode owes a listener: pause, and the two skips.
+ *
+ * Deliberately not a second now-playing bar. Next/previous chapter would move the reader off the
+ * page being read, which is the one thing a distraction-free mode should not do by accident; the
+ * chapter shortcuts still exist for someone who means it.
+ */
+@Composable
+private fun ReadingModeTransport(
+    player: PlayerUiState,
+    palette: ReaderPalette,
+    onPlayPause: () -> Unit,
+    onSkipBackward: () -> Unit,
+    onSkipForward: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val skipSeconds = (player.skipIntervalMs / 1000).toInt()
+    Row(
+        modifier
+            .padding(bottom = 14.dp)
+            .background(palette.background)
+            .border(1.dp, palette.line)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .testTag(ReaderTransportTestTag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        IconButton(onClick = onSkipBackward) {
+            Icon(rewindIconFor(skipSeconds), "Skip back $skipSeconds seconds", tint = palette.ink)
+        }
+        IconButton(onClick = onPlayPause) {
+            Icon(
+                if (player.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                if (player.isPlaying) "Pause" else "Play",
+                tint = palette.accent,
+            )
+        }
+        IconButton(onClick = onSkipForward) {
+            Icon(forwardIconFor(skipSeconds), "Skip forward $skipSeconds seconds", tint = palette.ink)
+        }
+        remainingLabel(player.positionMs, player.durationMs, player.speed)?.let {
+            MetaText(it, color = palette.muted, modifier = Modifier.padding(end = 8.dp))
         }
     }
 }
@@ -509,19 +668,29 @@ private fun ReaderToolbar(
     palette: ReaderPalette,
     bookmarkEnabled: Boolean,
     showBookmark: Boolean,
+    readingMode: Boolean,
     onBookmark: () -> Unit,
     onBack: () -> Unit,
     onFind: () -> Unit,
+    onToggleReadingMode: () -> Unit,
     onSettings: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = PageGutter, vertical = 10.dp),
+        Modifier.fillMaxWidth().padding(horizontal = PageGutter, vertical = 10.dp)
+            .testTag(ReaderToolbarTestTag),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onBack) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = palette.ink)
         }
         Text(title, color = palette.ink, maxLines = 1, modifier = Modifier.weight(1f))
+        IconButton(onClick = onToggleReadingMode, modifier = Modifier.testTag(ReaderModeButtonTestTag)) {
+            Icon(
+                if (readingMode) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                if (readingMode) "Leave distraction-free reading" else "Distraction-free reading",
+                tint = if (readingMode) palette.accent else palette.ink,
+            )
+        }
         if (showBookmark) {
             IconButton(
                 onClick = onBookmark,

@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
@@ -9,7 +10,9 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTextInput
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
@@ -62,6 +65,7 @@ class ReaderScreenUiTest {
         onAdvanced: (Int, String) -> Unit = { _, _ -> },
         bookmarksAvailable: Boolean = false,
         onAddBookmark: (Long, String?) -> Unit = { _, _ -> },
+        readingMode: Boolean = false,
     ) {
         val repository = FakeRepository(
             readAlongResult = Result.success(ReadAlongFetchResult.Modified(response, "\"etag\"")),
@@ -76,6 +80,7 @@ class ReaderScreenUiTest {
                     playback = player,
                     bookmarksAvailable = bookmarksAvailable,
                     onAddBookmark = onAddBookmark,
+                    readingMode = readingMode,
                     onBack = {},
                     onChapterAdvanced = onAdvanced,
                 )
@@ -225,5 +230,56 @@ class ReaderScreenUiTest {
 
         val composed = compose.onAllNodesWithTag(ReaderParagraphTestTag).fetchSemanticsNodes().size
         assertTrue(composed in 1..80, "the lazy reader composed $composed of 500 paragraphs")
+    }
+
+    // --- Distraction-free reading -------------------------------------------------------------
+
+    @Test
+    fun `reading mode hides the reader's own toolbar until the pointer has not moved`() {
+        screen(player = playingThisChapter(), readingMode = true)
+
+        compose.onAllNodesWithTag(ReaderToolbarTestTag).assertCountEquals(0)
+        compose.onAllNodesWithTag(ReaderTransportTestTag).assertCountEquals(0)
+        // The page itself is untouched: this hides the frame, not the chapter.
+        compose.onAllNodesWithTag(ReaderParagraphTestTag).assertCountEquals(1)
+    }
+
+    @Test
+    fun `ordinary reading keeps the toolbar and offers the mode`() {
+        screen(player = playingThisChapter())
+
+        compose.onNodeWithTag(ReaderToolbarTestTag).assertIsDisplayed()
+        compose.onNodeWithTag(ReaderModeButtonTestTag).assertHasClickAction()
+        compose.onNodeWithContentDescription("Distraction-free reading").assertIsDisplayed()
+        // The now-playing bar belongs to `App`; the reader draws no transport of its own here.
+        compose.onAllNodesWithTag(ReaderTransportTestTag).assertCountEquals(0)
+    }
+
+    @Test
+    fun `reaching for the top edge brings the frame and the transport back`() {
+        screen(player = playingThisChapter(), readingMode = true)
+
+        compose.onRoot().performMouseInput { moveTo(Offset(120f, 4f)) }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag(ReaderToolbarTestTag).assertIsDisplayed()
+        // Hiding the app's now-playing bar without offering a pause is the trap this avoids.
+        compose.onNodeWithTag(ReaderTransportTestTag).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Leave distraction-free reading").assertIsDisplayed()
+    }
+
+    @Test
+    fun `moving back into the page hides the frame again`() {
+        screen(player = playingThisChapter(), readingMode = true)
+
+        compose.onRoot().performMouseInput { moveTo(Offset(120f, 4f)) }
+        compose.waitForIdle()
+        compose.onNodeWithTag(ReaderToolbarTestTag).assertIsDisplayed()
+
+        compose.onRoot().performMouseInput { moveTo(Offset(120f, 320f)) }
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag(ReaderToolbarTestTag).assertCountEquals(0)
+        compose.onAllNodesWithTag(ReaderTransportTestTag).assertCountEquals(0)
     }
 }

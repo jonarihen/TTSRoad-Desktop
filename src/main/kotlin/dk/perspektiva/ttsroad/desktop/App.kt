@@ -235,11 +235,28 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     // Returns whether the key did anything, so an Escape that means nothing is not swallowed here.
     var showShortcuts by remember { mutableStateOf(false) }
 
+    /**
+     * Distraction-free reading, owned here because half of what it hides is this file's chrome.
+     *
+     * Not a stored preference: it is a posture the reader takes for one sitting, and a client that
+     * silently reopened with no header a week later would look broken rather than focused. Leaving
+     * the reader drops it for the same reason — there is nothing to be distraction-free *from* on a
+     * settings pane.
+     */
+    var readingMode by remember { mutableStateOf(false) }
+    LaunchedEffect(nav.current) { if (nav.current !is Destination.Reader) readingMode = false }
+
     fun dismissOrGoBack(): Boolean {
         // The shortcuts dialog is owned here rather than by a screen, so it is the first thing
         // Escape closes — ahead of a settings confirmation that may also be open behind it.
         if (showShortcuts) {
             showShortcuts = false
+            return true
+        }
+        // Escape restores the frame before it leaves the chapter: the first press of the key that
+        // means "undo the last mode change" should not also lose the reader's place.
+        if (readingMode) {
+            readingMode = false
             return true
         }
         if (fictionManagementState.hasOpenOverlay) {
@@ -297,6 +314,12 @@ fun App(container: AppContainer = remember { AppContainer() }) {
 
             AppShortcut.OpenBookmarks -> capabilities.bookmarks.also {
                 if (it) nav.open(Destination.Bookmarks)
+            }
+
+            // Only the reader has a frame worth hiding, so anywhere else the key reports itself
+            // unhandled rather than arming a mode with nothing to show.
+            AppShortcut.ToggleReadingMode -> (nav.current is Destination.Reader).also {
+                if (it) readingMode = !readingMode
             }
 
             AppShortcut.ShowShortcuts -> {
@@ -389,21 +412,26 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val sizeClass = windowSizeClassFor(maxWidth)
                 Column(Modifier.fillMaxSize()) {
-                    HeaderBar(
-                        serverName = session.serverName,
-                        current = nav.current,
-                        canGoBack = nav.canGoBack,
-                        canRefresh = nav.current.isRefreshable,
-                        // Gated the way the speed and skip-silence controls are: no entry at all
-                        // where the server cannot answer, rather than one that leads to a 404.
-                        showBookmarks = capabilities.bookmarks,
-                        compact = sizeClass == WindowSizeClass.Compact,
-                        queueAvailable = capabilities.queue,
-                        onBack = { nav.back() },
-                        onRefresh = ::refreshCurrentScreen,
-                        onSelect = { nav.open(it) },
-                    )
-                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    // Distraction-free reading takes the whole window: the header and the
+                    // now-playing bar are exactly the two things framing the page, so hiding the
+                    // reader's own toolbar while leaving these would not be the mode at all.
+                    if (!readingMode) {
+                        HeaderBar(
+                            serverName = session.serverName,
+                            current = nav.current,
+                            canGoBack = nav.canGoBack,
+                            canRefresh = nav.current.isRefreshable,
+                            // Gated the way the speed and skip-silence controls are: no entry at all
+                            // where the server cannot answer, rather than one that leads to a 404.
+                            showBookmarks = capabilities.bookmarks,
+                            compact = sizeClass == WindowSizeClass.Compact,
+                            queueAvailable = capabilities.queue,
+                            onBack = { nav.back() },
+                            onRefresh = ::refreshCurrentScreen,
+                            onSelect = { nav.open(it) },
+                        )
+                        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    }
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         val destination = nav.current
                         // The state provider is what makes Back restore a screen rather than
@@ -556,6 +584,8 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     onAddBookmark = { positionMs, label ->
                                         bookmarks.add(destination.chapterId, positionMs, label)
                                     },
+                                    readingMode = readingMode,
+                                    onToggleReadingMode = { readingMode = !readingMode },
                                     onBack = { nav.back() },
                                     onChapterAdvanced = { chapterId, title ->
                                         nav.replaceTop(Destination.Reader(chapterId, title))
@@ -564,7 +594,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                             }
                         }
                     }
-                    if (playerState.hasSession && nav.current != Destination.Player) {
+                    if (playerState.hasSession && nav.current != Destination.Player && !readingMode) {
                         NowPlayingBar(playback, compact = sizeClass == WindowSizeClass.Compact) {
                             nav.open(Destination.Player)
                         }

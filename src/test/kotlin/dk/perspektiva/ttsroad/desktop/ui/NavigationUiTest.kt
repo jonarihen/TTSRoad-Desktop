@@ -4,6 +4,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
@@ -439,6 +440,48 @@ class NavigationUiTest {
 
         compose.onNodeWithText("The real reader is here.").assertIsDisplayed()
         compose.onNodeWithText("// TEXT ONLY").assertIsDisplayed()
+    }
+
+    @Test
+    fun `F11 in the reader hides the app chrome and Escape brings it back without leaving`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(bigLibrary(60)),
+            chaptersResult = Result.success(chapters),
+            capabilitiesResult = ServerCapabilities(serverVersion = "1.4.0", readAlong = true),
+            readAlongResult = Result.success(
+                ReadAlongFetchResult.Modified(
+                    ReadAlongResponse(
+                        chapter = ReadAlongChapter(5001, 50, "Chapter One", hasTimings = false),
+                        text = "The real reader is here.",
+                        paragraphs = listOf(listOf(0.0, 24.0)),
+                    ),
+                    "\"reader\"",
+                ),
+            ),
+        )
+        compose.setContent { TtsRoadTheme { App(container(repository)) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag(LibraryGridTestTag).performScrollToNode(hasText("Serial 50"))
+        compose.onNodeWithText("Serial 50").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Read chapter text").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("SETTINGS").assertIsDisplayed()
+
+        compose.onRoot().performKeyInput { pressKey(Key.F11) }
+        compose.waitForIdle()
+
+        // The header is half of what distraction-free reading is free of.
+        compose.onAllNodesWithText("SETTINGS").assertCountEquals(0)
+        compose.onNodeWithText("The real reader is here.").assertIsDisplayed()
+
+        // Escape restores the frame rather than leaving the chapter, so the reader keeps its place.
+        compose.onRoot().performKeyInput { pressKey(Key.Escape) }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("SETTINGS").assertIsDisplayed()
+        compose.onNodeWithText("The real reader is here.").assertIsDisplayed()
     }
 
     @Test

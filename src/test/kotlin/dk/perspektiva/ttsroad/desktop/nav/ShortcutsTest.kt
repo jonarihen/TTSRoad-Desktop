@@ -99,6 +99,16 @@ class ShortcutsTest {
     }
 
     @Test
+    fun `F11 asks for distraction-free reading and survives a focused search box`() {
+        assertEquals(AppShortcut.ToggleReadingMode, shortcutFor(Key.F11, KeyEventType.KeyDown))
+        assertEquals(
+            AppShortcut.ToggleReadingMode,
+            shortcutFor(Key.F11, KeyEventType.KeyDown, textInputFocused = true),
+            "F11 is not a key any text field claims, so the find bar must not swallow it",
+        )
+    }
+
+    @Test
     fun `the keyboard transport row maps to the same actions`() {
         assertEquals(AppShortcut.PlayPause, shortcutFor(Key.MediaPlayPause, KeyEventType.KeyDown))
         assertEquals(AppShortcut.NextChapter, shortcutFor(Key.MediaNext, KeyEventType.KeyDown))

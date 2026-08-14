@@ -69,9 +69,43 @@ GET merges supported values over the local fallback. PATCH contains exactly thos
 cannot overwrite unrelated preferences in the account JSON blob. A 404 or offline server leaves the
 last-known local values active.
 
+### Distraction-free reading is a posture, not a preference
+
+`F11` in the reader hides both the app chrome — header and now-playing bar, which `App` owns — and
+the reader's own toolbar, and narrows the measure from 920 dp to 760 dp. On a maximised window the
+wider measure is a layout constraint rather than a typographic one, and hiding the frame around a
+line nobody can track is not worth doing.
+
+Three decisions worth recording:
+
+- **It is not persisted.** The mode lives in `App` and is dropped on leaving the reader. A stored
+  flag would reopen the client a week later with no header, which reads as broken rather than as
+  focused, and there is nothing to be distraction-free *from* on a settings pane.
+- **The frame comes back when you reach for it.** `readingModeChromeVisible` is pure, over the
+  pointer's y, the measured viewport and a `pinned` flag. The interesting case is the pointer that
+  has never moved: a reader opened straight into the mode reports no pointer at all, and both that
+  and a pointer that has *left* the window are the same `null` — both want the chrome hidden. The
+  measured height is a precondition of the bottom-edge rule rather than a number to subtract, since
+  before the first layout pass it is zero and every coordinate would satisfy `y >= 0 - reveal`.
+  It is watched on the **initial** pointer pass, so a scrolling lazy list underneath cannot consume
+  the movement that should have brought the toolbar back.
+- **The mode owes the listener a transport.** Hiding the now-playing bar without offering pause and
+  the two skips would take away the only visible way to stop the audio. Next/previous chapter are
+  deliberately *not* there: moving off the page being read is the one thing this mode should never
+  do by accident, and the chapter shortcuts still exist for someone who means it.
+
+`Escape` restores the frame before it navigates, so the key that undoes the last mode change does
+not also lose the reader's place. `F11` is classified `firesWhileTyping`, so it still works from
+inside the find bar.
+
 ## Rejected alternatives
 
 - Advancing highlights from a frame/wall clock: drifts after speed, pause, seek, and skip-silence.
+- A stored "reading mode" preference, or a fifth `/api/me/preferences` key for it: the four reader
+  keys are a cross-repo contract, and a client-only posture does not belong in an account blob.
+- Auto-hiding the chrome on a timer: a reader who stops moving the mouse to *read* is precisely the
+  reader who has not asked for anything, and a frame that vanishes on its own mid-sentence is a
+  worse surprise than one that stays.
 - One composable per cue/word: makes long chapters retain thousands of live nodes.
 - Hiding chapters without `has_timings`: discards useful narration text from older conversions.
 - Serving cached text after 401: treats retained login hints as authority and exposes protected

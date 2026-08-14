@@ -390,13 +390,13 @@ private fun formatSpeed(speed: Float): String {
  * seconds is a worse answer than an unnumbered one — the content description carries the number
  * either way, so nothing is lost for a screen reader.
  */
-private fun rewindIconFor(seconds: Int): ImageVector = when (seconds) {
+internal fun rewindIconFor(seconds: Int): ImageVector = when (seconds) {
     10 -> Icons.Default.Replay10
     30 -> Icons.Default.Replay30
     else -> Icons.Default.FastRewind
 }
 
-private fun forwardIconFor(seconds: Int): ImageVector = when (seconds) {
+internal fun forwardIconFor(seconds: Int): ImageVector = when (seconds) {
     10 -> Icons.Default.Forward10
     30 -> Icons.Default.Forward30
     else -> Icons.Default.FastForward
