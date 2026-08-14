@@ -217,8 +217,17 @@ private fun PlayerMain(
             ),
             modifier = Modifier.fillMaxWidth(),
         )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             MetaText(formatDuration(dragMs?.toLong() ?: s.positionMs))
+            // Follows the drag rather than the clock, so scrubbing answers "how much is left if I
+            // drop it here" while the thumb is still down.
+            remainingLabel(dragMs?.toLong() ?: s.positionMs, s.durationMs, s.speed)?.let {
+                MetaText(it, color = AarisColor.Dim, modifier = Modifier.testTag(RemainingLabelTestTag))
+            }
             MetaText(formatDuration(s.durationMs))
         }
         Spacer(Modifier.height(24.dp))
@@ -332,6 +341,24 @@ private fun SpeedControl(current: Float, enabled: Boolean, onSelect: (Float) -> 
             )
         }
     }
+}
+
+const val RemainingLabelTestTag = "player-remaining"
+
+/**
+ * "-12:34", and above or below 1x what that costs in wall-clock time: "-12:34  ·  8:13 at 1.5x".
+ *
+ * The second half is the number that is actually useful to anyone not listening at 1x, and it is
+ * omitted at 1x because there it would only restate the first. Null when there is no duration to
+ * subtract from — a chapter still opening has no honest answer, and "-0:00" would look like one.
+ */
+internal fun remainingLabel(positionMs: Long, durationMs: Long, speed: Float): String? {
+    if (durationMs <= 0L) return null
+    val remaining = (durationMs - positionMs).coerceIn(0L, durationMs)
+    val label = "-${formatDuration(remaining)}"
+    // A speed the engine has not reported yet arrives as 0; dividing by it would render infinity.
+    if (speed <= 0f || kotlin.math.abs(speed - 1f) < 0.01f) return label
+    return "$label  ·  ${formatDuration((remaining / speed).toLong())} at ${formatSpeed(speed)}"
 }
 
 /** "1x", "1.25x" — no trailing zeros, because "1.00x" reads like a measurement. */

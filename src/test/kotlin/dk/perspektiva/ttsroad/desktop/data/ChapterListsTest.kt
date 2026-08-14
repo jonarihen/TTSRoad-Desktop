@@ -372,4 +372,106 @@ class ChapterListsTest {
         assertSame(list[1], rolledBack[1])
         assertSame(list[2], rolledBack[2])
     }
+
+    // --- Listening totals ------------------------------------------------------------------------
+
+    private fun playable(id: Int, duration: Double, playback: PlaybackInfo? = null) = ChapterSummary(
+        id = id,
+        fictionId = 7,
+        title = "Chapter $id",
+        audio = AudioInfo(url = "/audio/x/$id.mp3"),
+        audioDuration = duration,
+        playback = playback,
+    )
+
+    @Test
+    fun `totals count only chapters the player could actually open`() {
+        // `converting` has no audio: it is not listening time yet, and counting it would make
+        // "n of m played" unreachable while the fiction is still being produced.
+        val totals = listOf(playable(1, 600.0), playable(2, 600.0), converting).listeningTotals()
+
+        assertEquals(2, totals.listenable)
+        assertEquals(1200.0, totals.remainingSeconds)
+    }
+
+    @Test
+    fun `an untouched chapter contributes its whole duration`() {
+        assertEquals(600.0, listOf(playable(1, 600.0)).listeningTotals().remainingSeconds)
+    }
+
+    @Test
+    fun `the server's remaining_seconds wins over duration minus position`() {
+        val chapter = playable(1, 600.0, PlaybackInfo(positionSeconds = 100.0, remainingSeconds = 480.0))
+
+        assertEquals(480.0, listOf(chapter).listeningTotals().remainingSeconds)
+    }
+
+    @Test
+    fun `a payload with a position but no remainder falls back to the subtraction`() {
+        val chapter = playable(1, 600.0, PlaybackInfo(positionSeconds = 100.0))
+
+        assertEquals(500.0, listOf(chapter).listeningTotals().remainingSeconds)
+    }
+
+    @Test
+    fun `a duration that shrank under a saved position cannot contribute negative time`() {
+        val chapter = playable(1, 60.0, PlaybackInfo(positionSeconds = 900.0))
+
+        assertEquals(0.0, listOf(chapter).listeningTotals().remainingSeconds)
+    }
+
+    @Test
+    fun `a finished chapter is zero regardless of what its remainder says`() {
+        // A stale `remaining_seconds` from before the mark must not keep counting down the total.
+        val finished = playable(1, 600.0, PlaybackInfo(isPlayed = true, remainingSeconds = 600.0))
+        val totals = listOf(finished, playable(2, 600.0)).listeningTotals()
+
+        assertEquals(1, totals.played)
+        assertEquals(1, totals.unplayed)
+        assertEquals(600.0, totals.remainingSeconds)
+    }
+
+    @Test
+    fun `an optimistic mark moves the totals with the checkmarks`() {
+        val list = listOf(playable(1, 600.0), playable(2, 600.0))
+
+        val after = list.withPlayed(listOf(1, 2), played = true).listeningTotals()
+
+        assertEquals(2, after.played)
+        assertEquals(0, after.unplayed)
+        assertEquals(0.0, after.remainingSeconds)
+    }
+
+    @Test
+    fun `a rollback restores the totals a failed mark had claimed`() {
+        val list = listOf(playable(1, 600.0, PlaybackInfo(positionSeconds = 120.0)), playable(2, 600.0))
+        val snapshot = list.playbackSnapshot(listOf(1, 2))
+
+        val restored = list.withPlayed(listOf(1, 2), played = true)
+            .withRestoredPlayback(snapshot)
+            .listeningTotals()
+
+        assertEquals(0, restored.played)
+        assertEquals(1080.0, restored.remainingSeconds)
+    }
+
+    @Test
+    fun `a fiction with nothing playable reports empty rather than zero of zero`() {
+        assertTrue(listOf(converting).listeningTotals().isEmpty)
+        assertFalse(listOf(ready).listeningTotals().isEmpty)
+    }
+
+    @Test
+    fun `a listening span reads in hours and minutes, not as a timestamp`() {
+        assertEquals("54h 38m", formatListeningSpan(54 * 3600 + 38 * 60 + 12.0))
+        assertEquals("3h", formatListeningSpan(3 * 3600.0))
+        assertEquals("38m", formatListeningSpan(38 * 60.0))
+    }
+
+    @Test
+    fun `an unfinished chapter is never announced as zero minutes left`() {
+        assertEquals("1m", formatListeningSpan(4.0))
+        assertEquals("0m", formatListeningSpan(0.0))
+        assertEquals("0m", formatListeningSpan(-30.0))
+    }
 }

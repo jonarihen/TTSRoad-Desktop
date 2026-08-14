@@ -188,6 +188,83 @@ fun List<ChapterSummary>.playbackSnapshot(chapterIds: Collection<Int>): Map<Int,
 }
 
 /**
+ * What is left to listen to in one fiction.
+ *
+ * Counted over chapters that **have audio**, not over every row the server returned. A chapter still
+ * converting is not time anyone can listen to, and putting it in the denominator would mean
+ * "n of m played" could never reach m while the fiction is still being produced. Conversion progress
+ * is a separate line on the header and stays that way.
+ *
+ * Derived from the same list the rows are drawn from, so the optimistic played patch — and its
+ * rollback — move the totals with the checkmarks instead of leaving them disagreeing until the next
+ * refresh.
+ */
+data class ListeningTotals(
+    /** Chapters with audio: the denominator of [played] and the population [remainingSeconds] sums. */
+    val listenable: Int = 0,
+    val played: Int = 0,
+    val remainingSeconds: Double = 0.0,
+) {
+    val unplayed: Int get() = listenable - played
+
+    /** Nothing playable yet — the caller draws no totals rather than "0/0 played". */
+    val isEmpty: Boolean get() = listenable == 0
+}
+
+/**
+ * Sums [ListeningTotals] over the chapters this list can actually play.
+ *
+ * A finished chapter contributes nothing regardless of what its `remaining_seconds` says: the server
+ * writes the full duration into `position_seconds` when marking played, so the two agree, and
+ * trusting `is_played` keeps the total consistent with the checkmark the user just clicked.
+ */
+fun List<ChapterSummary>.listeningTotals(): ListeningTotals {
+    var listenable = 0
+    var played = 0
+    var remaining = 0.0
+    for (chapter in this) {
+        if (!chapter.hasAudio) continue
+        listenable++
+        if (chapter.isPlayed) played++ else remaining += chapter.remainingListeningSeconds()
+    }
+    return ListeningTotals(listenable = listenable, played = played, remainingSeconds = remaining)
+}
+
+/**
+ * Seconds left in one chapter.
+ *
+ * `remaining_seconds` is the server's own `max(0, duration - position)` and is preferred where it is
+ * present; the subtraction is the fallback for a payload that carries a position but no remainder,
+ * and is clamped because a duration that shrank after a re-conversion would otherwise contribute a
+ * negative number to a total.
+ */
+private fun ChapterSummary.remainingListeningSeconds(): Double {
+    playback?.remainingSeconds?.let { return it.coerceAtLeast(0.0) }
+    val duration = audioDuration ?: return 0.0
+    return (duration - resolvedPositionSeconds).coerceIn(0.0, duration)
+}
+
+/**
+ * A span of listening, rounded to the units a listener plans around: "54h 38m", "38m", "3h".
+ *
+ * Deliberately not the server's `remaining_label` clock format — "54:38:00" reads as a timestamp,
+ * and at fiction scale the seconds are noise. Anything under a minute that is not actually zero
+ * rounds up rather than down, so a total is never announced as "0m" while a chapter is unfinished.
+ */
+fun formatListeningSpan(seconds: Double): String {
+    val total = seconds.coerceAtLeast(0.0).toLong()
+    val hours = total / 3600
+    val minutes = (total % 3600) / 60
+    return when {
+        hours > 0 && minutes > 0 -> "${hours}h ${minutes}m"
+        hours > 0 -> "${hours}h"
+        minutes > 0 -> "${minutes}m"
+        total > 0 -> "1m"
+        else -> "0m"
+    }
+}
+
+/**
  * Stable, unique keys for a list of chapters.
  *
  * `resolvedChapterId` alone is not safe as a lazy-list key: the library's `continue_listening` and
