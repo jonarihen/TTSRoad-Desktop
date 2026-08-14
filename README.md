@@ -583,6 +583,33 @@ still refreshes from inside the search box, while Space, the arrows and Ctrl+arr
 the ordinary handler, which a focused text field has already consumed them from. No global hotkeys
 are registered — media keys reach the app through the desktop's own MPRIS routing instead.
 
+### Skipping without leaving the window you are in
+
+Play/pause, next and previous already work with no focus: they are media keys, and the desktop
+routes them over MPRIS. Skip back and forward are the two controls with **no media key of their
+own**, which makes them the ones a listener actually misses while working in another window.
+
+TTSRoad deliberately grabs no keys system-wide — taking a combination away from every other
+application without being asked is hostile, and doing it portably across X11 and Wayland is not
+possible today anyway. What it does instead is implement MPRIS `Seek`, so **you** can bind the keys,
+in your own desktop's keyboard settings, and keep the choice of which ones:
+
+```bash
+# Back 30 seconds. MPRIS offsets are microseconds, and negative means backwards.
+gdbus call --session --dest org.mpris.MediaPlayer2.TTSRoad \
+  --object-path /org/mpris/MediaPlayer2 \
+  --method org.mpris.MediaPlayer2.Player.Seek -- -30000000
+
+# Forward 30 seconds.
+gdbus call --session --dest org.mpris.MediaPlayer2.TTSRoad \
+  --object-path /org/mpris/MediaPlayer2 \
+  --method org.mpris.MediaPlayer2.Player.Seek -- 30000000
+```
+
+In Cinnamon that is *Keyboard → Shortcuts → Custom Shortcuts*; GNOME, KDE and XFCE all have the
+same thing under a different name. The commands do nothing when TTSRoad is not running, which is
+the correct behaviour for a key you bound to a media player.
+
 ## 🧭 Navigation, state and window behaviour
 
 Browsing is a real back stack over destinations (Library, Fiction, Player, Reader, Settings,

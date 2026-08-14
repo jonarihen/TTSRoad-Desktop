@@ -20,6 +20,8 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ### Changed
 
+- The README now shows how to bind global skip-back and skip-forward keys yourself, over the MPRIS
+  `Seek` method the app already implements. TTSRoad still registers no global hotkeys of its own.
 - Completed the release quality gate with a documented accessibility/performance/compatibility
   matrix, maintainer architecture/API/release runbook, 200% text-scale and long-session/navigation
   soak coverage, and automated WCAG AA contrast checks. Secondary/error/sepia text tokens now meet
