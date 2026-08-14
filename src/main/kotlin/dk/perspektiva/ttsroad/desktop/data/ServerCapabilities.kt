@@ -62,6 +62,8 @@ data class ServerCapabilities(
      * player builds is unaffected either way; the two are different things (see [ServerQueueItem]).
      */
     val queue: Boolean = false,
+    /** Read-only list/download surface for finished whole-fiction M4B exports. */
+    val audiobookExport: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -94,6 +96,7 @@ data class ServerCapabilities(
             follows = response.capabilities.flag("follows"),
             deviceManagement = response.capabilities.flag("device_management"),
             queue = response.capabilities.flag("queue"),
+            audiobookExport = response.capabilities.flag("audiobook_export"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
         )

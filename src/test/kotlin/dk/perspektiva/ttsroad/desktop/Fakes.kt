@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.desktop
 import dk.perspektiva.ttsroad.desktop.data.Bookmark
 import dk.perspektiva.ttsroad.desktop.data.BookmarkCreateRequest
 import dk.perspektiva.ttsroad.desktop.data.BookmarkPatchRequest
+import dk.perspektiva.ttsroad.desktop.data.AudiobookExportsResponse
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
@@ -69,6 +70,7 @@ open class FakeRepository(
     var createFictionResult: Result<FictionSummary> = Result.success(FictionSummary(id = 101, title = "Added")),
     var updateFictionResult: Result<FictionSummary> = Result.success(FictionSummary(id = 1, title = "Updated")),
     var deleteFictionResult: Result<Boolean> = Result.success(true),
+    var audiobookExportsResult: Result<AudiobookExportsResponse?> = Result.success(null),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -86,6 +88,8 @@ open class FakeRepository(
     var devicesCalls: Int = 0
         private set
     var currentUserCalls: Int = 0
+        private set
+    var audiobookExportsCalls: Int = 0
         private set
     var revokeOtherDevicesCalls: Int = 0
         private set
@@ -213,6 +217,11 @@ open class FakeRepository(
     override suspend fun devices(): List<DeviceSession>? {
         devicesCalls++
         return devicesResult.getOrThrow()
+    }
+
+    override suspend fun audiobookExports(): AudiobookExportsResponse? {
+        audiobookExportsCalls++
+        return audiobookExportsResult.getOrThrow()
     }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean {

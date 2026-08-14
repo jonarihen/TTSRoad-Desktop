@@ -25,6 +25,9 @@ import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
 import dk.perspektiva.ttsroad.desktop.ServerFixtures
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.AudiobookExport
+import dk.perspektiva.ttsroad.desktop.data.AudiobookExportsResponse
+import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
@@ -141,6 +144,44 @@ class SettingsScreenUiTest {
     }
 
     // --- Account pane ----------------------------------------------------------------------
+
+    @Test
+    fun `the audiobook pane lists finished volumes as save-only files`() {
+        val repository = FakeRepository(
+            currentUserResult = Result.success(MobileUser(1, "admin", isAdmin = true)),
+            audiobookExportsResult = Result.success(
+                AudiobookExportsResponse(
+                    ffmpegAvailable = true,
+                    exports = listOf(
+                        AudiobookExport(
+                            id = 17,
+                            fictionTitle = "A Test Serial",
+                            partIndex = 2,
+                            partCount = 3,
+                            title = "A Test Serial — Part 2",
+                            filename = "a-test-serial-part-2.m4b",
+                            chapterCount = 12,
+                            durationLabel = "1h 00m",
+                            sizeLabel = "964.5 MB",
+                            completedAt = "2026-08-14T10:03:00Z",
+                            downloadUrl = "/api/exports/17/download",
+                            downloadable = true,
+                            playableInApp = false,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        setContent(repository, capabilities = capable.copy(audiobookExport = true))
+
+        navEntry("AUDIOBOOKS").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("A Test Serial — Part 2").assertIsDisplayed()
+        compose.onNodeWithText("PART 2 OF 3 · 12 CHAPTERS · 1H 00M · 964.5 MB").assertIsDisplayed()
+        compose.onNodeWithText("SAVE M4B").assertIsDisplayed().assertHasClickAction()
+        compose.onAllNodesWithText("PLAY").apply { assertEquals(0, fetchSemanticsNodes().size) }
+    }
 
     @Test
     fun `settings opens on the account pane and names the server`() {

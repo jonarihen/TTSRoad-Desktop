@@ -1,5 +1,7 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
+import dk.perspektiva.ttsroad.desktop.data.AudiobookExport
+import dk.perspektiva.ttsroad.desktop.data.AudiobookExportsResponse
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
@@ -9,6 +11,11 @@ import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import dk.perspektiva.ttsroad.desktop.download.OfflineStorageController
 import dk.perspektiva.ttsroad.desktop.download.OfflineStorageSummary
 import dk.perspektiva.ttsroad.desktop.download.UnavailableOfflineStorageController
+import dk.perspektiva.ttsroad.desktop.download.AudiobookDownloadResult
+import dk.perspektiva.ttsroad.desktop.download.AudiobookExportDownloader
+import dk.perspektiva.ttsroad.desktop.download.UnavailableAudiobookExportDownloader
+import dk.perspektiva.ttsroad.desktop.download.suggestedAudiobookFileName
+import java.io.File
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,6 +31,7 @@ enum class SettingsSection(val label: String) {
     Devices("Device sessions"),
     Playback("Playback"),
     Offline("Offline"),
+    Audiobooks("Audiobooks"),
     About("Updates & About"),
 }
 
@@ -73,6 +81,25 @@ data class OfflineStorageUiState(
     val isInitialLoad: Boolean get() = isLoading && loaded == null && error == null
 }
 
+data class AudiobookExportsUiState(
+    val isLoading: Boolean = false,
+    val loaded: AudiobookExportsResponse? = null,
+    val unsupported: Boolean = false,
+    val adminOnly: Boolean = false,
+    val downloadingExportId: Int? = null,
+    val bytesDownloaded: Long = 0L,
+    val totalBytes: Long = 0L,
+    val error: String? = null,
+    val notice: String? = null,
+) {
+    val isInitialLoad: Boolean
+        get() = isLoading && loaded == null && error == null && !unsupported && !adminOnly
+
+    val progress: Float?
+        get() = totalBytes.takeIf { it > 0L }
+            ?.let { (bytesDownloaded.toDouble() / it).coerceIn(0.0, 1.0).toFloat() }
+}
+
 data class SettingsUiState(
     val section: SettingsSection = SettingsSection.Account,
     val confirmation: SettingsConfirmation? = null,
@@ -81,6 +108,7 @@ data class SettingsUiState(
     val verifiedUser: MobileUser? = null,
     val signingOut: Boolean = false,
     val offline: OfflineStorageUiState = OfflineStorageUiState(),
+    val audiobooks: AudiobookExportsUiState = AudiobookExportsUiState(),
 )
 
 /**
@@ -95,6 +123,8 @@ class SettingsStateHolder(
     private val sessionStore: SessionStore,
     dispatcher: CoroutineDispatcher = Dispatchers.Main,
     private val offlineStorage: OfflineStorageController = UnavailableOfflineStorageController,
+    private val audiobookDownloader: AudiobookExportDownloader = UnavailableAudiobookExportDownloader,
+    private val audiobookSavePicker: AudiobookSavePicker = DesktopAudiobookSavePicker,
 ) : StateHolder(dispatcher) {
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
@@ -102,6 +132,8 @@ class SettingsStateHolder(
     private var loadJob: Job? = null
     private var verifyJob: Job? = null
     private var offlineJob: Job? = null
+    private var audiobookJob: Job? = null
+    private var audiobookDownloadJob: Job? = null
 
     fun openSection(section: SettingsSection) {
         _state.update { it.copy(section = section) }
@@ -117,6 +149,8 @@ class SettingsStateHolder(
         loadJob?.cancel()
         verifyJob?.cancel()
         offlineJob?.cancel()
+        audiobookJob?.cancel()
+        audiobookDownloadJob?.cancel()
         _state.value = SettingsUiState()
     }
 
@@ -159,6 +193,8 @@ class SettingsStateHolder(
             }
 
             SettingsSection.Offline -> refreshOffline()
+
+            SettingsSection.Audiobooks -> refreshAudiobooks()
 
             else -> Unit
         }
@@ -222,6 +258,118 @@ class SettingsStateHolder(
 
     fun askClearStreamingCache() {
         _state.update { it.copy(confirmation = SettingsConfirmation.ClearStreamingCache) }
+    }
+
+    // --- Audiobook exports ----------------------------------------------------------------
+
+    fun ensureAudiobooksLoaded() {
+        val exports = _state.value.audiobooks
+        if (exports.isLoading || exports.loaded != null || exports.unsupported || exports.adminOnly) return
+        refreshAudiobooks()
+    }
+
+    fun refreshAudiobooks() {
+        audiobookJob?.cancel()
+        audiobookJob = scope.launch {
+            updateAudiobooks { it.copy(isLoading = true, error = null, notice = null) }
+            val capabilities = repository.currentCapabilities.value
+            if (!capabilities.audiobookExport) {
+                updateAudiobooks {
+                    it.copy(isLoading = false, unsupported = true, loaded = null, adminOnly = false)
+                }
+                return@launch
+            }
+            runCatching {
+                val user = repository.currentUser()
+                when {
+                    user == null -> AudiobookLoad.Unsupported
+                    !user.isAdmin -> AudiobookLoad.AdminOnly
+                    else -> repository.audiobookExports()?.let(AudiobookLoad::Loaded)
+                        ?: AudiobookLoad.Unsupported
+                }
+            }
+                .onSuccess { result ->
+                    updateAudiobooks {
+                        when (result) {
+                            AudiobookLoad.Unsupported -> it.copy(
+                                isLoading = false,
+                                unsupported = true,
+                                adminOnly = false,
+                                loaded = null,
+                            )
+                            AudiobookLoad.AdminOnly -> it.copy(
+                                isLoading = false,
+                                unsupported = false,
+                                adminOnly = true,
+                                loaded = null,
+                            )
+                            is AudiobookLoad.Loaded -> it.copy(
+                                isLoading = false,
+                                unsupported = false,
+                                adminOnly = false,
+                                loaded = result.response,
+                                error = null,
+                            )
+                        }
+                    }
+                }
+                .onFailure { failure ->
+                    updateAudiobooks {
+                        it.copy(
+                            isLoading = false,
+                            error = userFacingMessage(failure, "Could not load audiobook exports"),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun downloadAudiobook(export: AudiobookExport) {
+        val known = _state.value.audiobooks.loaded?.exports?.firstOrNull { it.id == export.id } ?: return
+        if (!known.downloadable || audiobookDownloadJob?.isActive == true) return
+        val selected = audiobookSavePicker.choose(suggestedAudiobookFileName(known.filename)) ?: return
+        val destination = File(selected.parentFile, suggestedAudiobookFileName(selected.name))
+        audiobookDownloadJob = scope.launch {
+            updateAudiobooks {
+                it.copy(
+                    downloadingExportId = known.id,
+                    bytesDownloaded = 0L,
+                    totalBytes = known.sizeBytes,
+                    error = null,
+                    notice = null,
+                )
+            }
+            try {
+                when (val result = audiobookDownloader.download(known, destination) { downloaded, total ->
+                    updateAudiobooks {
+                        it.copy(
+                            bytesDownloaded = downloaded,
+                            totalBytes = total.takeIf { value -> value > 0L } ?: it.totalBytes,
+                        )
+                    }
+                }) {
+                    is AudiobookDownloadResult.Success -> updateAudiobooks {
+                        it.copy(notice = "Saved ${known.title} to ${result.file}", error = null)
+                    }
+                    is AudiobookDownloadResult.Failed -> updateAudiobooks {
+                        it.copy(error = result.failure.message)
+                    }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                updateAudiobooks {
+                    it.copy(notice = "Download paused; choose the same destination to resume")
+                }
+                throw cancelled
+            } finally {
+                updateAudiobooks {
+                    it.copy(downloadingExportId = null, bytesDownloaded = 0L, totalBytes = 0L)
+                }
+            }
+        }
+    }
+
+    fun cancelAudiobookDownload() {
+        audiobookDownloadJob?.cancel()
     }
 
     fun dismissConfirmation() {
@@ -348,6 +496,16 @@ class SettingsStateHolder(
                 updateDevices { it.copy(error = userFacingMessage(error, failure)) }
             }
         }
+    }
+
+    private fun updateAudiobooks(transform: (AudiobookExportsUiState) -> AudiobookExportsUiState) {
+        _state.update { it.copy(audiobooks = transform(it.audiobooks)) }
+    }
+
+    private sealed interface AudiobookLoad {
+        data object Unsupported : AudiobookLoad
+        data object AdminOnly : AudiobookLoad
+        data class Loaded(val response: AudiobookExportsResponse) : AudiobookLoad
     }
 
     private fun signOut() {

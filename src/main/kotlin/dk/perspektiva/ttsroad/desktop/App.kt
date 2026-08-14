@@ -125,7 +125,12 @@ fun App(container: AppContainer = remember { AppContainer() }) {
         UpdateStateHolder(container.updateChecker, container.updateDownloader, container.updateSettings)
     }
     val settings = rememberStateHolder(repository, sessionStore) {
-        SettingsStateHolder(repository, sessionStore, offlineStorage = container.downloads)
+        SettingsStateHolder(
+            repository,
+            sessionStore,
+            offlineStorage = container.downloads,
+            audiobookDownloader = container.audiobookExportDownloader,
+        )
     }
     // Hoisted for the same reason: following a hit and coming back must find the results still
     // there. A search you have to run twice to use is not a search.

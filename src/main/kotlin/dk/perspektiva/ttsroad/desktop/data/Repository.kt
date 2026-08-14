@@ -148,6 +148,9 @@ interface TtsRoadRepository {
      */
     suspend fun devices(): List<DeviceSession>?
 
+    /** Finished M4B exports, or null when this server predates the read-only mobile surface. */
+    suspend fun audiobookExports(): AudiobookExportsResponse? = null
+
     /**
      * Revokes one session.
      *
@@ -447,6 +450,9 @@ class RetrofitTtsRoadRepository(
     override suspend fun currentUser(): MobileUser? = ifEndpointExists { it.me() }?.user
 
     override suspend fun devices(): List<DeviceSession>? = ifEndpointExists { it.devices() }?.devices
+
+    override suspend fun audiobookExports(): AudiobookExportsResponse? =
+        ifEndpointExists { it.audiobookExports() }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean =
         ifEndpointExists { it.revokeDevice(tokenId) } != null

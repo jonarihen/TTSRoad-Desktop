@@ -14,6 +14,8 @@ import dk.perspektiva.ttsroad.desktop.data.ReadAlongCache
 import dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinator
+import dk.perspektiva.ttsroad.desktop.download.AudiobookExportDownloader
+import dk.perspektiva.ttsroad.desktop.download.HttpAudiobookExportDownloader
 import dk.perspektiva.ttsroad.desktop.download.OfflineFirstMediaSourceFactory
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.SyncedPlaybackHistoryStore
@@ -120,6 +122,13 @@ class AppContainer(
      */
     downloadCoordinatorFactory: (SessionStore, OkHttpClient, TtsRoadRepository, AppDispatchers) -> DownloadCoordinator =
         { session, client, repo, d -> DownloadCoordinator(session, client, repo, dispatcher = d.io) },
+    audiobookExportDownloaderFactory: (
+        OkHttpClient,
+        TtsRoadRepository,
+        AppDispatchers,
+    ) -> AudiobookExportDownloader = { client, repo, d ->
+        HttpAudiobookExportDownloader(client, repo, d.io)
+    },
     // A store rather than a file path, so a test never writes into the user's config directory.
     windowPreferencesStore: WindowPreferencesStore = FileWindowPreferencesStore(),
     /**
@@ -132,6 +141,8 @@ class AppContainer(
 ) : AutoCloseable {
     val httpClient: OkHttpClient = httpClientFactory(sessionStore)
     val repository: TtsRoadRepository = repositoryFactory(sessionStore, httpClient, dispatchers)
+    val audiobookExportDownloader: AudiobookExportDownloader =
+        audiobookExportDownloaderFactory(httpClient, repository, dispatchers)
 
     /**
      * Offline downloads for whoever is signed in.

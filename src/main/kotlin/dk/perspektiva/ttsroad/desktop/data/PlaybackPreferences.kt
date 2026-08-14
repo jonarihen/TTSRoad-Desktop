@@ -24,12 +24,12 @@ enum class VolumeBoost(val label: String, val gain: Double) {
 }
 
 /**
- * Listening settings that belong to the machine, not to the account.
+ * Listening settings that belong to this OS profile and output setup, not to a TTSRoad account.
  *
  * Deliberately persisted outside the session: signing out must not reset someone's speed and skip
- * interval, and signing in as a second account on a shared machine must not inherit the first
- * account's — the file has no notion of a user because these are properties of *this desktop*.
- * Nothing here is secret, and there is nowhere in the type to put something that is.
+ * interval. Two TTSRoad accounts used by the same OS user intentionally see the same values because
+ * the file has no account key; a different OS user has a different config directory. Nothing here
+ * is secret, and there is nowhere in the type to put something that is.
  */
 data class PlaybackPreferences(
     val speed: Float = DefaultSpeed,

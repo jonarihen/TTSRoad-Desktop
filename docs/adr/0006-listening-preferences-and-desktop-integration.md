@@ -14,8 +14,9 @@ Cinnamon's media applet and the keyboard's transport row saw no player at all.
 
 Four questions had to be answered before any of that could be built.
 
-1. **Where do listening settings live?** They are not account data — the server has no endpoint for
-   them — and they are not session data either.
+1. **Where do listening settings live?** At the time, the server had no preference endpoint and
+   they were not session data either. The account preference contract added later is reconsidered
+   below rather than silently changing the original device-local semantics.
 2. **How is a sleep timer made testable?** The acceptance criteria require deterministic behaviour
    across pause, resume, seek, chapter boundary, manual stop and app close, including a fade.
 3. **What speaks D-Bus?** MPRIS is the only way media keys and the Cinnamon applet reach a Linux
@@ -34,9 +35,9 @@ owner-only through `SecureFiles`. It holds speed, skip interval, skip-silence an
 It is deliberately **not** part of the session:
 
 - signing out must not reset someone's speed and skip interval;
-- signing in as a second account on a shared machine must not inherit the first account's;
-- the file therefore has no notion of a user at all, which is a stronger guarantee than remembering
-  not to key it by one.
+- these controls describe this OS profile's output and listening environment, not server identity;
+- the file therefore has no notion of a TTSRoad user. Two accounts used under the same OS login see
+  the same values; different OS users already have separate config directories.
 
 The on-disk shape is a separate type (`StoredPlaybackPreferences`) in which every field is nullable
 and the enum is a plain string. A file written by an older build is missing keys; a file written by
@@ -47,6 +48,26 @@ an exception during startup. Out-of-range numbers are **snapped, not defaulted**
 Speed gets one extra rule. The offered list always contains the *stored* value even when it is not
 one of this build's presets, so a rate set by another build stays selectable instead of being
 silently rounded away the first time the menu is opened.
+
+### The later account preference API does not change that ownership
+
+Issue #35 revisited this decision after the server added `player_preferences`, with account keys for
+speed, skip interval, skip silence, volume boost and a sleep-timer default. Desktop deliberately
+does not synchronize them:
+
+- speed, skip interval, silence removal and gain depend on the current device, output, engine and
+  listening environment. Moving a speaker-specific boost or a plugin-dependent silence setting to
+  every client is surprising, and an unsupported engine cannot faithfully apply the value;
+- the sleep timer remains an explicit action. The server's `sleep_timer_default_minutes` does not
+  arm playback on the web — it only marks a preferred choice in the menu — while desktop already
+  presents the complete short ladder. Persisting or syncing a highlighted default adds state but
+  does not make the safety-critical act of arming a timer any clearer;
+- sign-out and offline playback keep the same predictable local behaviour. No best-effort network
+  merge can overwrite a choice while audio is already running.
+
+Reader appearance remains account-synchronized because it describes content presentation and is
+portable across devices. Listening controls are local because they describe audio output. The
+different ownership is intentional, not an unfinished capability flag.
 
 ### Volume boost stops at 2×
 
@@ -224,6 +245,8 @@ local fallback was retained rather than replacing it because offline playback is
 - Speed, skip interval, skip-silence and volume boost survive a restart and a sign-out, and are
   applied by the controller, so an auto-advanced chapter and a media-key start use the same values
   as one the user pressed play on.
+- Accounts under one OS profile share those machine-level controls; they are not presented as
+  account preferences and are never synchronized through `player_preferences`.
 - The sleep timer's whole surface is testable without audio, a display or wall-clock waiting.
 - Cinnamon's applet, the lock screen where present, and hardware media keys control playback and
   show correct metadata; seek and rate stay synchronised.
@@ -237,13 +260,14 @@ local fallback was retained rather than replacing it because offline playback is
 
 ## Alternatives considered and rejected
 
-**Preferences on the server.** There is no endpoint, and inventing one would break the roadmap's
-scope rule (keep changes in the desktop client unless a missing server contract is demonstrated).
-Speed and skip interval are also genuinely per-machine — a phone on a commute and a desktop in a
-quiet room do not want the same numbers.
+**Preferences on the server.** There was no endpoint when this decision was first made. The later
+`player_preferences` contract is real but does not change the ownership: a phone on a commute and a
+desktop on speakers do not want the same speed, gain or silence-removal support. Synchronizing only
+`sleep_timer_default_minutes` was also considered; because it merely highlights a menu choice and
+never arms the timer, desktop keeps the simpler explicit timer ladder.
 
-**Preferences inside `session.json`.** Simpler, and wrong: signing out would reset them, and a
-second account on a shared machine would inherit the first's.
+**Preferences inside `session.json`.** Simpler, and wrong: signing out would reset controls that
+belong to the OS profile and output setup.
 
 **A coroutine-based sleep timer with `delay`.** The natural implementation, and untestable against
 the acceptance criteria without either sleeping through real minutes or mocking `delay` at the

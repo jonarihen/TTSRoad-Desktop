@@ -1,7 +1,6 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -31,6 +29,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Switch
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -56,6 +55,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
@@ -63,6 +63,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.BuildInfo
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
+import dk.perspektiva.ttsroad.desktop.data.AudiobookExport
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
@@ -127,12 +128,18 @@ fun SettingsScreen(
     val ui by holder.state.collectAsState()
     val session by sessionStore.session.collectAsState()
     val capabilities by repository.currentCapabilities.collectAsState()
+    val visibleSections = remember(capabilities.audiobookExport) {
+        SettingsSection.entries.filter { section ->
+            section != SettingsSection.Audiobooks || capabilities.audiobookExport
+        }
+    }
 
     LaunchedEffect(ui.section) {
         when (ui.section) {
             SettingsSection.Account -> holder.verifyAccount()
             SettingsSection.Devices -> holder.ensureDevicesLoaded()
             SettingsSection.Offline -> holder.ensureOfflineLoaded()
+            SettingsSection.Audiobooks -> holder.ensureAudiobooksLoaded()
             else -> Unit
         }
     }
@@ -161,6 +168,7 @@ fun SettingsScreen(
                         SettingsSection.Devices -> DevicesPane(ui, session, holder, nowMs)
                         SettingsSection.Playback -> PlaybackPane(preferences, canChangeSpeed, canSkipSilence)
                         SettingsSection.Offline -> OfflinePane(ui.offline, holder)
+                        SettingsSection.Audiobooks -> AudiobookPane(ui.audiobooks, holder)
                         SettingsSection.About -> AboutPane(session, capabilities, sessionStore, updates)
                     }
                 }
@@ -169,13 +177,23 @@ fun SettingsScreen(
 
         if (stacked) {
             Column(Modifier.fillMaxSize()) {
-                SettingsNav(current = ui.section, stacked = true, onSelect = selectSection)
+                SettingsNav(
+                    current = ui.section,
+                    sections = visibleSections,
+                    stacked = true,
+                    onSelect = selectSection,
+                )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 Box(Modifier.weight(1f).fillMaxWidth()) { pane() }
             }
         } else {
             Row(Modifier.fillMaxSize()) {
-                SettingsNav(current = ui.section, stacked = false, onSelect = selectSection)
+                SettingsNav(
+                    current = ui.section,
+                    sections = visibleSections,
+                    stacked = false,
+                    onSelect = selectSection,
+                )
                 VerticalDivider(thickness = 1.dp, color = AarisColor.Line)
                 Box(Modifier.weight(1f).fillMaxHeight()) { pane() }
             }
@@ -191,6 +209,108 @@ fun SettingsScreen(
             onConfirm = holder::confirm,
             onDismiss = holder::dismissConfirmation,
         )
+    }
+}
+
+const val AudiobookDownloadButtonTestTag: String = "audiobookDownloadButton"
+
+@Composable
+private fun AudiobookPane(ui: AudiobookExportsUiState, holder: SettingsStateHolder) {
+    PaneTitle("Audiobooks", "Save finished whole-fiction M4B exports to this computer")
+    when {
+        ui.unsupported -> InfoCard(
+            "This server has no mobile audiobook-export API. Existing chapter playback and " +
+                "offline downloads are unaffected.",
+        )
+        ui.adminOnly -> InfoCard(
+            "Audiobook exports are shared server files and are available to administrators only.",
+        )
+        ui.isInitialLoad -> Box(Modifier.fillMaxWidth().height(120.dp)) { CenterProgress() }
+        ui.loaded == null -> {
+            Text(
+                ui.error ?: "Could not load audiobook exports",
+                color = MaterialTheme.colorScheme.error,
+            )
+            OutlinedButton(
+                onClick = holder::refreshAudiobooks,
+                enabled = !ui.isLoading,
+                shape = RectangleShape,
+                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+            ) { Text("RETRY") }
+        }
+        else -> {
+            InfoCard(
+                "This list is read-only. Create or remove exports in the server admin; the " +
+                    "desktop saves completed volumes for third-party audiobook players.",
+            )
+            if (!ui.loaded.ffmpegAvailable) {
+                InfoCard(
+                    "The server cannot create a new export right now because ffmpeg is unavailable. " +
+                        "Finished exports below can still be downloaded.",
+                )
+            }
+            if (ui.isLoading) ThinProgress(1f, Modifier.fillMaxWidth(), 2.dp)
+            ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            ui.notice?.let { MetaText(it, color = AarisColor.Ok) }
+
+            if (ui.loaded.exports.isEmpty()) {
+                InfoCard("There are no finished audiobook exports on this server.")
+            } else {
+                ui.loaded.exports.forEach { export ->
+                    AudiobookExportCard(export, ui, holder)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AudiobookExportCard(
+    export: AudiobookExport,
+    ui: AudiobookExportsUiState,
+    holder: SettingsStateHolder,
+) {
+    val downloading = ui.downloadingExportId == export.id
+    SettingsCard {
+        Text(export.title, style = MaterialTheme.typography.titleMedium, color = AarisColor.Ink)
+        export.fictionTitle?.takeIf { it.isNotBlank() }?.let { MetaText(it) }
+        MetaText(
+            buildList {
+                if (export.partCount > 1) add("Part ${export.partIndex} of ${export.partCount}")
+                if (export.chapterCount > 0) add("${export.chapterCount} chapters")
+                export.durationLabel?.takeIf { it.isNotBlank() }?.let(::add)
+                export.sizeLabel?.takeIf { it.isNotBlank() }?.let(::add)
+            }.joinToString(" · ").ifBlank { export.filename },
+            color = AarisColor.Dim,
+        )
+        export.completedAt?.let { completed ->
+            formatServerTimestamp(completed)?.let { MetaText("Completed $it", color = AarisColor.Dim) }
+        }
+        if (downloading) {
+            val progress = ui.progress
+            if (progress == null) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else {
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { holder.downloadAudiobook(export) },
+                enabled = export.downloadable && ui.downloadingExportId == null,
+                shape = RectangleShape,
+                modifier = Modifier
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .testTag(AudiobookDownloadButtonTestTag),
+            ) { Text("SAVE M4B") }
+            if (downloading) {
+                OutlinedButton(
+                    onClick = holder::cancelAudiobookDownload,
+                    shape = RectangleShape,
+                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                ) { Text("PAUSE") }
+            }
+        }
     }
 }
 
@@ -237,7 +357,12 @@ private fun confirmationCopy(confirmation: SettingsConfirmation): ConfirmationCo
 // --- Navigation ----------------------------------------------------------------------------
 
 @Composable
-private fun SettingsNav(current: SettingsSection, stacked: Boolean, onSelect: (SettingsSection) -> Unit) {
+private fun SettingsNav(
+    current: SettingsSection,
+    sections: List<SettingsSection>,
+    stacked: Boolean,
+    onSelect: (SettingsSection) -> Unit,
+) {
     if (stacked) {
         Row(
             Modifier
@@ -246,7 +371,7 @@ private fun SettingsNav(current: SettingsSection, stacked: Boolean, onSelect: (S
                 .padding(horizontal = PageGutter, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            SettingsSection.entries.forEach { NavEntry(it, it == current, onSelect) }
+            sections.forEach { NavEntry(it, it == current, onSelect) }
         }
     } else {
         Column(
@@ -259,7 +384,7 @@ private fun SettingsNav(current: SettingsSection, stacked: Boolean, onSelect: (S
         ) {
             MetaText(text = "// Settings", color = AarisColor.Accent)
             Spacer(Modifier.height(8.dp))
-            SettingsSection.entries.forEach { NavEntry(it, it == current, onSelect) }
+            sections.forEach { NavEntry(it, it == current, onSelect) }
         }
     }
 }
@@ -1035,6 +1160,7 @@ fun describeCapabilities(capabilities: ServerCapabilities): String {
         if (capabilities.batchProgress) add("Batch progress")
         if (capabilities.audioContentHash) add("Audio content hash")
         if (capabilities.deviceManagement) add("Device management")
+        if (capabilities.audiobookExport) add("Audiobook exports")
     }
     return when {
         enabled.isNotEmpty() -> enabled.joinToString(", ")

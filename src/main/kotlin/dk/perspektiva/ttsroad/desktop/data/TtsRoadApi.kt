@@ -46,6 +46,10 @@ interface TtsRoadApi {
     @GET("api/mobile/devices")
     suspend fun devices(): DevicesResponse
 
+    /** Finished admin-created M4B volumes; read-only and admin-only. */
+    @GET("api/mobile/exports")
+    suspend fun audiobookExports(): AudiobookExportsResponse
+
     // Both revoke calls answer with a small status object (`{"status": "ok", ...}`) whose shape is
     // not worth modelling: the client re-reads the list afterwards rather than trusting an echo,
     // because a 404 on the DELETE is ambiguous between "already gone" and "no such endpoint".
