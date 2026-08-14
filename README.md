@@ -69,6 +69,7 @@ full evidence table is in [`docs/QUALITY-GATE.md`](docs/QUALITY-GATE.md).
 | Sleep timer — 5/15/30/45/60 min or end of chapter, with a fade and "+5 min" | ✅ |
 | Cross-device listening history — local-first "Jump back in", dismissible per snapshot | ✅ |
 | MPRIS over D-Bus — Cinnamon applet, lock screen, hardware media keys | ✅ Linux |
+| System tray transport, and an optional keep-playing-on-close | ✅ where the desktop has a tray |
 | App shortcuts — Space, arrows, Ctrl+arrows, Ctrl+L, Ctrl+, plus an F1 list | ✅ |
 | Offline downloads — per chapter, next 10, restart-safe queue, storage controls | ✅ |
 | Bounded streaming cache and previously loaded library browsing while offline | ✅ |
@@ -550,6 +551,13 @@ screen and hardware media keys show the right metadata and control playback. It 
 dbus-java over the JDK's own AF_UNIX socket — so it adds no native library to the bundled runtime.
 No session bus (Windows, macOS, a bare SSH session) means no MPRIS and a fully working player, with
 a note in the log rather than a failure.
+
+Where the desktop offers a **system tray**, TTSRoad puts an icon there with the chapter and serial
+as its tooltip, play/pause, both skips, *Show TTSRoad* and *Quit*. Closing the window **quits** by
+default; Settings → Playback → *Keep playing when the window closes* is what changes that, and the
+first time it happens the tray says once that TTSRoad is still running. The default is the way round
+that cannot surprise anyone — a close control that closes — and a session with no tray at all says
+so and keeps closing, rather than hiding a window nobody could get back to.
 
 ## ⌨️ Keyboard
 

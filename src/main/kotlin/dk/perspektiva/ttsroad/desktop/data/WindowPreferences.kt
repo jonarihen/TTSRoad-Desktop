@@ -12,12 +12,13 @@ data class ScreenBounds(val x: Int, val y: Int, val width: Int, val height: Int)
 }
 
 /**
- * The safe-to-persist part of the window's appearance.
+ * The safe-to-persist part of the window's appearance and behaviour.
  *
- * Everything here is a layout fact. Nothing transient (open dialogs, the current destination, a
- * half-typed search) and nothing secret is representable in this type at all, which is stronger
- * than remembering not to write it: a future field cannot leak a credential into
- * `window.json` by accident because there is nowhere to put one.
+ * Everything here is a fact about the window itself — its geometry, and what its own close control
+ * does. Nothing transient (open dialogs, the current destination, a half-typed search) and nothing
+ * secret is representable in this type at all, which is stronger than remembering not to write it:
+ * a future field cannot leak a credential into `window.json` by accident because there is nowhere
+ * to put one.
  *
  * A null [x]/[y] means "let the window system place it" — that is what an unusable saved position
  * degrades to, rather than a window opening off-screen.
@@ -29,7 +30,29 @@ data class WindowPlacement(
     val height: Int = WindowPlacements.DefaultHeight,
     val isMaximized: Boolean = false,
     val sidebarWidth: Int = WindowPlacements.DefaultSidebarWidth,
+    /**
+     * Whether closing the window keeps playing in the tray instead of quitting.
+     *
+     * Defaults to **off**, which is the answer that cannot surprise anyone: a close control that
+     * closes is what every user already expects, and a listener who wants the other behaviour has
+     * a reason to go and ask for it. The reverse default would leave a process running, holding a
+     * media session, for people who believed they had quit.
+     */
+    val closeToTray: Boolean = false,
+    /** Whether the "still playing" notice has already been shown for a close-to-tray. */
+    val trayNoticeShown: Boolean = false,
 )
+
+/**
+ * Geometry from this run's window, behaviour from whatever the file says **now**.
+ *
+ * The two halves of `window.json` are written by different things at different times: geometry is
+ * captured once, as the window closes, against the placement loaded at startup, while Settings can
+ * flip the close behaviour at any point in between. Saving the startup snapshot wholesale would
+ * quietly undo a setting the user changed five minutes ago.
+ */
+fun WindowPlacement.withBehaviourOf(latest: WindowPlacement): WindowPlacement =
+    copy(closeToTray = latest.closeToTray, trayNoticeShown = latest.trayNoticeShown)
 
 object WindowPlacements {
     /**

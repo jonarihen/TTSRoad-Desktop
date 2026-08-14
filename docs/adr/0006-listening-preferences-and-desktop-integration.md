@@ -240,6 +240,44 @@ Two decisions worth recording:
 This amends the original local-only decision after the shared bookmark contract landed. Keeping a
 local fallback was retained rather than replacing it because offline playback is a first-class path.
 
+### The tray, and what the window's close control means
+
+Where the desktop offers a system tray, TTSRoad puts an icon there with the chapter and serial as
+its tooltip, play/pause, both skips, *Show TTSRoad* and *Quit*. `ui/TrayPresentation.kt` holds the
+rules as pure functions and `Main` holds the plumbing — the same split as `MprisState` and
+`MprisService`, and for the same reason: the interesting half is testable without a session bus, a
+tray, or a display.
+
+The tooltip reuses the MPRIS mapping (chapter as the title, serial as what it belongs to) because
+the two are answering the same question on the same desktop, and two different answers would look
+like a bug in one of them.
+
+Two decisions carry the weight:
+
+- **Closing quits, unless the user asked otherwise.** This is the question the idea raised —
+  closing to tray surprises people who meant to quit, quitting surprises people who meant to keep
+  listening — and the tie is broken by which surprise is worse. A close control that closes is what
+  every window on the desktop does; the other way round leaves a process running and holding a media
+  session for someone who believed they had quit. So it is a setting, it defaults to off, and the
+  first close-to-tray sends one tray notification saying TTSRoad is still running. Once: somebody
+  who asked for this knows it by the second time, and a notification on every close is exactly the
+  tray noise the feature exists to avoid.
+- **The platform gets a veto.** `windowCloseIntent` requires *both* the preference and
+  `isTraySupported`. Several Wayland sessions ship without a tray, and hiding a window into an icon
+  the platform will not draw produces a running process the user can neither see nor quit — strictly
+  worse than either honest answer. Where there is no tray, Settings says so instead of offering a
+  switch that promises nothing.
+
+`WindowPlacement` carries the flag, which makes `window.json` the file with both halves of "what
+this window does". They are written by different hands at different times — geometry once as the
+window closes, against the placement loaded at startup; the preference whenever Settings is touched
+— so the close handler merges through `withBehaviourOf` rather than writing the startup snapshot
+wholesale, which would silently revert a setting changed five minutes earlier.
+
+MPRIS `Raise` un-hides as well as raising, since after a close-to-tray the window is not merely
+behind something, and `Quit` from a shell quits rather than hiding: a client asking a player to quit
+is not asking it to get out of the way.
+
 ## Consequences
 
 - Speed, skip interval, skip-silence and volume boost survive a restart and a sign-out, and are

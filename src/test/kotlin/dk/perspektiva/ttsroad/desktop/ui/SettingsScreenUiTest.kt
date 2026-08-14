@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
@@ -115,6 +117,9 @@ class SettingsScreenUiTest {
         canChangeSpeed: Boolean = true,
         canSkipSilence: Boolean = true,
         offline: OfflineStorageController = FakeOfflineStorage(),
+        closeToTray: Boolean = false,
+        onCloseToTrayChange: (Boolean) -> Unit = {},
+        traySupported: Boolean = true,
     ) {
         val store = InMemorySessionStore(session)
         repository.capabilitiesResult = capabilities
@@ -128,6 +133,9 @@ class SettingsScreenUiTest {
                     preferences = preferences,
                     canChangeSpeed = canChangeSpeed,
                     canSkipSilence = canSkipSilence,
+                    closeToTray = closeToTray,
+                    onCloseToTrayChange = onCloseToTrayChange,
+                    traySupported = traySupported,
                     nowMs = { now },
                 )
             }
@@ -366,6 +374,30 @@ class SettingsScreenUiTest {
         compose.onNodeWithContentDescription("SKIP SILENCE").performScrollTo().performClick()
         compose.waitForIdle()
         assertTrue(preferences.preferences.value.skipSilence)
+    }
+
+    @Test
+    fun `closing the window quits by default and the tray choice is offered`() {
+        var asked: Boolean? = null
+        setContent(FakeRepository(), onCloseToTrayChange = { asked = it })
+        openPlayback()
+
+        compose.onNodeWithContentDescription("KEEP PLAYING WHEN THE WINDOW CLOSES")
+            .performScrollTo()
+            .assertIsOff()
+            .performClick()
+        compose.waitForIdle()
+
+        assertEquals(true, asked)
+    }
+
+    @Test
+    fun `a desktop with no system tray explains itself instead of offering a dead switch`() {
+        setContent(FakeRepository(), traySupported = false)
+        openPlayback()
+
+        compose.onAllNodesWithContentDescription("KEEP PLAYING WHEN THE WINDOW CLOSES").assertCountEquals(0)
+        compose.onNodeWithText("No system tray on this desktop", ignoreCase = true).assertExists()
     }
 
     @Test

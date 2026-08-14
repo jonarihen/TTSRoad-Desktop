@@ -190,4 +190,39 @@ class WindowPreferencesTest {
         assertEquals(WindowPlacement(), missing.load())
         assertEquals(WindowPlacement(), FileWindowPreferencesStore(corrupt).load())
     }
+
+    // --- Window behaviour, written by a different hand than the geometry -------------------------
+
+    @Test
+    fun `closing quits by default, so nobody is left with a process they thought they closed`() {
+        assertFalse(WindowPlacement().closeToTray)
+        assertFalse(WindowPlacement().trayNoticeShown)
+    }
+
+    @Test
+    fun `saving this run's geometry does not undo a close preference changed since startup`() {
+        // Geometry is captured once, against the placement loaded at startup; Settings can flip the
+        // close behaviour at any point in between. Writing the startup snapshot wholesale would
+        // silently revert it.
+        val loadedAtStartup = WindowPlacement(x = 10, y = 20, width = 1000, height = 700)
+        val onDiskNow = loadedAtStartup.copy(closeToTray = true, trayNoticeShown = true)
+        val closingGeometry = loadedAtStartup.copy(x = 400, y = 300)
+
+        val saved = closingGeometry.withBehaviourOf(onDiskNow)
+
+        assertEquals(400, saved.x)
+        assertEquals(300, saved.y)
+        assertTrue(saved.closeToTray)
+        assertTrue(saved.trayNoticeShown)
+    }
+
+    @Test
+    fun `clamping a window back onto an attached display leaves its behaviour alone`() {
+        val stored = WindowPlacement(x = 9_000, y = 9_000, closeToTray = true, trayNoticeShown = true)
+
+        val clamped = WindowPlacements.clampToDisplays(stored, listOf(ScreenBounds(0, 0, 1920, 1080)))
+
+        assertTrue(clamped.closeToTray)
+        assertTrue(clamped.trayNoticeShown)
+    }
 }

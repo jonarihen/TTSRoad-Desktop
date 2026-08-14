@@ -117,6 +117,17 @@ fun SettingsScreen(
      */
     canChangeSpeed: Boolean = false,
     canSkipSilence: Boolean = false,
+    /**
+     * Whether closing the window keeps playing in the tray, and how to change it.
+     *
+     * Passed in for the same reason the two engine flags are: the answer is owned by the window,
+     * which is `Main`'s business rather than a screen's, and a pane that reached for the store
+     * itself could not be rendered in a test without one.
+     */
+    closeToTray: Boolean = false,
+    onCloseToTrayChange: (Boolean) -> Unit = {},
+    /** False on a desktop session with no system tray, where the control would promise nothing. */
+    traySupported: Boolean = true,
     // Injected so "expires in 42 days" can be asserted without the test depending on wall time.
     nowMs: () -> Long = System::currentTimeMillis,
     /**
@@ -166,7 +177,14 @@ fun SettingsScreen(
                     when (ui.section) {
                         SettingsSection.Account -> AccountPane(ui, session, capabilities, sessionStore, holder, selectSection, nowMs)
                         SettingsSection.Devices -> DevicesPane(ui, session, holder, nowMs)
-                        SettingsSection.Playback -> PlaybackPane(preferences, canChangeSpeed, canSkipSilence)
+                        SettingsSection.Playback -> PlaybackPane(
+                            preferences,
+                            canChangeSpeed,
+                            canSkipSilence,
+                            closeToTray,
+                            onCloseToTrayChange,
+                            traySupported,
+                        )
                         SettingsSection.Offline -> OfflinePane(ui.offline, holder)
                         SettingsSection.Audiobooks -> AudiobookPane(ui.audiobooks, holder)
                         SettingsSection.About -> AboutPane(session, capabilities, sessionStore, updates)
@@ -674,6 +692,9 @@ private fun PlaybackPane(
     preferences: PlaybackPreferencesStore,
     canChangeSpeed: Boolean,
     canSkipSilence: Boolean,
+    closeToTray: Boolean,
+    onCloseToTrayChange: (Boolean) -> Unit,
+    traySupported: Boolean,
 ) {
     val prefs by preferences.preferences.collectAsState()
 
@@ -734,6 +755,25 @@ private fun PlaybackPane(
             MetaText(
                 "Silence removal needs the GStreamer \"removesilence\" element, which ships in " +
                     "gst-plugins-bad. It is not installed here, so the control is not shown.",
+            )
+        }
+
+        RowDivider()
+
+        if (traySupported) {
+            ToggleRow(
+                label = "KEEP PLAYING WHEN THE WINDOW CLOSES",
+                description = "Closing the window puts TTSRoad in the system tray and keeps the " +
+                    "chapter playing. Off by default, because a close control that closes is what " +
+                    "everyone expects. The tray icon's Quit entry always stops it for good.",
+                checked = closeToTray,
+                onCheckedChange = onCloseToTrayChange,
+            )
+        } else {
+            SettingRow("KEEP PLAYING WHEN THE WINDOW CLOSES", "No system tray on this desktop")
+            MetaText(
+                "This desktop session does not offer a system tray, so closing the window would " +
+                    "leave TTSRoad running with no way back to it. Closing quits instead.",
             )
         }
     }

@@ -30,6 +30,11 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ### Added
 
+- A system tray icon with the transport on it, so the app can get out of the way without stopping.
+  It names the chapter and serial, offers play/pause and the two skips, and its Quit entry always
+  stops the app for good. **Closing the window still quits by default** — the new Playback setting
+  "Keep playing when the window closes" is what changes that, and the first close-to-tray says once
+  that TTSRoad is still running. A desktop session with no system tray says so and keeps closing.
 - Distraction-free reading. `F11` in the reader — or the new toolbar button — hides the header, the
   now-playing bar and the reader's own toolbar, and narrows the text to a comfortable measure. The
   frame returns when the pointer reaches either edge, along with a transport that can pause and skip
