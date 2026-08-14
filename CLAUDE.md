@@ -117,10 +117,12 @@ apply to audio.
   criterion. Fade gain is published as a multiplier and combined with the volume boost in one place,
   so cancelling a fade restores the boost rather than unity. End-of-chapter is checked *before* the
   auto-advance and disarms itself.
-- `data/PlaybackHistory.kt` — bounded to 60 entries, one per chapter. The snapshot type has **no URL
-  field of any kind**; covers are re-resolved from the library cache by fiction id. Dismissal is
-  per snapshot and is *inherited* when the same chapter is re-recorded, or the next progress save
-  would undo it. History is written at transitions only, never on the progress tick.
+- `data/PlaybackHistory.kt` — a bounded local-first fallback, 60 entries and one per chapter;
+  `SyncedPlaybackHistoryStore` writes the same `kind=auto` bookmarks as the web and merges a full
+  server pull without replacing newer offline work. The controller records at transitions and
+  every five minutes of active playback, never on the ten-second progress tick. The snapshot type
+  has **no URL field of any kind**; covers are re-resolved from the library cache by fiction id.
+  Dismissal stays machine-local and is inherited across both local records and remote refreshes.
 
 ### Offline storage
 
