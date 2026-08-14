@@ -171,6 +171,17 @@ class AppNavigationTest {
     }
 
     @Test
+    fun `searching twice from the library reuses one search entry`() {
+        // Search carries no query precisely so this holds: the second search re-runs against the
+        // same destination rather than stacking a second copy whose payload would then be stale.
+        var stack = rootBackStack.navigateTo(Destination.Search).navigateTo(fiction(7))
+
+        stack = stack.navigateTo(Destination.Search)
+
+        assertEquals(listOf(Destination.Library, Destination.Search), stack)
+    }
+
+    @Test
     fun `replacing the top releases the state of the screen it replaced`() {
         val dropped = mutableListOf<String>()
         val nav = NavigationState(onDestinationDropped = { dropped += it.toString() })

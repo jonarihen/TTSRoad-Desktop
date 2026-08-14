@@ -141,6 +141,20 @@ interface TtsRoadRepository {
 
     suspend fun chapters(fictionId: Int, playableOnly: Boolean = false): ChaptersResponse
 
+    /**
+     * Server-side search, or **null when this server has no search endpoint**.
+     *
+     * Null rather than an empty result for the same reason [devices] uses it: "nothing matched" is
+     * a normal answer the UI phrases one way, and "this server cannot search" is a different one it
+     * has to phrase another. The `search` capability is the gate; this is the fallback for a server
+     * that advertised it and then answered 404 anyway.
+     */
+    suspend fun search(
+        query: String,
+        limit: Int = SearchLimits.Default,
+        offset: Int = 0,
+    ): SearchResponse?
+
     /** Conditional reader document request; 404 is a normal [ReadAlongFetchResult.NotFound]. */
     suspend fun readAlong(chapterId: Int, ifNoneMatch: String? = null): ReadAlongFetchResult
 
@@ -361,6 +375,17 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse =
         withAuthorizedApi { it.chapters(fictionId = fictionId, playableOnly = playableOnly) }
+
+    override suspend fun search(query: String, limit: Int, offset: Int): SearchResponse? =
+        ifEndpointExists {
+            it.search(
+                // Trimmed and bounded here rather than at the call site: the server rejects an
+                // over-long `q` with a 422, and a 422 is not something a listener can act on.
+                query = query.trim().take(SearchLimits.MaxQueryLength),
+                limit = limit.coerceIn(1, SearchLimits.Max),
+                offset = offset.coerceAtLeast(0),
+            )
+        }
 
     override suspend fun readAlong(chapterId: Int, ifNoneMatch: String?): ReadAlongFetchResult =
         withAuthorizedApi { api ->

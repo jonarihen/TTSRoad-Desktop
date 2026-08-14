@@ -39,6 +39,8 @@ open class FakeRepository(
     ),
     var readerPreferencesResult: Result<dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesResponse?> =
         Result.success(null),
+    /** `success(null)` is the server saying it cannot search — not "nothing matched". */
+    var searchResult: Result<dk.perspektiva.ttsroad.desktop.data.SearchResponse?> = Result.success(null),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -65,6 +67,8 @@ open class FakeRepository(
 
     /** Base URLs discovery was asked about, in order — capability probing is observable. */
     val capabilityProbes: MutableList<String> = mutableListOf()
+    /** Queries the server was actually asked, in order — trimming and debouncing are observable. */
+    val searchQueries: MutableList<String> = mutableListOf()
     val markedPlayed: MutableList<Pair<List<Int>, Boolean>> = mutableListOf()
     val savedProgress: MutableList<Triple<Int, Double, Boolean>> = mutableListOf()
 
@@ -130,6 +134,15 @@ open class FakeRepository(
     override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
         chaptersCalls++
         return chaptersResult.getOrThrow()
+    }
+
+    override suspend fun search(
+        query: String,
+        limit: Int,
+        offset: Int,
+    ): dk.perspektiva.ttsroad.desktop.data.SearchResponse? {
+        searchQueries += query
+        return searchResult.getOrThrow()
     }
 
     override suspend fun readAlong(

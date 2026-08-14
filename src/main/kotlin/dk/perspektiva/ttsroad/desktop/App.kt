@@ -78,11 +78,14 @@ import dk.perspektiva.ttsroad.desktop.ui.NowPlayingBar
 import dk.perspektiva.ttsroad.desktop.ui.PageGutter
 import dk.perspektiva.ttsroad.desktop.ui.PlayerScreen
 import dk.perspektiva.ttsroad.desktop.ui.ReaderScreen
+import dk.perspektiva.ttsroad.desktop.ui.SearchScreen
+import dk.perspektiva.ttsroad.desktop.ui.SearchStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.SettingsScreen
 import dk.perspektiva.ttsroad.desktop.ui.SettingsSection
 import dk.perspektiva.ttsroad.desktop.ui.SettingsStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.ShortcutsDialog
 import dk.perspektiva.ttsroad.desktop.ui.WindowSizeClass
+import dk.perspektiva.ttsroad.desktop.ui.fictionForHit
 import dk.perspektiva.ttsroad.desktop.ui.hasSession
 import dk.perspektiva.ttsroad.desktop.ui.rememberChapterDownloads
 import dk.perspektiva.ttsroad.desktop.ui.UpdateStateHolder
@@ -114,6 +117,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     val settings = rememberStateHolder(repository, sessionStore) {
         SettingsStateHolder(repository, sessionStore, offlineStorage = container.downloads)
     }
+    // Hoisted for the same reason: following a hit and coming back must find the results still
+    // there. A search you have to run twice to use is not a search.
+    val search = rememberStateHolder(repository) { SearchStateHolder(repository) }
 
     // Capability discovery is the only source of the server's stable advertised identity. Feed it
     // into the download namespace as soon as it arrives; using it only for feature flags would
@@ -134,6 +140,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             Destination.Library -> cache.refreshLibrary()
             is Destination.Fiction -> cache.refreshChapters(destination.fiction.id)
             Destination.Settings, Destination.Devices -> settings.refreshCurrentSection()
+            Destination.Search -> search.refresh()
             Destination.Player, is Destination.Reader -> Unit
         }
     }
@@ -224,6 +231,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             cache.clear()
             container.readAlongCache.clear()
             settings.sessionEnded()
+            search.sessionEnded()
         } else {
             // Cheap, and it is what makes optional UI correct after a restart, where login did
             // not run but a keyring-backed session was restored.
@@ -313,6 +321,34 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     historyOwnerKey = container.historyOwnerKey(),
                                     onOpenFiction = { nav.open(Destination.Fiction(it)) },
                                     onOpenPlayer = { nav.open(Destination.Player) },
+                                    // The local filter stays the instant path; this is the second,
+                                    // explicit one that can reach narration text.
+                                    serverSearchAvailable = capabilities.search,
+                                    onSearchServer = { query ->
+                                        search.search(query)
+                                        nav.open(Destination.Search)
+                                    },
+                                )
+
+                                Destination.Search -> SearchScreen(
+                                    holder = search,
+                                    // Same gate the chapter rows use: without the endpoint there
+                                    // is no reader to land a text hit in.
+                                    readAlongAvailable = capabilities.readAlong,
+                                    onOpenFiction = { hit ->
+                                        nav.open(
+                                            Destination.Fiction(
+                                                fictionForHit(
+                                                    cache.library.value.value?.fictions.orEmpty(),
+                                                    hit,
+                                                ),
+                                            ),
+                                        )
+                                    },
+                                    onOpenReader = { chapterId, title ->
+                                        nav.open(Destination.Reader(chapterId, title))
+                                    },
+                                    onBack = { nav.back() },
                                 )
 
                                 is Destination.Fiction -> FictionDetailScreen(
@@ -411,6 +447,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
 private val Destination.isRefreshable: Boolean
     get() = when (this) {
         Destination.Library, is Destination.Fiction, Destination.Settings, Destination.Devices -> true
+        // Refresh re-runs the query the results belong to; it is dead until one has been run, but
+        // enabling it is cheaper to reason about than a state-dependent header button.
+        Destination.Search -> true
         Destination.Player, is Destination.Reader -> false
     }
 
