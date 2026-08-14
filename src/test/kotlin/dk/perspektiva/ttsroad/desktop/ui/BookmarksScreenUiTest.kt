@@ -146,6 +146,9 @@ class BookmarksScreenUiTest {
 
         compose.onNodeWithTag(BookmarkDeleteTestTag).performClick()
         compose.onNodeWithTag(BookmarkConfirmDeleteTestTag).performClick()
+        // The holder does the delete in a coroutine, and a click only guarantees the *dispatch*.
+        // Asserting straight after the press is what made this test flaky.
+        compose.waitUntil(5_000) { repository.deletedBookmarks.isNotEmpty() }
         assertEquals(listOf(1), repository.deletedBookmarks)
     }
 
@@ -163,6 +166,8 @@ class BookmarksScreenUiTest {
         compose.onNodeWithTag(BookmarkLabelFieldTestTag).performTextInput("!")
         compose.onNodeWithText("SAVE").performClick()
 
+        // Same reason as the delete test: the PATCH is launched, not performed, by the press.
+        compose.waitUntil(5_000) { repository.patchedBookmarks.isNotEmpty() }
         val (id, patch) = repository.patchedBookmarks.single()
         assertEquals(1, id)
         assertTrue(patch.label.orEmpty().contains("bridge"))
