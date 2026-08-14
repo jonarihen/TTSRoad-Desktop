@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.desktop.data
 
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -9,7 +10,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -27,6 +32,10 @@ private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
  * than allowed only costs an extra round trip, while sending more loses the whole batch to a 400.
  */
 private const val DefaultMaxPlaybackSyncItems = 500
+
+/** What an EPUB is. The server checks the *filename*, but a correct type costs nothing. */
+private val EpubMediaType = "application/epub+zip".toMediaType()
+private val TextMediaType = "text/plain".toMediaType()
 
 /** Outcome of a login attempt. */
 sealed interface LoginResult {
@@ -121,6 +130,10 @@ interface TtsRoadRepository {
         error("fiction management is not implemented")
 
     suspend fun deleteFiction(fictionId: Int): Boolean = false
+
+    /** Uploads one EPUB and answers the fiction the server created from it. */
+    suspend fun uploadEpub(file: File, voice: String? = null): FictionSummary =
+        error("EPUB upload is not implemented")
 
     /**
      * Follows or unfollows a fiction, answering the state **the server now holds**, or null when it
@@ -440,6 +453,21 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun deleteFiction(fictionId: Int): Boolean =
         withAuthorizedApi { it.deleteFiction(fictionId) }.let { it.deleted && it.fictionId == fictionId }
+
+    override suspend fun uploadEpub(file: File, voice: String?): FictionSummary = withAuthorizedApi { api ->
+        // Streamed from the file rather than read into a byte array: an EPUB is allowed to be tens
+        // of megabytes, and buffering one in the heap to hand it to OkHttp — which will only write
+        // it to a socket — is a copy nobody needs.
+        val part = MultipartBody.Part.createFormData(
+            "file",
+            // The server rejects anything without a `.epub` extension, so the *name* is part of
+            // the request rather than decoration. Only the leaf is sent; a path is not the
+            // server's business.
+            file.name,
+            file.asRequestBody(EpubMediaType),
+        )
+        api.uploadEpub(part, voice?.takeIf(String::isNotBlank)?.toRequestBody(TextMediaType)).fiction
+    }
 
     override suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? =
         ifEndpointExists {

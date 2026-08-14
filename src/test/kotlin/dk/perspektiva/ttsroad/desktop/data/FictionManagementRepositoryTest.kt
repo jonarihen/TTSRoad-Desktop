@@ -103,6 +103,44 @@ class FictionManagementRepositoryTest {
         assertFalse(repository.deleteFiction(7), "a mismatched acknowledgement cannot confirm deletion")
     }
 
+    @Test
+    fun `an EPUB is sent as multipart with its filename and an optional voice`() = runTest {
+        val epub = java.nio.file.Files.createTempDirectory("ttsroad-epub").resolve("A Book.epub").toFile()
+        epub.writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+        enqueue(mutationBody(202, "A Book", "en-US-AriaNeural"))
+
+        val fiction = repository.uploadEpub(epub, voice = "en-US-AriaNeural")
+
+        assertEquals(202, fiction.id)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/mobile/fictions/upload-epub", request.url.encodedPath)
+        assertTrue(
+            request.headers["Content-Type"].orEmpty().startsWith("multipart/form-data"),
+            request.headers["Content-Type"].orEmpty(),
+        )
+        val body = request.bodyText()
+        // The server checks the *filename* for a `.epub` extension, so the name is part of the
+        // request rather than decoration — and only the leaf is sent, never a path.
+        assertTrue(body.contains("""filename="A Book.epub""""), body)
+        assertFalse(body.contains(epub.parent), "a local path is not the server's business")
+        assertTrue(body.contains("""name="voice""""), body)
+        assertTrue(body.contains("en-US-AriaNeural"), body)
+    }
+
+    @Test
+    fun `an upload without a voice sends no voice part at all`() = runTest {
+        val epub = java.nio.file.Files.createTempDirectory("ttsroad-epub").resolve("Plain.epub").toFile()
+        epub.writeBytes(byteArrayOf(0x50, 0x4B))
+        enqueue(mutationBody(203, "Plain", "default"))
+
+        repository.uploadEpub(epub, voice = "   ")
+
+        // Blank is "did not choose", not "choose the empty voice": the server's own default is a
+        // better answer than an empty string it would have to interpret.
+        assertFalse(server.takeRequest().bodyText().contains("""name="voice""""))
+    }
+
     private fun mutationBody(id: Int, title: String, voice: String): String =
         """{"api_version":1,"status":"ok","fiction":{"id":$id,"title":"$title","voice":"$voice"}}"""
 }

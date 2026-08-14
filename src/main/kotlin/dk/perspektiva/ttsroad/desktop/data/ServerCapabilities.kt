@@ -46,6 +46,13 @@ data class ServerCapabilities(
     /** Admin add/edit/delete routes. Account permission is verified separately through `/me`. */
     val fictionManagement: Boolean = false,
     /**
+     * Multipart EPUB import, advertised separately from JSON fiction CRUD.
+     *
+     * The backend is explicit that a deployment can support add/edit/delete without accepting
+     * files, so this is never inferred from [fictionManagement].
+     */
+    val epubUpload: Boolean = false,
+    /**
      * Per-user libraries.
      *
      * False means `/api/mobile/library` is still the whole shared list on that server, so this
@@ -73,6 +80,8 @@ data class ServerCapabilities(
      * batch rather than part of it.
      */
     val maxPlaybackSyncItems: Int? = null,
+    /** The server's EPUB ceiling. A `Long`, because a byte count is not an item count. */
+    val maxEpubBytes: Long? = null,
 ) {
     /** True once discovery has actually reached a TTSRoad server (only it reports a version). */
     val isDiscovered: Boolean get() = serverVersion != null
@@ -93,12 +102,14 @@ data class ServerCapabilities(
             batchProgress = response.capabilities.flag("batch_progress"),
             audioContentHash = response.capabilities.flag("audio_content_hash"),
             fictionManagement = response.capabilities.flag("fiction_management"),
+            epubUpload = response.capabilities.flag("epub_upload"),
             follows = response.capabilities.flag("follows"),
             deviceManagement = response.capabilities.flag("device_management"),
             queue = response.capabilities.flag("queue"),
             audiobookExport = response.capabilities.flag("audiobook_export"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
+            maxEpubBytes = response.limits.longLimit("max_epub_bytes"),
         )
 
         /**
@@ -110,5 +121,7 @@ data class ServerCapabilities(
 
         /** Moshi parses every JSON number as a Double, so accept any [Number] and drop the rest. */
         private fun Map<String, Any?>.intLimit(key: String): Int? = (this[key] as? Number)?.toInt()
+
+        private fun Map<String, Any?>.longLimit(key: String): Long? = (this[key] as? Number)?.toLong()
     }
 }

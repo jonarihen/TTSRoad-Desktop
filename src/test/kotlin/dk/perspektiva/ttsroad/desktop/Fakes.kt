@@ -70,6 +70,7 @@ open class FakeRepository(
     var createFictionResult: Result<FictionSummary> = Result.success(FictionSummary(id = 101, title = "Added")),
     var updateFictionResult: Result<FictionSummary> = Result.success(FictionSummary(id = 1, title = "Updated")),
     var deleteFictionResult: Result<Boolean> = Result.success(true),
+    var uploadEpubResult: Result<FictionSummary> = Result.success(FictionSummary(id = 202, title = "Uploaded")),
     var audiobookExportsResult: Result<AudiobookExportsResponse?> = Result.success(null),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
@@ -128,6 +129,7 @@ open class FakeRepository(
     val createdFictions: MutableList<FictionCreateRequest> = mutableListOf()
     val updatedFictions: MutableList<Pair<Int, FictionUpdateRequest>> = mutableListOf()
     val deletedFictions: MutableList<Int> = mutableListOf()
+    val uploadedEpubs: MutableList<Pair<java.io.File, String?>> = mutableListOf()
 
     private val _currentCapabilities = MutableStateFlow(ServerCapabilities.Baseline)
     override val currentCapabilities: StateFlow<ServerCapabilities> = _currentCapabilities.asStateFlow()
@@ -207,6 +209,11 @@ open class FakeRepository(
     override suspend fun deleteFiction(fictionId: Int): Boolean {
         deletedFictions += fictionId
         return deleteFictionResult.getOrThrow()
+    }
+
+    override suspend fun uploadEpub(file: java.io.File, voice: String?): FictionSummary {
+        uploadedEpubs += file to voice
+        return uploadEpubResult.getOrThrow()
     }
 
     override suspend fun currentUser(): MobileUser? {

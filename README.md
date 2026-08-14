@@ -75,6 +75,7 @@ full evidence table is in [`docs/QUALITY-GATE.md`](docs/QUALITY-GATE.md).
 | Offline downloads — per chapter, next 10, restart-safe queue, storage controls | ✅ |
 | Bounded streaming cache and previously loaded library browsing while offline | ✅ |
 | Timestamped delta refresh for cached library and chapter metadata | ✅ |
+| Admin fiction management — add by URL/id, EPUB upload, edit, confirmed delete | ✅ |
 | Admin audiobook exports — resumable M4B save to a user-selected file | ✅ |
 | Audio-synchronized read-along — offline text, word seek, find, themes and zoom | ✅ |
 | Distraction-free reading — F11 hides every frame, hover brings the transport back | ✅ |

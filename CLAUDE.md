@@ -199,6 +199,18 @@ apply to audio.
   `/api/me/preferences` keys. PATCH must never echo unrelated account settings. Preserve the server
   ranges (font 14–30, line height 1.3–2.4) and dark/sepia/light + sentence/word/off vocabularies.
 
+### Admin fiction management and EPUB upload
+
+Two independent gates, always: the advertised `fiction_management` capability *and* the authoritative
+`is_admin` from `/api/mobile/me`. A visible button is never authorization — the server is the gate,
+and the client only decides what to draw. `epub_upload` is a **separate** capability and is never
+inferred from `fiction_management`; the backend states that a deployment can accept JSON CRUD
+without accepting files. `FictionManagementStateHolder.epubProblem` checks extension, emptiness and
+`limits.max_epub_bytes` *before* the upload, because every one of those is a 400 that would otherwise
+arrive after the whole file went over the wire — and AWT's filename filter is a hint several Linux
+window managers ignore. The upload streams from the file; only the filename leaf is sent, because
+the server checks the extension and a local path is not its business.
+
 ### The server queue, which is not the player's queue
 
 `data/ServerQueue.kt` + `ui/ServerQueueStateHolder.kt` model the account's cross-library queue
