@@ -328,6 +328,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                         search.search(query)
                                         nav.open(Destination.Search)
                                     },
+                                    // On a server without per-user libraries there is no shelf to
+                                    // distinguish from the catalogue, so there is no mode to pick.
+                                    followsAvailable = capabilities.follows,
                                 )
 
                                 Destination.Search -> SearchScreen(

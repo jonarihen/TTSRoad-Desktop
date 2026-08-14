@@ -56,6 +56,18 @@ class LibraryCache(
     val library: StateFlow<Cached<LibraryResponse>> = _library.asStateFlow()
     private var libraryJob: Job? = null
 
+    /**
+     * The whole server, for finding something to follow.
+     *
+     * A second state rather than a scope on [library], and deliberately **never written to disk**:
+     * the offline namespace holds what this account chose to keep, and a catalogue of everything
+     * the server happens to host is not that. It is also why switching between the two costs no
+     * request the second time — each keeps its own answer.
+     */
+    private val _browseAll = MutableStateFlow(Cached<LibraryResponse>())
+    val browseAll: StateFlow<Cached<LibraryResponse>> = _browseAll.asStateFlow()
+    private var browseAllJob: Job? = null
+
     private val chapterStates = LinkedHashMap<Int, MutableStateFlow<Cached<ChaptersResponse>>>()
     private val chapterJobs = HashMap<Int, Job>()
     private val chapterOptions = LinkedHashMap<Int, MutableStateFlow<ChapterListOptions>>()
@@ -85,6 +97,71 @@ class LibraryCache(
             ) { repository.library() }
         }
     }
+
+    // --- Browse all --------------------------------------------------------------------------
+
+    /** Opening browse-all. Same coalescing rule as [ensureLibrary]; no disk priming. */
+    fun ensureBrowseAll() {
+        if (_browseAll.value.hasContent || browseAllJob?.isActive == true) return
+        refreshBrowseAll()
+    }
+
+    fun refreshBrowseAll() {
+        browseAllJob?.cancel()
+        _browseAll.update { it.copy(isRefreshing = true, error = null) }
+        browseAllJob = scope.launch {
+            load(state = _browseAll, fallback = "Could not load the server's fictions") {
+                repository.library(LibraryScope.All)
+            }
+        }
+    }
+
+    /**
+     * Follows or unfollows [fictionId], answering the state the **server** now holds.
+     *
+     * Not optimistic, and that is the point: the shelf is a list whose membership changes, so a
+     * guessed answer would have to add or remove a row — and undo it on failure — rather than flip
+     * a flag in place. One request, then the flag is patched from what came back and the shelf is
+     * re-asked, because following something also changes what "Continue listening" contains.
+     *
+     * Null means the server answered 404: no such fiction, or no such endpoint. Neither did
+     * anything, so neither may render as success.
+     */
+    suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? {
+        val confirmed = repository.setFollowing(fictionId, following) ?: return null
+        patchFollowing(fictionId, confirmed)
+        // Membership changed, so the shelf is a different list now — a flag patch cannot express
+        // a row appearing or disappearing.
+        refreshLibrary()
+        return confirmed
+    }
+
+    /** Patches the flag on both lists without a request. Public so a test can pin the rule. */
+    fun patchFollowing(fictionId: Int, following: Boolean) {
+        listOf(_library, _browseAll).forEach { state ->
+            state.update { cached ->
+                val library = cached.value ?: return@update cached
+                cached.copy(
+                    value = library.copy(
+                        fictions = library.fictions.map { fiction ->
+                            if (fiction.id == fictionId) fiction.copy(following = following) else fiction
+                        },
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * What this client believes about [fictionId]'s follow state, or null when nothing says.
+     *
+     * Reads the two library payloads and never the chapters one, which does not carry the key —
+     * see [FictionSummary.following].
+     */
+    fun followingOf(fictionId: Int): Boolean? =
+        (_library.value.value?.fictions.orEmpty() + _browseAll.value.value?.fictions.orEmpty())
+            .firstOrNull { it.id == fictionId }
+            ?.following
 
     // --- Chapters --------------------------------------------------------------------------
 
@@ -247,11 +324,14 @@ class LibraryCache(
     fun clear() {
         libraryJob?.cancel()
         libraryJob = null
+        browseAllJob?.cancel()
+        browseAllJob = null
         chapterJobs.values.forEach(Job::cancel)
         chapterJobs.clear()
         chapterStates.clear()
         chapterOptions.clear()
         _library.value = Cached()
+        _browseAll.value = Cached()
     }
 
     override fun close() {

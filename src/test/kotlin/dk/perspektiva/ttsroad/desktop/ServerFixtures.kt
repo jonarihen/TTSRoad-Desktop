@@ -575,6 +575,83 @@ object ServerFixtures {
           "text": {"items": [], "total": 0, "capped": false, "has_more": false}
         }
     """.trimIndent()
+
+    /** A server with per-user libraries. Only `follows` differs from [CAPABILITIES_1_4_0]. */
+    val CAPABILITIES_WITH_FOLLOWS = """
+        {
+          "api_version": 1,
+          "server": {"name": "Perspektiva TTSRoad", "version": "1.5.0", "base_url": "https://ttsroad.example.com"},
+          "capabilities": {
+            "readalong": true,
+            "follows": true,
+            "device_management": true
+          },
+          "limits": {"max_chapters_per_page": 200}
+        }
+    """.trimIndent()
+
+    /**
+     * GET /api/mobile/library?scope=all — 200, on a server with per-user libraries.
+     *
+     * Two fictions, one followed and one not, plus the `scope` echo and the `following_ids` list.
+     * The shelf payload has exactly the same shape with the unfollowed row absent.
+     */
+    val LIBRARY_BROWSE_ALL = """
+        {
+          "api_version": 1,
+          "generated_at": "2026-08-11T09:12:33.123456Z",
+          "scope": "all",
+          "server_time": "2026-08-11T09:12:33.123456Z",
+          "updated_since": null,
+          "delta": false,
+          "user": {"id": 1, "username": "admin", "is_admin": true},
+          "server": {"name": "Perspektiva TTSRoad", "version": "1.5.0", "base_url": "https://ttsroad.example.com"},
+          "fictions": [
+            {
+              "id": 7,
+              "title": "A Test Serial",
+              "author": "Someone",
+              "slug": "a-test-serial",
+              "cover_image_url": "https://cdn.royalroadcdn.com/covers/12345.jpg",
+              "tags": ["LitRPG"],
+              "total_chapters": 10,
+              "done_chapters": 6,
+              "pending_chapters": 2,
+              "error_chapters": 1,
+              "processing_chapters": 1,
+              "following": true
+            },
+            {
+              "id": 9,
+              "title": "Someone Else's Serial",
+              "author": "Another",
+              "slug": "someone-elses-serial",
+              "cover_image_url": null,
+              "tags": [],
+              "total_chapters": 4,
+              "done_chapters": 4,
+              "pending_chapters": 0,
+              "error_chapters": 0,
+              "processing_chapters": 0,
+              "following": false
+            }
+          ],
+          "following_ids": [7],
+          "deleted": [],
+          "continue_listening": [],
+          "recent_chapters": []
+        }
+    """.trimIndent()
+
+    /** POST /api/mobile/fictions/{id}/follow — 200. */
+    val FOLLOWED = """
+        {"api_version": 1, "status": "ok", "fiction_id": 7, "following": true, "created": true}
+    """.trimIndent()
+
+    /** DELETE /api/mobile/fictions/{id}/follow — 200. */
+    val UNFOLLOWED = """
+        {"api_version": 1, "status": "ok", "fiction_id": 7, "following": false, "removed": true}
+    """.trimIndent()
 }
 
 /**

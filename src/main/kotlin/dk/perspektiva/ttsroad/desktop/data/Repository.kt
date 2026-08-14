@@ -106,7 +106,16 @@ interface TtsRoadRepository {
      */
     suspend fun endSession(end: SessionEnd)
 
-    suspend fun library(): LibraryResponse
+    suspend fun library(scope: LibraryScope = LibraryScope.Followed): LibraryResponse
+
+    /**
+     * Follows or unfollows a fiction, answering the state **the server now holds**, or null when it
+     * answered 404.
+     *
+     * The 404 is genuinely ambiguous — no such fiction, or no such endpoint — and both mean the
+     * same thing to the caller: the toggle did not happen and must not render as though it did.
+     */
+    suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean?
 
     /**
      * The signed-in account as the server sees it now, or null when the server has no `/me`.
@@ -361,7 +370,14 @@ class RetrofitTtsRoadRepository(
         synchronized(capabilityCache) { capabilityCache.remove(normalized) }
     }
 
-    override suspend fun library(): LibraryResponse = withAuthorizedApi { it.library() }
+    override suspend fun library(scope: LibraryScope): LibraryResponse =
+        withAuthorizedApi { it.library(scope.wireValue) }
+
+    override suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? =
+        ifEndpointExists {
+            // The answer is read, never assumed: a response is the only proof the shelf changed.
+            if (following) it.follow(fictionId).following else it.unfollow(fictionId).following
+        }
 
     override suspend fun currentUser(): MobileUser? = ifEndpointExists { it.me() }?.user
 

@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed as itemsIndexedInRow
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -63,6 +64,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -116,6 +118,13 @@ fun LibraryScreen(
     serverSearchAvailable: Boolean = false,
     onSearchServer: (String) -> Unit = {},
     /**
+     * Whether the signed-in server advertises the `follows` capability.
+     *
+     * False means `/api/mobile/library` is still the whole shared list there, so there is no shelf
+     * to distinguish from a catalogue and the mode switch is absent entirely.
+     */
+    followsAvailable: Boolean = false,
+    /**
      * Local listening history, for the "Jump back in" strip. Defaulted to an in-memory store so a
      * screen test never reads or writes the real config directory.
      */
@@ -128,7 +137,15 @@ fun LibraryScreen(
     nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     val scope = rememberCoroutineScope()
-    val state by cache.library.collectAsState()
+    // Retained per destination, so walking into a fiction from browse-all and back lands where the
+    // user left rather than snapping to the shelf.
+    var browsing by rememberSaveable { mutableStateOf(false) }
+    // Browse-all is unreachable on a server without follows, and staying in it after a downgrade
+    // would leave the user in a mode the server no longer honours.
+    val browseAll = browsing && followsAvailable
+    val shelf by cache.library.collectAsState()
+    val everything by cache.browseAll.collectAsState()
+    val state = if (browseAll) everything else shelf
     val snapshots by history.history.collectAsState()
     val jumpBack = remember(snapshots, historyOwnerKey) {
         PlaybackHistory.jumpBackChoices(snapshots, historyOwnerKey)
@@ -136,6 +153,9 @@ fun LibraryScreen(
     // Keyless on purpose: fires once per screen *appearance*, not per recomposition. Reuses cached
     // content and coalesces with a load already in flight, so Back into the library costs nothing.
     LaunchedEffect(Unit) { cache.ensureLibrary() }
+    // Keyed, because switching modes is what makes browse-all worth fetching at all; it coalesces
+    // the same way, so flipping back and forth costs one request each.
+    LaunchedEffect(browseAll) { if (browseAll) cache.ensureBrowseAll() }
 
     // Hoisted out of the lazy content on purpose: an item that scrolls off is disposed, and the
     // search text must not be one of the things that disposal takes with it. `rememberSaveable`
@@ -143,13 +163,21 @@ fun LibraryScreen(
     var query by rememberSaveable { mutableStateOf("") }
     val gridState = rememberLazyGridState()
 
+    // The rails — hero, jump-back, recent — always come from the shelf, in both modes. The server
+    // derives them from the followed set either way ("browse-all widens the catalogue, not what the
+    // app thinks you are in the middle of"), and reading them from the mode being browsed would
+    // blank them while browse-all is still loading.
+    val rails = shelf.value
     val library = state.value
     val error = state.error
+    fun refreshCurrent() = if (browseAll) cache.refreshBrowseAll() else cache.refreshLibrary()
     when {
-        library == null && error != null -> InitialErrorState(error) { cache.refreshLibrary() }
-        library == null -> CenterProgress()
+        rails == null && shelf.error != null -> InitialErrorState(shelf.error.orEmpty()) { cache.refreshLibrary() }
+        rails == null -> CenterProgress()
         else -> {
-            val filtered = remember(library.fictions, query) { filterFictions(library.fictions, query) }
+            val filtered = remember(library?.fictions, query) {
+                filterFictions(library?.fictions.orEmpty(), query)
+            }
             val keys = remember(filtered) { fictionKeys(filtered) }
             Box(Modifier.fillMaxSize()) {
                 LazyVerticalGrid(
@@ -171,12 +199,12 @@ fun LibraryScreen(
                                 message = error.orEmpty(),
                                 lastSuccessMillis = state.lastSuccessMillis,
                                 nowMillis = nowMillis(),
-                                onRetry = { cache.refreshLibrary() },
+                                onRetry = { refreshCurrent() },
                             )
                         }
                     }
 
-                    val continueList = library.continueListening
+                    val continueList = rails.continueListening
                     if (continueList.isNotEmpty()) {
                         val hero = continueList.first()
                         fullWidthItem("hero") {
@@ -210,7 +238,7 @@ fun LibraryScreen(
                                 JumpBackShelf(
                                     snapshots = jumpBack,
                                     onOpen = { snapshot ->
-                                        library.fictions.firstOrNull { it.id == snapshot.fictionId }
+                                        rails.fictions.firstOrNull { it.id == snapshot.fictionId }
                                             ?.let(onOpenFiction)
                                     },
                                     onDismiss = { history.dismiss(it.key) },
@@ -221,9 +249,13 @@ fun LibraryScreen(
 
                     fullWidthItem("fictions-header") {
                         Column {
-                            SectionTitle("03", "Fictions")
+                            SectionTitle("03", if (browseAll) "Every fiction" else "Fictions")
                             Spacer(Modifier.height(16.dp))
-                            if (library.fictions.isNotEmpty()) {
+                            if (followsAvailable) {
+                                LibraryScopeTabs(browseAll) { browsing = it }
+                                Spacer(Modifier.height(14.dp))
+                            }
+                            if (library != null && library.fictions.isNotEmpty()) {
                                 OutlinedTextField(
                                     value = query,
                                     onValueChange = { query = it },
@@ -253,11 +285,32 @@ fun LibraryScreen(
                     }
 
                     when {
+                        // Only the grid waits, never the rails above it: switching to browse-all
+                        // must not take the hero off screen while one request runs.
+                        library == null && error != null -> fullWidthItem("grid-error") {
+                            Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+                                InlineRetry(error, ::refreshCurrent)
+                            }
+                        }
+
+                        library == null -> fullWidthItem("grid-loading") {
+                            Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+                                CenterProgress()
+                            }
+                        }
+
                         library.fictions.isEmpty() -> fullWidthItem("no-fictions") {
-                            EmptyState(
-                                "Nothing here yet",
-                                "Add a fiction on the server and it will show up here.",
-                            )
+                            if (browseAll) {
+                                EmptyState(
+                                    "The server has no fictions",
+                                    "Add one on the server and it will show up here.",
+                                )
+                            } else {
+                                EmptyState(
+                                    "Your shelf is empty",
+                                    "Switch to Everything to find something to follow.",
+                                )
+                            }
                         }
 
                         filtered.isEmpty() -> fullWidthItem("no-matches") {
@@ -275,13 +328,13 @@ fun LibraryScreen(
                         }
                     }
 
-                    if (library.recentChapters.isNotEmpty()) {
+                    if (rails.recentChapters.isNotEmpty()) {
                         fullWidthItem("recent") {
                             Column {
                                 Spacer(Modifier.height(20.dp))
                                 SectionTitle("04", "Recent")
                                 Spacer(Modifier.height(16.dp))
-                                ContinueShelf(library.recentChapters, repository) { chapter ->
+                                ContinueShelf(rails.recentChapters, repository) { chapter ->
                                     scope.launch { playback.play(chapter, chapter.fiction) }
                                 }
                             }
@@ -396,6 +449,62 @@ private fun SearchServerAction(query: String, matches: Int, onSearch: () -> Unit
             Spacer(Modifier.width(12.dp))
             MetaText("Nothing here matches — the server may still find it", color = AarisColor.Dim)
         }
+    }
+}
+
+const val LibraryScopeTabTestTag: String = "libraryScopeTab"
+
+/**
+ * Shelf or catalogue.
+ *
+ * `selectable` tabs rather than a toggle, for the same reason the chapter filter uses them: a tab
+ * announces its selected state and can be reached in one Tab stop, where a button that relabels
+ * itself announces the state you would move *to*.
+ */
+@Composable
+private fun LibraryScopeTabs(browseAll: Boolean, onSelect: (Boolean) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        ScopeTab("My shelf", selected = !browseAll) { onSelect(false) }
+        ScopeTab("Everything", selected = browseAll) { onSelect(true) }
+    }
+}
+
+@Composable
+private fun ScopeTab(label: String, selected: Boolean, onSelect: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Box(
+        Modifier
+            .selectable(
+                selected = selected,
+                interactionSource = interaction,
+                indication = null,
+                role = Role.Tab,
+                onClick = onSelect,
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
+            .background(if (selected) AarisColor.BgHover else Color.Transparent)
+            .border(1.dp, if (focused) AarisColor.Accent else Color.Transparent)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .testTag(LibraryScopeTabTestTag),
+    ) {
+        MetaText(label, color = if (selected) AarisColor.Accent else AarisColor.Muted)
+    }
+}
+
+/** A failure that took out one section rather than the screen. Always carries its own retry. */
+@Composable
+private fun InlineRetry(message: String, onRetry: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+        OutlinedButton(
+            onClick = onRetry,
+            shape = RectangleShape,
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+        ) { Text("RETRY") }
     }
 }
 
