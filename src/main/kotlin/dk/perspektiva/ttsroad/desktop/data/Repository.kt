@@ -114,6 +114,14 @@ interface TtsRoadRepository {
     /** The cheap delta index, or null when this server predates it. */
     suspend fun deltaSync(updatedSince: String): DeltaSyncResponse? = null
 
+    suspend fun createFiction(request: FictionCreateRequest): FictionSummary =
+        error("fiction management is not implemented")
+
+    suspend fun updateFiction(fictionId: Int, request: FictionUpdateRequest): FictionSummary =
+        error("fiction management is not implemented")
+
+    suspend fun deleteFiction(fictionId: Int): Boolean = false
+
     /**
      * Follows or unfollows a fiction, answering the state **the server now holds**, or null when it
      * answered 404.
@@ -420,6 +428,15 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun deltaSync(updatedSince: String): DeltaSyncResponse? =
         ifEndpointExists { it.deltaSync(updatedSince) }
+
+    override suspend fun createFiction(request: FictionCreateRequest): FictionSummary =
+        withAuthorizedApi { it.createFiction(request).fiction }
+
+    override suspend fun updateFiction(fictionId: Int, request: FictionUpdateRequest): FictionSummary =
+        withAuthorizedApi { it.updateFiction(fictionId, request).fiction }
+
+    override suspend fun deleteFiction(fictionId: Int): Boolean =
+        withAuthorizedApi { it.deleteFiction(fictionId) }.let { it.deleted && it.fictionId == fictionId }
 
     override suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? =
         ifEndpointExists {

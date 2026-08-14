@@ -8,6 +8,8 @@ import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
 import dk.perspektiva.ttsroad.desktop.data.DeltaSyncResponse
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.FictionCreateRequest
+import dk.perspektiva.ttsroad.desktop.data.FictionUpdateRequest
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.LoginResult
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
@@ -64,6 +66,9 @@ open class FakeRepository(
     var deleteBookmarkResult: Result<Boolean> = Result.success(true),
     /** `success(null)` is the server saying it has no queue API — not "the queue is empty". */
     var queueResult: Result<ServerQueueResponse?> = Result.success(ServerQueueResponse()),
+    var createFictionResult: Result<FictionSummary> = Result.success(FictionSummary(id = 101, title = "Added")),
+    var updateFictionResult: Result<FictionSummary> = Result.success(FictionSummary(id = 1, title = "Updated")),
+    var deleteFictionResult: Result<Boolean> = Result.success(true),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -79,6 +84,8 @@ open class FakeRepository(
     val chapterDeltaCalls: MutableList<Pair<Int, String>> = mutableListOf()
     val deltaSyncCursors: MutableList<String> = mutableListOf()
     var devicesCalls: Int = 0
+        private set
+    var currentUserCalls: Int = 0
         private set
     var revokeOtherDevicesCalls: Int = 0
         private set
@@ -114,6 +121,9 @@ open class FakeRepository(
     val createdBookmarks: MutableList<BookmarkCreateRequest> = mutableListOf()
     val patchedBookmarks: MutableList<Pair<Int, BookmarkPatchRequest>> = mutableListOf()
     val deletedBookmarks: MutableList<Int> = mutableListOf()
+    val createdFictions: MutableList<FictionCreateRequest> = mutableListOf()
+    val updatedFictions: MutableList<Pair<Int, FictionUpdateRequest>> = mutableListOf()
+    val deletedFictions: MutableList<Int> = mutableListOf()
 
     private val _currentCapabilities = MutableStateFlow(ServerCapabilities.Baseline)
     override val currentCapabilities: StateFlow<ServerCapabilities> = _currentCapabilities.asStateFlow()
@@ -180,7 +190,25 @@ open class FakeRepository(
         return configured.getOrThrow()
     }
 
-    override suspend fun currentUser(): MobileUser? = currentUserResult.getOrThrow()
+    override suspend fun createFiction(request: FictionCreateRequest): FictionSummary {
+        createdFictions += request
+        return createFictionResult.getOrThrow()
+    }
+
+    override suspend fun updateFiction(fictionId: Int, request: FictionUpdateRequest): FictionSummary {
+        updatedFictions += fictionId to request
+        return updateFictionResult.getOrThrow()
+    }
+
+    override suspend fun deleteFiction(fictionId: Int): Boolean {
+        deletedFictions += fictionId
+        return deleteFictionResult.getOrThrow()
+    }
+
+    override suspend fun currentUser(): MobileUser? {
+        currentUserCalls++
+        return currentUserResult.getOrThrow()
+    }
 
     override suspend fun devices(): List<DeviceSession>? {
         devicesCalls++

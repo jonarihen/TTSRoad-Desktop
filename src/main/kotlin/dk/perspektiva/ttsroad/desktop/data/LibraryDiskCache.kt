@@ -69,6 +69,12 @@ class LibraryDiskCache(
         )
     }
 
+    /** Removes metadata for a fiction the server has confirmed no longer exists. */
+    fun removeChapters(fictionId: Int) {
+        runCatching { Files.deleteIfExists(chapterFile(fictionId).toPath()) }
+            .onFailure { AppLog.warn("could not remove cached chapter metadata", it) }
+    }
+
     private fun write(file: File, json: String) {
         runCatching {
             prepare()

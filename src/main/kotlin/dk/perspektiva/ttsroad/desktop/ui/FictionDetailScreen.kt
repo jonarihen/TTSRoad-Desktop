@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -191,6 +192,9 @@ fun FictionDetailScreen(
     onOpenReader: (ChapterSummary) -> Unit = {},
     downloads: ChapterDownloadsUi = ChapterDownloadsUi(),
     queue: ChapterQueueUi = ChapterQueueUi(),
+    fictionManagement: FictionManagementUiState = FictionManagementUiState(),
+    onEditFiction: (FictionSummary) -> Unit = {},
+    onDeleteFiction: (FictionSummary) -> Unit = {},
     nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     val scope = rememberCoroutineScope()
@@ -325,11 +329,30 @@ fun FictionDetailScreen(
                         } else {
                             null
                         },
+                        management = if (fictionManagement.canManage) {
+                            FictionManagementActions(
+                                busy = fictionManagement.isBusy,
+                                onEdit = { onEditFiction(header) },
+                                onDelete = { onDeleteFiction(header) },
+                            )
+                        } else {
+                            null
+                        },
                     )
 
                     actionError?.let { message ->
                         Spacer(Modifier.height(12.dp))
                         Text(message, color = MaterialTheme.colorScheme.error)
+                    }
+                    fictionManagement.notice?.let { message ->
+                        Spacer(Modifier.height(12.dp))
+                        MetaText(message, color = AarisColor.Ok)
+                    }
+                    if (fictionManagement.editor == null) {
+                        fictionManagement.error?.let { message ->
+                            Spacer(Modifier.height(12.dp))
+                            Text(message, color = MaterialTheme.colorScheme.error)
+                        }
                     }
                     queue.error?.let { message ->
                         Spacer(Modifier.height(12.dp))
@@ -570,7 +593,15 @@ private fun resumeTarget(chapters: List<ChapterSummary>): ChapterSummary? =
 /** The follow control's whole state, or null where the server has no per-user library. */
 data class FollowUi(val following: Boolean, val busy: Boolean, val onToggle: () -> Unit)
 
+data class FictionManagementActions(
+    val busy: Boolean,
+    val onEdit: () -> Unit,
+    val onDelete: () -> Unit,
+)
+
 const val FollowToggleTestTag: String = "followToggle"
+const val EditFictionButtonTestTag: String = "editFictionButton"
+const val DeleteFictionButtonTestTag: String = "deleteFictionButton"
 
 @Composable
 private fun FictionHeader(
@@ -579,6 +610,7 @@ private fun FictionHeader(
     chapters: List<ChapterSummary>,
     onResume: (ChapterSummary) -> Unit,
     follow: FollowUi? = null,
+    management: FictionManagementActions? = null,
 ) {
     Row(Modifier.fillMaxWidth()) {
         CoverImage(
@@ -648,7 +680,7 @@ private fun FictionHeader(
                 MetaText(listeningTotalsLabel(totals), color = AarisColor.Muted)
             }
             val target = remember(chapters) { resumeTarget(chapters) }
-            if (target != null || follow != null) {
+            if (target != null || follow != null || management != null) {
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (target != null) {
@@ -663,6 +695,27 @@ private fun FictionHeader(
                         }
                     }
                     follow?.let { FollowButton(it) }
+                    management?.let { actions ->
+                        OutlinedButton(
+                            onClick = actions.onEdit,
+                            enabled = !actions.busy,
+                            shape = RectangleShape,
+                            modifier = Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .testTag(EditFictionButtonTestTag),
+                        ) { Text("EDIT") }
+                        OutlinedButton(
+                            onClick = actions.onDelete,
+                            enabled = !actions.busy,
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error,
+                            ),
+                            modifier = Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .testTag(DeleteFictionButtonTestTag),
+                        ) { Text("DELETE") }
+                    }
                 }
             }
         }

@@ -84,6 +84,17 @@ class LibraryDiskCacheTest {
     }
 
     @Test
+    fun `confirmed fiction deletion removes its cached chapter metadata`() {
+        val cache = cache()
+        cache.storeChapters(7, chapters, 1)
+
+        cache.removeChapters(7)
+
+        assertNull(cache.loadChapters(7))
+        assertTrue(!File(cache.root, "chapters-7.json").exists())
+    }
+
+    @Test
     fun `a planted metadata symlink is refused and its target remains untouched`() {
         val cache = cache()
         cache.root.mkdirs()

@@ -56,6 +56,19 @@ class CapabilityDiscoveryTest {
     }
 
     @Test
+    fun `fiction management is enabled only by a literal advertised flag`() {
+        val enabled = ServerCapabilities.from(
+            CapabilitiesResponse(capabilities = mapOf("fiction_management" to true)),
+        )
+        val malformed = ServerCapabilities.from(
+            CapabilitiesResponse(capabilities = mapOf("fiction_management" to "admin")),
+        )
+
+        assertTrue(enabled.fictionManagement)
+        assertFalse(malformed.fictionManagement)
+    }
+
+    @Test
     fun `discovery is unauthenticated and the marker header never reaches the wire`() = runTest {
         // A stale session for the very origin being probed: without the no-auth marker this is
         // exactly when a previous server's token would be handed to whatever is listening.

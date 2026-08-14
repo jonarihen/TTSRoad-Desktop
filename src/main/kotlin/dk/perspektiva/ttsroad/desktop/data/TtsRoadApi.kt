@@ -76,6 +76,21 @@ interface TtsRoadApi {
     @GET("api/mobile/sync")
     suspend fun deltaSync(@Query("updated_since") updatedSince: String): DeltaSyncResponse
 
+    /** Adds one shared fiction. Advertised by `fiction_management` and admin-gated by the server. */
+    @POST("api/mobile/fictions")
+    suspend fun createFiction(@Body request: FictionCreateRequest): FictionMutationResponse
+
+    /** Edits shared fiction metadata. The slug is deliberately not part of the request model. */
+    @PATCH("api/mobile/fictions/{fiction_id}")
+    suspend fun updateFiction(
+        @Path("fiction_id") fictionId: Int,
+        @Body request: FictionUpdateRequest,
+    ): FictionMutationResponse
+
+    /** Deletes the shared fiction and every account's dependent progress. */
+    @DELETE("api/mobile/fictions/{fiction_id}")
+    suspend fun deleteFiction(@Path("fiction_id") fictionId: Int): FictionDeleteResponse
+
     /** Puts a fiction on this account's shelf. 404 for a fiction that does not exist. */
     @POST("api/mobile/fictions/{fiction_id}/follow")
     suspend fun follow(@Path("fiction_id") fictionId: Int): FollowResponse

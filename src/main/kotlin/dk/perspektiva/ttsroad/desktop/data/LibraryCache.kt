@@ -153,6 +153,71 @@ class LibraryCache(
         }
     }
 
+    /** Drops every in-memory/disk metadata reference after a confirmed server-side delete. */
+    fun forgetFiction(fictionId: Int) {
+        chapterJobs.remove(fictionId)?.cancel()
+        chapterStates.remove(fictionId)
+        chapterOptions.remove(fictionId)
+        listOf(_library, _browseAll).forEach { state ->
+            state.update { cached ->
+                val library = cached.value ?: return@update cached
+                cached.copy(
+                    value = library.copy(
+                        fictions = library.fictions.filterNot { it.id == fictionId },
+                        continueListening = library.continueListening.filterNot {
+                            it.resolvedFictionId == fictionId
+                        },
+                        recentChapters = library.recentChapters.filterNot {
+                            it.resolvedFictionId == fictionId
+                        },
+                    ),
+                )
+            }
+        }
+        diskCache()?.removeChapters(fictionId)
+    }
+
+    /** Publishes the server-returned metadata immediately while the full refresh runs underneath. */
+    fun patchFiction(fiction: FictionSummary) {
+        fun ChapterSummary.patch(): ChapterSummary =
+            if (resolvedFictionId == fiction.id) {
+                copy(
+                    fiction = this.fiction?.let { fiction },
+                    fictionTitle = fiction.title,
+                    fictionAuthor = fiction.author,
+                    coverImageUrl = fiction.coverImageUrl,
+                )
+            } else {
+                this
+            }
+
+        listOf(_library, _browseAll).forEach { state ->
+            state.update { cached ->
+                val library = cached.value ?: return@update cached
+                cached.copy(
+                    value = library.copy(
+                        fictions = library.fictions.map { current ->
+                            if (current.id == fiction.id) {
+                                // Mutation payloads are global fiction shapes, so they do not
+                                // carry this account's shelf membership. Preserve what the
+                                // library knew until its refresh returns the scoped row.
+                                fiction.copy(following = fiction.following ?: current.following)
+                            } else {
+                                current
+                            }
+                        },
+                        continueListening = library.continueListening.map(ChapterSummary::patch),
+                        recentChapters = library.recentChapters.map(ChapterSummary::patch),
+                    ),
+                )
+            }
+        }
+        chapterStates[fiction.id]?.update { cached ->
+            val chapters = cached.value ?: return@update cached
+            cached.copy(value = chapters.copy(fiction = fiction))
+        }
+    }
+
     /**
      * What this client believes about [fictionId]'s follow state, or null when nothing says.
      *

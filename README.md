@@ -37,6 +37,7 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Remembered window size, position and maximised state | ✅ |
 | Async cover images (cached) | ✅ |
 | Dedicated fiction-detail screen | ✅ |
+| Admin fiction management — add by URL/id, edit metadata, confirmed delete | ✅ except [EPUB](https://github.com/jonarihen/TTSRoad/issues/122) |
 | Chapter list — All/Unplayed/Ready filter, oldest/newest sort, visible counts | ✅ |
 | Highlight + auto-scroll to the playing chapter, "Jump to current" | ✅ |
 | Bulk marks — all played / all unplayed / all previous, in one request | ✅ |
@@ -347,6 +348,8 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
     ├── WindowLayout.kt           supported minimum size + the three width classes
     ├── LoginStateHolder.kt       login submit + result mapping
     ├── SettingsStateHolder.kt    settings panes, device sessions, confirmations
+    ├── FictionManagementStateHolder.kt capability + current-admin gate and mutation state
+    ├── FictionManagementDialogs.kt add/edit forms and destructive shared-delete warning
     ├── LibraryScreen.kt          LazyVerticalGrid: hero, shelves, search, fictions
     ├── FictionDetailScreen.kt    LazyColumn: one header item, then chapter rows + bulk controls
     ├── ReaderScreen.kt           lazy selectable reader, follow/find/zoom/theme controls
@@ -620,6 +623,13 @@ none of that: an outage is not a revocation.
 - a transient failure keeps the last known answer instead of downgrading;
 - results are cached in memory for six hours, and forcibly refreshed after login;
 - `api_version` is never used as a proxy for a feature.
+
+Global fiction mutations use two independent gates: the server must advertise
+`fiction_management`, then authenticated `/api/mobile/me` must still say this account is an admin.
+The server enforces the same rule on every request. Add accepts a Royal Road URL or bare id; edit
+is deliberately limited to title, author and voice; delete warns that chapters and every user's
+progress disappear. EPUB remains absent until the server publishes a stable multipart mobile
+contract ([TTSRoad #122](https://github.com/jonarihen/TTSRoad/issues/122)).
 
 The discovered server name and version appear under the URL field **before** any credential is
 sent, so a typo'd hostname is visible rather than password-shaped.

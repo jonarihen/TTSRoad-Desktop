@@ -7,8 +7,11 @@ import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import dk.perspektiva.ttsroad.desktop.App
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
@@ -19,6 +22,7 @@ import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
+import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionEnd
 import dk.perspektiva.ttsroad.desktop.data.SessionEndReason
@@ -275,6 +279,73 @@ class ScreensUiTest {
     }
 
     // --- LibraryScreen --------------------------------------------------------------------
+
+    @Test
+    fun `an advertised admin can add edit and reach the destructive delete warning`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(ParsedFixtures.library),
+            chaptersResult = Result.success(ParsedFixtures.chapters),
+            capabilitiesResult = ServerCapabilities(
+                serverVersion = "2.0.0",
+                fictionManagement = true,
+            ),
+            currentUserResult = Result.success(MobileUser(1, "admin", isAdmin = true)),
+        )
+        val app = container(
+            SessionState(
+                serverUrl = "https://ttsroad.example.com/",
+                token = "ttsr_admin",
+                username = "admin",
+                isAdmin = true,
+            ),
+            repository,
+        )
+
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag(AddFictionButtonTestTag).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag(AddFictionButtonTestTag).performClick()
+        compose.onNodeWithTag(AddFictionDialogTestTag).assertIsDisplayed()
+        compose.onNodeWithText("CANCEL").performClick()
+
+        compose.onAllNodesWithTag(FictionCardTestTag).onFirst().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag(EditFictionButtonTestTag).assertIsDisplayed()
+        compose.onNodeWithTag(DeleteFictionButtonTestTag).performClick()
+        compose.onNodeWithText(
+            "This permanently deletes the fiction, every chapter and every user's listening progress",
+            substring = true,
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a non-admin never sees fiction management controls even when routes exist`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(ParsedFixtures.library),
+            capabilitiesResult = ServerCapabilities(
+                serverVersion = "2.0.0",
+                fictionManagement = true,
+            ),
+            currentUserResult = Result.success(MobileUser(2, "listener", isAdmin = false)),
+        )
+        val app = container(
+            SessionState(
+                serverUrl = "https://ttsroad.example.com/",
+                token = "ttsr_listener",
+                username = "listener",
+                // Deliberately stale: `/me` must win over this login-time claim.
+                isAdmin = true,
+            ),
+            repository,
+        )
+
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+
+        assertEquals(0, compose.onAllNodesWithTag(AddFictionButtonTestTag).fetchSemanticsNodes().size)
+        assertEquals(1, repository.currentUserCalls)
+    }
 
     @Test
     fun `the library renders the continue-listening hero and the fictions grid`() {

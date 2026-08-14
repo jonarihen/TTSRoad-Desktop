@@ -81,6 +81,29 @@ class LibraryCacheTest {
     }
 
     @Test
+    fun `a global edit payload does not erase account-scoped follow membership`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(
+                LibraryResponse(
+                    fictions = listOf(
+                        FictionSummary(id = 7, title = "Old", following = true),
+                    ),
+                ),
+            ),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureLibrary()
+        runCurrent()
+
+        cache.patchFiction(FictionSummary(id = 7, title = "New", following = null))
+
+        val patched = cache.library.value.value?.fictions?.single()
+        assertEquals("New", patched?.title)
+        assertEquals(true, patched?.following)
+        cache.close()
+    }
+
+    @Test
     fun `a restart can browse cached library and chapters while the server is offline`() = runTest {
         val fiction = FictionSummary(id = 7, title = "Cached serial")
         val library = LibraryResponse(fictions = listOf(fiction))

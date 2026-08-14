@@ -107,6 +107,8 @@ data class FictionSummary(
     val id: Int = 0,
     val title: String = "Untitled",
     val author: String? = null,
+    /** Narration voice; present on management/detail payloads and optional on older library rows. */
+    val voice: String? = null,
     val slug: String? = null,
     @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
     val description: String? = null,
@@ -132,6 +134,32 @@ data class FictionSummary(
     val readyFraction: Float
         get() = if (totalChapters > 0) (doneChapters.toFloat() / totalChapters).coerceIn(0f, 1f) else 0f
 }
+
+/** Admin-only `POST /api/mobile/fictions`. A bare Royal Road id is accepted by the server. */
+data class FictionCreateRequest(
+    @param:Json(name = "fiction_url") val fictionUrl: String,
+    val voice: String? = null,
+)
+
+/** Admin-only fields intentionally exposed by the desktop editor. */
+data class FictionUpdateRequest(
+    val title: String? = null,
+    val author: String? = null,
+    val voice: String? = null,
+)
+
+data class FictionMutationResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    val fiction: FictionSummary,
+)
+
+data class FictionDeleteResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    val deleted: Boolean = false,
+)
 
 data class ChapterSummary(
     val id: Int = 0,
