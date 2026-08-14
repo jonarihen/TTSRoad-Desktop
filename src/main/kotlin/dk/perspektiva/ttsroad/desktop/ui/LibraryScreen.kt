@@ -85,6 +85,7 @@ import kotlinx.coroutines.launch
 
 /** Test handle for "how many fiction cards did the lazy grid actually compose". */
 const val FictionCardTestTag: String = "fictionCard"
+const val AddFictionButtonTestTag: String = "addFictionButton"
 
 /** Minimum card width; the grid fits as many columns as that allows, like `auto-fill minmax()`. */
 private val MinCardWidth = 200.dp
@@ -124,6 +125,8 @@ fun LibraryScreen(
      * to distinguish from a catalogue and the mode switch is absent entirely.
      */
     followsAvailable: Boolean = false,
+    fictionManagement: FictionManagementUiState = FictionManagementUiState(),
+    onAddFiction: () -> Unit = {},
     /**
      * Local listening history, for the "Jump back in" strip. Defaulted to an in-memory store so a
      * screen test never reads or writes the real config directory.
@@ -253,8 +256,39 @@ fun LibraryScreen(
 
                     fullWidthItem("fictions-header") {
                         Column {
-                            SectionTitle("03", if (browseAll) "Every fiction" else "Fictions")
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                SectionTitle(
+                                    "03",
+                                    if (browseAll) "Every fiction" else "Fictions",
+                                    Modifier.weight(1f),
+                                )
+                                if (fictionManagement.canManage) {
+                                    Spacer(Modifier.width(16.dp))
+                                    OutlinedButton(
+                                        onClick = onAddFiction,
+                                        enabled = !fictionManagement.isBusy,
+                                        shape = RectangleShape,
+                                        modifier = Modifier
+                                            .pointerHoverIcon(PointerIcon.Hand)
+                                            .testTag(AddFictionButtonTestTag),
+                                    ) { Text("ADD FICTION") }
+                                }
+                            }
                             Spacer(Modifier.height(16.dp))
+                            fictionManagement.notice?.let {
+                                MetaText(it, color = AarisColor.Ok)
+                                Spacer(Modifier.height(10.dp))
+                            }
+                            if (fictionManagement.access == FictionManagementAccess.Unavailable) {
+                                Text(
+                                    fictionManagement.error ?: "Fiction management is temporarily unavailable",
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                                Spacer(Modifier.height(10.dp))
+                            }
                             if (followsAvailable) {
                                 LibraryScopeTabs(browseAll) { browsing = it }
                                 Spacer(Modifier.height(14.dp))
@@ -307,7 +341,11 @@ fun LibraryScreen(
                             if (browseAll) {
                                 EmptyState(
                                     "The server has no fictions",
-                                    "Add one on the server and it will show up here.",
+                                    if (fictionManagement.canManage) {
+                                        "Use Add fiction to start tracking one."
+                                    } else {
+                                        "An administrator can add one from a supported client."
+                                    },
                                 )
                             } else {
                                 EmptyState(

@@ -250,6 +250,12 @@ release with no asset for this platform/architecture is announced *without* a do
 feature; unknown keys are ignored; `404` means baseline and is cached; a transient failure keeps the
 last known answer rather than downgrading; `api_version` is never a proxy for a feature.
 
+`fiction_management` says only that the admin add/edit/delete routes exist. The UI separately asks
+`/api/mobile/me` and offers controls only for its current `is_admin=true`; never trust the role
+cached at login for this gate. `FictionManagementStateHolder` owns the forms, destructive delete
+confirmation and refreshes. Delete must evict the fiction's cached chapter metadata. Do not call
+the web-only EPUB route: the stable multipart mobile contract is tracked in TTSRoad #122.
+
 ### Linux package and operational diagnostics
 
 The Debian identity and installation directory are lowercase `ttsroad` (`/opt/ttsroad`); the display
@@ -332,6 +338,7 @@ preferences / sleep timer / MPRIS / shortcuts (0006). Read the relevant one befo
 the invariants above; offline storage and caching are in 0007, read-along is in 0008, and Debian
 packaging/operations are in 0009, and releases/update checking are in 0010. They exist because
 the alternative was tried or measured. The cross-library server queue is in 0011.
+Admin fiction management and its two independent gates are in 0012.
 
 ## CI
 

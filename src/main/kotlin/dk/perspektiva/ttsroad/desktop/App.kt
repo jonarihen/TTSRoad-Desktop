@@ -75,6 +75,8 @@ import dk.perspektiva.ttsroad.desktop.ui.BookmarksScreen
 import dk.perspektiva.ttsroad.desktop.ui.BookmarksStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.ContentMaxWidth
 import dk.perspektiva.ttsroad.desktop.ui.FictionDetailScreen
+import dk.perspektiva.ttsroad.desktop.ui.FictionManagementDialogs
+import dk.perspektiva.ttsroad.desktop.ui.FictionManagementStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.LibraryScreen
 import dk.perspektiva.ttsroad.desktop.ui.LoginStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.MetaText
@@ -137,6 +139,10 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     val serverQueue = rememberStateHolder(repository, playback) {
         ServerQueueStateHolder(repository, playback)
     }
+    val fictionManagement = rememberStateHolder(repository, cache) {
+        FictionManagementStateHolder(repository, cache)
+    }
+    val fictionManagementState by fictionManagement.state.collectAsState()
 
     // Capability discovery is the only source of the server's stable advertised identity. Feed it
     // into the download namespace as soon as it arrives; using it only for feature flags would
@@ -154,10 +160,27 @@ fun App(container: AppContainer = remember { AppContainer() }) {
 
     val scope = rememberCoroutineScope()
 
+    LaunchedEffect(session.isLoggedIn, capabilities.fictionManagement) {
+        if (session.isLoggedIn) fictionManagement.ensureAccess(capabilities.fictionManagement)
+    }
+
+    LaunchedEffect(fictionManagementState.deletedFictionId) {
+        val deleted = fictionManagementState.deletedFictionId ?: return@LaunchedEffect
+        val current = nav.current
+        if (current is Destination.Fiction && current.fiction.id == deleted) nav.back()
+        fictionManagement.consumeDeletedFiction()
+    }
+
     fun refreshCurrentScreen() {
         when (val destination = nav.current) {
-            Destination.Library -> cache.refreshLibrary()
-            is Destination.Fiction -> cache.refreshChapters(destination.fiction.id)
+            Destination.Library -> {
+                cache.refreshLibrary()
+                fictionManagement.ensureAccess(capabilities.fictionManagement, forceRefresh = true)
+            }
+            is Destination.Fiction -> {
+                cache.refreshChapters(destination.fiction.id)
+                fictionManagement.ensureAccess(capabilities.fictionManagement, forceRefresh = true)
+            }
             Destination.Settings, Destination.Devices -> settings.refreshCurrentSection()
             Destination.Search -> search.refresh()
             Destination.Bookmarks -> bookmarks.refresh()
@@ -212,6 +235,10 @@ fun App(container: AppContainer = remember { AppContainer() }) {
         // Escape closes — ahead of a settings confirmation that may also be open behind it.
         if (showShortcuts) {
             showShortcuts = false
+            return true
+        }
+        if (fictionManagementState.hasOpenOverlay) {
+            fictionManagement.dismissOverlay()
             return true
         }
         val ownsOverlay = nav.current == Destination.Settings || nav.current == Destination.Devices
@@ -293,6 +320,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             search.sessionEnded()
             bookmarks.sessionEnded()
             serverQueue.sessionEnded()
+            fictionManagement.sessionEnded()
         } else {
             // Cheap, and it is what makes optional UI correct after a restart, where login did
             // not run but a keyring-backed session was restored.
@@ -396,6 +424,8 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     // On a server without per-user libraries there is no shelf to
                                     // distinguish from the catalogue, so there is no mode to pick.
                                     followsAvailable = capabilities.follows,
+                                    fictionManagement = fictionManagementState,
+                                    onAddFiction = fictionManagement::openAdd,
                                 )
 
                                 Destination.Search -> SearchScreen(
@@ -443,6 +473,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                         available = capabilities.queue,
                                         fictionId = destination.fiction.id,
                                     ),
+                                    fictionManagement = fictionManagementState,
+                                    onEditFiction = fictionManagement::openEdit,
+                                    onDeleteFiction = fictionManagement::askDelete,
                                 )
 
                                 Destination.Player -> PlayerScreen(
@@ -539,6 +572,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     // Outside the login branch on purpose: F1 is a reasonable thing to press on the sign-in
     // screen, and the list is useful there too.
     if (showShortcuts) ShortcutsDialog(onDismiss = { showShortcuts = false })
+    if (session.isLoggedIn) FictionManagementDialogs(fictionManagement)
 
     // The Devices destination is a deep link into the settings screen: entering it selects the
     // pane, so a future "manage sessions" link from anywhere lands on the right place.

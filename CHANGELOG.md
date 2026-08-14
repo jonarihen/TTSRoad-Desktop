@@ -26,6 +26,9 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 - Cross-device jump-back history through the server's `kind=auto` bookmarks. The desktop writes a
   breadcrumb every five minutes of playback and at its existing transition points, merges moments
   recorded by other clients into the Jump back shelf, and retains the bounded local copy offline.
+- Capability- and admin-gated fiction management: add a Royal Road fiction by URL/id, edit its
+  title/author/voice, and delete it behind a warning that the shared chapters and every account's
+  progress will be destroyed.
 - The account's cross-library queue, shared with the web client, as a browsable surface of its own.
   Chapter rows gain "Play next" and "Add to queue", the chapter list gains "Queue unplayed", and the
   queue screen can reorder, remove and clear. Shown only on a server that advertises the capability.

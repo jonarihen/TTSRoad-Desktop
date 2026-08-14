@@ -43,6 +43,8 @@ data class ServerCapabilities(
     val deltaSync: Boolean = false,
     val batchProgress: Boolean = false,
     val audioContentHash: Boolean = false,
+    /** Admin add/edit/delete routes. Account permission is verified separately through `/me`. */
+    val fictionManagement: Boolean = false,
     /**
      * Per-user libraries.
      *
@@ -88,6 +90,7 @@ data class ServerCapabilities(
             deltaSync = response.capabilities.flag("delta_sync"),
             batchProgress = response.capabilities.flag("batch_progress"),
             audioContentHash = response.capabilities.flag("audio_content_hash"),
+            fictionManagement = response.capabilities.flag("fiction_management"),
             follows = response.capabilities.flag("follows"),
             deviceManagement = response.capabilities.flag("device_management"),
             queue = response.capabilities.flag("queue"),

@@ -122,8 +122,8 @@ fun RowIconAction(
 }
 
 @Composable
-fun SectionTitle(kicker: String, title: String) {
-    Column(Modifier.fillMaxWidth()) {
+fun SectionTitle(kicker: String, title: String, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth()) {
         MetaText(text = "§ $kicker", color = AarisColor.Accent)
         Text(title.uppercase(), style = MaterialTheme.typography.titleLarge, color = AarisColor.Ink)
         Spacer(Modifier.height(8.dp))
