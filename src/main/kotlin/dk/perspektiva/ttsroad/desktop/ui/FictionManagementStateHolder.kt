@@ -6,6 +6,7 @@ import dk.perspektiva.ttsroad.desktop.data.FictionUpdateRequest
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
+import java.io.File
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -27,6 +28,14 @@ sealed interface FictionEditor {
     data class Add(
         val fictionUrl: String = "",
         val voice: String = "",
+        /**
+         * A chosen EPUB, which makes this an *upload* rather than a Royal Road add.
+         *
+         * One editor with two paths rather than two dialogs: "add a fiction" is one intention, and
+         * making the user pick which kind of add they wanted before showing them either form is
+         * asking them to know the implementation.
+         */
+        val epubFile: File? = null,
     ) : FictionEditor
 
     data class Edit(
@@ -41,6 +50,10 @@ data class FictionDeleteConfirmation(val fictionId: Int, val title: String)
 
 data class FictionManagementUiState(
     val access: FictionManagementAccess = FictionManagementAccess.Unsupported,
+    /** Whether this server accepts multipart EPUB uploads at all — advertised separately. */
+    val epubUploadAvailable: Boolean = false,
+    /** The server's byte ceiling, when it published one. */
+    val maxEpubBytes: Long? = null,
     val editor: FictionEditor? = null,
     val deleteConfirmation: FictionDeleteConfirmation? = null,
     val isBusy: Boolean = false,
@@ -63,6 +76,8 @@ data class FictionManagementUiState(
 class FictionManagementStateHolder(
     private val repository: TtsRoadRepository,
     private val cache: LibraryCache,
+    /** The native EPUB chooser. Substituted in a test, which has neither a display nor a person. */
+    private val picker: EpubFilePicker = DesktopEpubFilePicker,
     dispatcher: CoroutineDispatcher = Dispatchers.Main,
 ) : StateHolder(dispatcher) {
     private val _state = MutableStateFlow(FictionManagementUiState())
@@ -72,7 +87,12 @@ class FictionManagementStateHolder(
     private var mutationJob: Job? = null
     private var lastSupported: Boolean? = null
 
-    fun ensureAccess(supported: Boolean, forceRefresh: Boolean = false) {
+    fun ensureAccess(
+        supported: Boolean,
+        epubUpload: Boolean = false,
+        maxEpubBytes: Long? = null,
+        forceRefresh: Boolean = false,
+    ) {
         if (!supported) {
             lastSupported = false
             accessJob?.cancel()
@@ -81,6 +101,10 @@ class FictionManagementStateHolder(
             }
             return
         }
+        // Refreshed on every call rather than only on the first: capability discovery can land
+        // after the first access check, and a server upgraded under a running desktop is noticed
+        // the same day.
+        _state.update { it.copy(epubUploadAvailable = epubUpload, maxEpubBytes = maxEpubBytes) }
         val newlySupported = lastSupported != true
         lastSupported = true
         if (accessJob?.isActive == true || (!forceRefresh && !newlySupported && _state.value.access in VerifiedAccess)) {
@@ -140,6 +164,36 @@ class FictionManagementStateHolder(
         }
     }
 
+    /**
+     * Opens the native picker and validates what comes back.
+     *
+     * Checked here rather than only on the server, because every one of these produces a 400 that
+     * arrives after the whole file has been uploaded — and telling somebody their 40 MB book was
+     * the wrong kind of file *after* sending it is the worst possible order to do it in.
+     */
+    fun chooseEpub() {
+        val state = _state.value
+        if (state.editor !is FictionEditor.Add || state.isBusy || !state.epubUploadAvailable) return
+        val chosen = picker.choose() ?: return
+        val problem = epubProblem(chosen, state.maxEpubBytes)
+        _state.update { current ->
+            val editor = current.editor as? FictionEditor.Add ?: return@update current
+            if (problem != null) {
+                current.copy(error = problem)
+            } else {
+                current.copy(editor = editor.copy(epubFile = chosen), error = null, notice = null)
+            }
+        }
+    }
+
+    /** Puts the dialog back on the Royal Road path without closing it. */
+    fun clearEpub() {
+        _state.update { current ->
+            val editor = current.editor as? FictionEditor.Add ?: return@update current
+            current.copy(editor = editor.copy(epubFile = null), error = null)
+        }
+    }
+
     fun updateEdit(title: String? = null, author: String? = null, voice: String? = null) {
         _state.update { current ->
             val editor = current.editor as? FictionEditor.Edit ?: return@update current
@@ -157,8 +211,11 @@ class FictionManagementStateHolder(
         val editor = _state.value.editor ?: return
         if (!_state.value.canManage || _state.value.isBusy) return
         val validation = when (editor) {
-            is FictionEditor.Add -> "A Royal Road URL or fiction id is required".takeIf {
-                editor.fictionUrl.isBlank()
+            // A chosen EPUB *is* the answer to "which fiction", so the URL is not also required.
+            is FictionEditor.Add -> when {
+                editor.epubFile != null -> epubProblem(editor.epubFile, _state.value.maxEpubBytes)
+                editor.fictionUrl.isBlank() -> "A Royal Road URL, a fiction id, or an EPUB is required"
+                else -> null
             }
 
             is FictionEditor.Edit -> when {
@@ -176,7 +233,9 @@ class FictionManagementStateHolder(
             _state.update { it.copy(isBusy = true, error = null, notice = null) }
             val outcome = runCatching {
                 when (editor) {
-                    is FictionEditor.Add -> repository.createFiction(
+                    is FictionEditor.Add -> editor.epubFile?.let { epub ->
+                        repository.uploadEpub(epub, editor.voice.trim().takeIf(String::isNotEmpty))
+                    } ?: repository.createFiction(
                         FictionCreateRequest(
                             fictionUrl = editor.fictionUrl.trim(),
                             voice = editor.voice.trim().takeIf(String::isNotEmpty),
@@ -286,6 +345,26 @@ class FictionManagementStateHolder(
     }
 
     companion object {
+        /**
+         * What is wrong with this file, or null when nothing is.
+         *
+         * Pure and internal so the three rules can be asserted without a picker, a server or a
+         * dialog. The extension check is not belt-and-braces: AWT's filename filter is a *hint*
+         * that several Linux window managers ignore outright.
+         */
+        internal fun epubProblem(file: File, maxBytes: Long?): String? = when {
+            !file.isFile -> "That file could not be read"
+            !file.name.endsWith(".epub", ignoreCase = true) -> "Only .epub files can be uploaded"
+            file.length() == 0L -> "That file is empty"
+            maxBytes != null && file.length() > maxBytes ->
+                "That file is ${formatMegabytes(file.length())}; this server accepts up to " +
+                    formatMegabytes(maxBytes)
+            else -> null
+        }
+
+        private fun formatMegabytes(bytes: Long): String =
+            String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0))
+
         private val VerifiedAccess = setOf(
             FictionManagementAccess.Admin,
             FictionManagementAccess.NotAdmin,

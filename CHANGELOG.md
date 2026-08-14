@@ -30,6 +30,11 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ### Added
 
+- EPUB upload, from the Add fiction dialog. The desktop is the client with a real filesystem and a
+  real file picker, so this is where whole-book import belongs. Shown only where the server
+  advertises `epub_upload`, which the backend publishes separately from add/edit/delete because a
+  deployment can accept the one without the other. The extension, emptiness and the server's
+  published byte ceiling are checked before anything is sent.
 - Listening statistics, in a Settings pane of their own: total hours, chapters finished, the last
   seven and thirty days, a current and longest streak, days with any listening, and the best day.
   Computed locally from a bounded two-year file, kept per account on a shared machine, and never

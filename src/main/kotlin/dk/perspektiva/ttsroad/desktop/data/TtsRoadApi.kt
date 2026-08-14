@@ -1,12 +1,16 @@
 package dk.perspektiva.ttsroad.desktop.data
 
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.Headers
 import retrofit2.http.PATCH
+import retrofit2.http.Multipart
 import retrofit2.http.POST
+import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -83,6 +87,21 @@ interface TtsRoadApi {
     /** Adds one shared fiction. Advertised by `fiction_management` and admin-gated by the server. */
     @POST("api/mobile/fictions")
     suspend fun createFiction(@Body request: FictionCreateRequest): FictionMutationResponse
+
+    /**
+     * Uploads one EPUB. Advertised by `epub_upload`, separately from JSON fiction CRUD, because a
+     * deployment can accept the latter without accepting files.
+     *
+     * `voice` is the only optional field this client sends. `rate` and `enabled` exist on the
+     * server contract and are deliberately left at their defaults — the desktop has no UI for a
+     * per-fiction rate, and uploading a fiction while disabling it is not a thing anyone asked for.
+     */
+    @Multipart
+    @POST("api/mobile/fictions/upload-epub")
+    suspend fun uploadEpub(
+        @Part file: MultipartBody.Part,
+        @Part("voice") voice: RequestBody? = null,
+    ): FictionMutationResponse
 
     /** Edits shared fiction metadata. The slug is deliberately not part of the request model. */
     @PATCH("api/mobile/fictions/{fiction_id}")

@@ -170,8 +170,14 @@ fun App(container: AppContainer = remember { AppContainer() }) {
 
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(session.isLoggedIn, capabilities.fictionManagement) {
-        if (session.isLoggedIn) fictionManagement.ensureAccess(capabilities.fictionManagement)
+    LaunchedEffect(session.isLoggedIn, capabilities.fictionManagement, capabilities.epubUpload) {
+        if (session.isLoggedIn) {
+            fictionManagement.ensureAccess(
+                capabilities.fictionManagement,
+                epubUpload = capabilities.epubUpload,
+                maxEpubBytes = capabilities.maxEpubBytes,
+            )
+        }
     }
 
     LaunchedEffect(fictionManagementState.deletedFictionId) {
@@ -185,11 +191,21 @@ fun App(container: AppContainer = remember { AppContainer() }) {
         when (val destination = nav.current) {
             Destination.Library -> {
                 cache.refreshLibrary()
-                fictionManagement.ensureAccess(capabilities.fictionManagement, forceRefresh = true)
+                fictionManagement.ensureAccess(
+                    capabilities.fictionManagement,
+                    epubUpload = capabilities.epubUpload,
+                    maxEpubBytes = capabilities.maxEpubBytes,
+                    forceRefresh = true,
+                )
             }
             is Destination.Fiction -> {
                 cache.refreshChapters(destination.fiction.id)
-                fictionManagement.ensureAccess(capabilities.fictionManagement, forceRefresh = true)
+                fictionManagement.ensureAccess(
+                    capabilities.fictionManagement,
+                    epubUpload = capabilities.epubUpload,
+                    maxEpubBytes = capabilities.maxEpubBytes,
+                    forceRefresh = true,
+                )
             }
             Destination.Settings, Destination.Devices -> settings.refreshCurrentSection()
             Destination.Search -> search.refresh()

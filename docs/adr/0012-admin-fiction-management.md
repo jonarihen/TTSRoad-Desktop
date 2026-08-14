@@ -38,6 +38,32 @@ acknowledgement is not success.
 EPUB upload remains unavailable until TTSRoad #122 supplies a separately advertised mobile
 multipart contract. The desktop does not call `/api/fictions/upload-epub` as a fallback.
 
+### EPUB upload waited for a mobile contract of its own
+
+The web has had an EPUB import route for as long as it has had fictions, and it was reachable with
+the bearer token this client already holds. It was still not used, for the reason the rest of this
+ADR gives: the web surface carries no add-don't-rename guarantee, no contract test, and no capability
+flag, so a client built on it would break silently on a server upgrade. `jonarihen/TTSRoad#122` asked
+for the mirror; `TTSRoad#124` shipped it, and this is built on that.
+
+Three details are worth recording:
+
+- **`epub_upload` is a separate capability, never inferred from `fiction_management`.** The backend
+  is explicit that a deployment can accept JSON fiction CRUD without accepting files, so the control
+  is drawn from its own flag or not at all.
+- **Validation happens before the upload, not only on the server.** Extension, emptiness and
+  `limits.max_epub_bytes` are all 400s or 413s that would otherwise arrive *after* a forty-megabyte
+  file had gone over the wire, which is the worst possible order to tell someone. The extension
+  check is not redundant with the picker's filter either: AWT's `setFilenameFilter` is a hint that
+  several Linux window managers ignore outright.
+- **One dialog, two paths.** "Add a fiction" is one intention; making the user choose which *kind*
+  of add they meant before showing them either form asks them to know the implementation. Choosing
+  a file disables the URL field and says why, rather than hiding it out from under the cursor.
+
+`rate` and `enabled` exist on the server contract and are deliberately left at their defaults: the
+desktop has no per-fiction rate control, and uploading a fiction in order to disable it is not
+something anyone asked for.
+
 ## Consequences
 
 Older servers and non-admin accounts see no dead controls. A stale admin claim cannot expose the

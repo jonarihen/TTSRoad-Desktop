@@ -69,6 +69,36 @@ class CapabilityDiscoveryTest {
     }
 
     @Test
+    fun `EPUB upload is advertised separately from fiction management`() {
+        // The backend is explicit that a deployment can support add/edit/delete without accepting
+        // files, so the file control must never be inferred from the CRUD flag.
+        val crudOnly = ServerCapabilities.from(
+            CapabilitiesResponse(capabilities = mapOf("fiction_management" to true)),
+        )
+        val both = ServerCapabilities.from(
+            CapabilitiesResponse(
+                capabilities = mapOf("fiction_management" to true, "epub_upload" to true),
+                limits = mapOf("max_epub_bytes" to 52_428_800),
+            ),
+        )
+
+        assertFalse(crudOnly.epubUpload)
+        assertNull(crudOnly.maxEpubBytes)
+        assertTrue(both.epubUpload)
+        assertEquals(52_428_800L, both.maxEpubBytes)
+    }
+
+    @Test
+    fun `an EPUB ceiling larger than an Int survives as a byte count`() {
+        // `max_epub_bytes` is a byte count, not an item count, and JSON has no integer width.
+        val capabilities = ServerCapabilities.from(
+            CapabilitiesResponse(limits = mapOf("max_epub_bytes" to 3_221_225_472L)),
+        )
+
+        assertEquals(3_221_225_472L, capabilities.maxEpubBytes)
+    }
+
+    @Test
     fun `discovery is unauthenticated and the marker header never reaches the wire`() = runTest {
         // A stale session for the very origin being probed: without the no-auth marker this is
         // exactly when a previous server's token would be handed to whatever is listening.
