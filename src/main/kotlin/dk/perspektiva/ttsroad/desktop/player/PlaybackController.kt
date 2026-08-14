@@ -42,6 +42,14 @@ data class PlayerUiState(
      */
     val canChangeSpeed: Boolean = false,
     /**
+     * Whether [speed] came from this serial's own rate rather than the listener's default.
+     *
+     * The player needs to distinguish them to offer a way back: a rate that silently overrode the
+     * default with no visible sign and no way to clear it would be a setting the user could not
+     * find again.
+     */
+    val speedIsPerFiction: Boolean = false,
+    /**
      * Whether this backend can drop silent passages.
      *
      * Same rule as [canChangeSpeed]: the control is drawn only where the engine can honour it.
@@ -124,7 +132,17 @@ interface PlaybackController {
     fun skipToQueueIndex(index: Int)
 
     /** Requests a playback rate. What the backend actually applied appears in [state]. */
+    /**
+     * Sets the rate for the serial that is loaded, or the listener's default when none is.
+     *
+     * Per-serial because that is the question a listener is actually answering: different narrators
+     * want different paces, and the pace chosen for a dense translation should not follow them into
+     * the next book. Settings owns the default; this owns the exception.
+     */
     fun setSpeed(speed: Float)
+
+    /** Drops the loaded serial's own rate so it follows the default again. No-op with none set. */
+    fun clearFictionSpeed() = Unit
 
     /** Arms, re-arms or (with [SleepTimerMode.Off]) cancels the sleep timer. */
     fun setSleepTimer(mode: SleepTimerMode) = Unit

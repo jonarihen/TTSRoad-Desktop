@@ -149,6 +149,78 @@ class PlaybackPreferencesApplyTest {
         awaitCondition("the reported speed to stay at 1x") { playback.state.value.speed == 1f }
     }
 
+    // --- Per-serial speed -----------------------------------------------------------------------
+
+    @Test
+    fun `changing speed while a serial is playing sets it for that serial, not for everything`() =
+        runBlocking {
+            val engine = FakePlaybackEngine()
+            val preferences = InMemoryPlaybackPreferencesStore()
+            val playback = controller(engine, preferences)
+            playback.playQueue(listOf(chapter(1)), startChapterId = 1, fiction = null)
+
+            playback.setSpeed(1.5f)
+
+            awaitCondition("the serial's own rate to be stored") {
+                preferences.preferences.value.fictionSpeeds[7] == 1.5f
+            }
+            // The whole point: the next book does not inherit it.
+            assertEquals(1f, preferences.preferences.value.speed)
+            awaitCondition("the engine to be told") { engine.requestedRates.contains(1.5f) }
+            awaitCondition("the player to say the rate belongs to this book") {
+                playback.state.value.speedIsPerFiction
+            }
+        }
+
+    @Test
+    fun `opening a different serial goes back to the default rate`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val preferences = InMemoryPlaybackPreferencesStore(
+            PlaybackPreferences(speed = 1.25f, fictionSpeeds = mapOf(7 to 2f)),
+        )
+        val playback = controller(engine, preferences)
+
+        playback.playQueue(listOf(chapter(1)), startChapterId = 1, fiction = null)
+        awaitCondition("the serial's own rate") { playback.state.value.speed == 2f }
+
+        val elsewhere = chapter(9).copy(fictionId = 8)
+        playback.playQueue(listOf(elsewhere), startChapterId = 9, fiction = null)
+
+        awaitCondition("the default rate to come back") { playback.state.value.speed == 1.25f }
+        assertFalse(playback.state.value.speedIsPerFiction)
+    }
+
+    @Test
+    fun `clearing a serial's rate puts it back on the default`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val preferences = InMemoryPlaybackPreferencesStore(
+            PlaybackPreferences(speed = 1.25f, fictionSpeeds = mapOf(7 to 2f)),
+        )
+        val playback = controller(engine, preferences)
+        playback.playQueue(listOf(chapter(1)), startChapterId = 1, fiction = null)
+        awaitCondition("the serial's own rate") { playback.state.value.speed == 2f }
+
+        playback.clearFictionSpeed()
+
+        awaitCondition("the default rate") { playback.state.value.speed == 1.25f }
+        assertTrue(preferences.preferences.value.fictionSpeeds.isEmpty())
+        assertFalse(playback.state.value.speedIsPerFiction)
+    }
+
+    @Test
+    fun `with nothing loaded the speed control still sets the default`() = runBlocking {
+        // The player is reachable before anything plays, and there is no serial to attribute a
+        // rate to — so the only honest thing to change is the default.
+        val engine = FakePlaybackEngine()
+        val preferences = InMemoryPlaybackPreferencesStore()
+        val playback = controller(engine, preferences)
+
+        playback.setSpeed(1.75f)
+
+        awaitCondition("the default to move") { preferences.preferences.value.speed == 1.75f }
+        assertTrue(preferences.preferences.value.fictionSpeeds.isEmpty())
+    }
+
     // --- Skip interval --------------------------------------------------------------------------
 
     @Test

@@ -113,6 +113,12 @@ apply to audio.
   the store and pushes rate/gain/skip-silence to the engine, so an auto-advanced chapter and a
   media-key start use the same values as one the user pressed play on. `setSpeed` writes the
   *preference*; the collector is the only thing that touches the engine.
+- **Speed is per serial, with a default.** `fictionSpeeds` in `playback.json` overrides `speed` for
+  one fiction id; `setSpeed` writes the loaded serial's entry and only falls back to the default
+  when nothing is loaded. Fiction ids are safe in this account-less file because a fiction is a
+  shared server object. `reapplyRate` is the **single writer** of the rate and holds `rateLock`:
+  the preference collector and a queue being loaded otherwise interleave as compute-then-write, and
+  a stale answer landing last leaves the engine and the UI disagreeing until the next change.
 - `player/SleepTimer.kt` — a state machine over an injected clock, ticked by the controller's
   existing 250 ms loop. No coroutine, no `delay`: determinism under a fake clock is an acceptance
   criterion. Fade gain is published as a multiplier and combined with the volume boost in one place,

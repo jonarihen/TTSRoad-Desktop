@@ -703,7 +703,7 @@ private fun PlaybackPane(
     SettingsCard {
         if (canChangeSpeed) {
             ChoiceRow(
-                label = "SPEED",
+                label = "DEFAULT SPEED",
                 // The offered list carries the stored value even when it is not a preset, so a
                 // rate set by another build stays selectable instead of vanishing on first open.
                 options = PlaybackPreferences.speedOptions(prefs.speed),
@@ -711,8 +711,17 @@ private fun PlaybackPane(
                 labelOf = ::formatSpeed,
                 onSelect = { value -> preferences.update { it.copy(speed = value) } },
             )
+            MetaText(
+                if (prefs.fictionSpeeds.isEmpty()) {
+                    "The rate every book starts at. Changing speed in the player sets it for that " +
+                        "book alone, since different narrators want different paces."
+                } else {
+                    "The rate every book starts at. ${prefs.fictionSpeeds.size} book(s) have " +
+                        "their own rate, set from the player; each can be put back there."
+                },
+            )
         } else {
-            SettingRow("SPEED", "Fixed at ${formatSpeed(1f)}")
+            SettingRow("DEFAULT SPEED", "Fixed at ${formatSpeed(1f)}")
             MetaText(
                 "The audio backend on this computer cannot resample, so speed is not offered " +
                     "rather than offered and ignored. Installing GStreamer enables it.",

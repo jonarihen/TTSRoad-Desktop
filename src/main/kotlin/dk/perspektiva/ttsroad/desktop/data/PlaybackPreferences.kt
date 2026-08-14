@@ -42,8 +42,40 @@ data class PlaybackPreferences(
      */
     val skipSilence: Boolean = false,
     val volumeBoost: VolumeBoost = VolumeBoost.Off,
+    /**
+     * Rates that belong to one serial rather than to the listener in general.
+     *
+     * Different narrators want different paces, and a listener who slows down for a dense
+     * translation should not have to remember to speed back up for the next book. [speed] stays the
+     * default; an entry here overrides it while that serial is playing.
+     *
+     * Keyed by fiction id, which is safe to keep in this account-less file for the same reason the
+     * rest of it is: a fiction is a **shared** server object, not a per-account one, so an id here
+     * says nothing about who read it. Bounded, because it grows for the life of the install.
+     */
+    val fictionSpeeds: Map<Int, Float> = emptyMap(),
 ) {
+    /** The rate to play [fictionId] at: its own, or the listener's default. */
+    fun speedFor(fictionId: Int): Float = fictionSpeeds[fictionId] ?: speed
+
+    /** Sets one serial's rate, or clears it back to the default with a null [speed]. */
+    fun withFictionSpeed(fictionId: Int, speed: Float?): PlaybackPreferences {
+        if (fictionId <= 0) return this
+        val next = if (speed == null) fictionSpeeds - fictionId else fictionSpeeds + (fictionId to speed)
+        return copy(fictionSpeeds = next)
+    }
+
     companion object {
+        /**
+         * How many serials keep their own rate.
+         *
+         * A bound rather than a policy about *which* to forget: this file is written for the life
+         * of the install, and an unbounded map would be a slow leak on exactly the machines of the
+         * people who use the app most. Oldest-first, because insertion order is the only ordering
+         * the stored map has and the least recently *set* is the least likely to be missed.
+         */
+        const val MaxFictionSpeeds: Int = 200
+
         const val DefaultSpeed: Float = 1f
         const val MinSpeed: Float = 0.5f
         const val MaxSpeed: Float = 3.0f
@@ -108,6 +140,8 @@ internal data class StoredPlaybackPreferences(
     val skipIntervalSeconds: Int? = null,
     val skipSilence: Boolean? = null,
     val volumeBoost: String? = null,
+    /** JSON object keys are strings; a key that is not an id at all is dropped rather than fatal. */
+    val fictionSpeeds: Map<String, Float>? = null,
 ) {
     fun toPreferences(): PlaybackPreferences = PlaybackPreferences(
         speed = PlaybackPreferences.normaliseSpeed(speed ?: PlaybackPreferences.DefaultSpeed),
@@ -118,6 +152,9 @@ internal data class StoredPlaybackPreferences(
         // An unrecognised name falls back to Off rather than to the loudest thing in the enum.
         volumeBoost = VolumeBoost.entries.firstOrNull { it.name.equals(volumeBoost, ignoreCase = true) }
             ?: VolumeBoost.Off,
+        fictionSpeeds = fictionSpeeds.orEmpty()
+            .mapNotNull { (key, value) -> key.toIntOrNull()?.takeIf { it > 0 }?.let { it to value } }
+            .toMap(),
     )
 
     companion object {
@@ -130,6 +167,7 @@ internal data class StoredPlaybackPreferences(
             skipIntervalSeconds = preferences.skipIntervalSeconds,
             skipSilence = preferences.skipSilence,
             volumeBoost = preferences.volumeBoost.name,
+            fictionSpeeds = preferences.fictionSpeeds.mapKeys { (id, _) -> id.toString() },
         )
     }
 }
@@ -208,4 +246,17 @@ class FilePlaybackPreferencesStore(
 internal fun PlaybackPreferences.sanitised(): PlaybackPreferences = copy(
     speed = PlaybackPreferences.normaliseSpeed(speed),
     skipIntervalSeconds = PlaybackPreferences.normaliseSkipSeconds(skipIntervalSeconds),
+    // Trimmed from the front: a `LinkedHashMap` keeps insertion order, so the oldest entry is the
+    // one whose rate was set longest ago and is least likely to be missed.
+    fictionSpeeds = fictionSpeeds
+        .filterKeys { it > 0 }
+        .mapValues { (_, rate) -> PlaybackPreferences.normaliseSpeed(rate) }
+        .let { rates ->
+            if (rates.size <= PlaybackPreferences.MaxFictionSpeeds) {
+                rates
+            } else {
+                rates.entries.drop(rates.size - PlaybackPreferences.MaxFictionSpeeds)
+                    .associate { it.key to it.value }
+            }
+        },
 )
