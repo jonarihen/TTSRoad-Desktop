@@ -32,6 +32,19 @@ class LibraryCacheTest {
         fictions = titles.mapIndexed { index, title -> FictionSummary(id = index + 1, title = title) },
     )
 
+    private fun syncIndex(
+        serverTime: String,
+        fictions: List<DeltaSyncFiction> = emptyList(),
+        playback: Int = 0,
+        deletedFictions: List<Int> = emptyList(),
+    ) = DeltaSyncResponse(
+        serverTime = serverTime,
+        updatedSince = "cursor",
+        delta = true,
+        changed = DeltaSyncChanged(fictions = fictions, playback = playback),
+        deleted = DeltaSyncDeleted(fictions = deletedFictions),
+    )
+
     // --- Library ------------------------------------------------------------------------------
 
     @Test
@@ -103,6 +116,120 @@ class LibraryCacheTest {
         assertEquals("Cached chapter", cache.chapters(7).value.value?.chapters?.single()?.title)
         assertEquals(2_000L, cache.chapters(7).value.lastSuccessMillis)
         assertEquals("server offline", cache.chapters(7).value.error)
+        cache.close()
+    }
+
+    @Test
+    fun `a cached library with no indexed changes advances its cursor without a full pull`() = runTest {
+        val disk = LibraryDiskCache(File(tempDir, "metadata-no-change"))
+        disk.storeLibrary(
+            LibraryResponse(
+                serverTime = "2026-08-14T10:00:00Z",
+                fictions = listOf(FictionSummary(id = 7, title = "Cached")),
+            ),
+            1_000,
+        )
+        val repository = FakeRepository(
+            deltaSyncResult = Result.success(syncIndex("2026-08-14T11:00:00Z")),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler)) { 2_000L }
+            .attachDiskCache { disk }
+
+        cache.ensureLibrary()
+        runCurrent()
+
+        assertEquals(listOf("2026-08-14T10:00:00Z"), repository.deltaSyncCursors)
+        assertEquals(0, repository.libraryCalls)
+        assertTrue(repository.libraryDeltaCursors.isEmpty())
+        assertEquals("Cached", cache.library.value.value?.fictions?.single()?.title)
+        assertEquals("2026-08-14T11:00:00Z", disk.loadLibrary()?.value?.serverTime)
+        assertEquals(2_000L, cache.library.value.lastSuccessMillis)
+        cache.close()
+    }
+
+    @Test
+    fun `a cached library pulls and merges only the indexed delta`() = runTest {
+        val disk = LibraryDiskCache(File(tempDir, "metadata-library-delta"))
+        disk.storeLibrary(
+            LibraryResponse(
+                scope = "followed",
+                serverTime = "2026-08-14T10:00:00Z",
+                fictions = listOf(
+                    FictionSummary(id = 7, title = "Old title"),
+                    FictionSummary(id = 8, title = "Deleted"),
+                ),
+                continueListening = listOf(ChapterSummary(id = 101)),
+            ),
+            1_000,
+        )
+        val repository = FakeRepository(
+            deltaSyncResult = Result.success(
+                syncIndex(
+                    "2026-08-14T10:30:00Z",
+                    fictions = listOf(DeltaSyncFiction(fictionId = 7, changedChapters = 1)),
+                    deletedFictions = listOf(8),
+                ),
+            ),
+            libraryDeltaResult = Result.success(
+                LibraryResponse(
+                    scope = "followed",
+                    serverTime = "2026-08-14T10:31:00Z",
+                    updatedSince = "2026-08-14T10:00:00Z",
+                    delta = true,
+                    deleted = listOf(8),
+                    fictions = listOf(FictionSummary(id = 7, title = "New title")),
+                    continueListening = listOf(ChapterSummary(id = 102)),
+                ),
+            ),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+            .attachDiskCache { disk }
+
+        cache.ensureLibrary()
+        runCurrent()
+
+        val merged = cache.library.value.value!!
+        assertEquals(listOf(7), merged.fictions.map { it.id })
+        assertEquals("New title", merged.fictions.single().title)
+        assertEquals(listOf(102), merged.continueListening.map { it.id })
+        assertEquals(listOf("2026-08-14T10:00:00Z"), repository.libraryDeltaCursors)
+        assertEquals(0, repository.libraryCalls)
+        assertEquals("2026-08-14T10:31:00Z", disk.loadLibrary()?.value?.serverTime)
+        cache.close()
+    }
+
+    @Test
+    fun `a follows-aware shelf checks complete membership even when the sync index is quiet`() = runTest {
+        val disk = LibraryDiskCache(File(tempDir, "metadata-follow-delta"))
+        disk.storeLibrary(
+            LibraryResponse(
+                scope = "followed",
+                serverTime = "2026-08-14T10:00:00Z",
+                followingIds = listOf(7, 8),
+                fictions = listOf(FictionSummary(id = 7), FictionSummary(id = 8)),
+            ),
+            1_000,
+        )
+        val repository = FakeRepository(
+            deltaSyncResult = Result.success(syncIndex("2026-08-14T10:30:00Z")),
+            libraryDeltaResult = Result.success(
+                LibraryResponse(
+                    scope = "followed",
+                    serverTime = "2026-08-14T10:31:00Z",
+                    delta = true,
+                    followingIds = listOf(7),
+                ),
+            ),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+            .attachDiskCache { disk }
+
+        cache.ensureLibrary()
+        runCurrent()
+
+        assertEquals(listOf(7), cache.library.value.value?.fictions?.map { it.id })
+        assertEquals(listOf("2026-08-14T10:00:00Z"), repository.libraryDeltaCursors)
+        assertEquals(0, repository.libraryCalls)
         cache.close()
     }
 
@@ -244,6 +371,59 @@ class LibraryCacheTest {
 
         assertEquals(2, repository.chaptersCalls, "one request per fiction, not per visit")
         assertEquals(1, cache.chapters(7).value.value?.chapters?.size)
+        cache.close()
+    }
+
+    @Test
+    fun `a cached chapter list pulls only its changed rows`() = runTest {
+        val fiction = FictionSummary(id = 7, title = "Serial")
+        val disk = LibraryDiskCache(File(tempDir, "metadata-chapter-delta"))
+        disk.storeChapters(
+            7,
+            ChaptersResponse(
+                fiction = fiction,
+                serverTime = "2026-08-14T10:00:00Z",
+                total = 2,
+                chapters = listOf(
+                    ChapterSummary(id = 101, fictionId = 7, title = "Old", displayNumber = 1.0),
+                    ChapterSummary(id = 102, fictionId = 7, title = "Delete", displayNumber = 2.0),
+                ),
+            ),
+            1_000,
+        )
+        val repository = FakeRepository(
+            deltaSyncResult = Result.success(
+                syncIndex(
+                    "2026-08-14T10:30:00Z",
+                    fictions = listOf(DeltaSyncFiction(fictionId = 7, changedChapters = 1, deletedChapters = 1)),
+                ),
+            ),
+            chaptersDeltaResult = Result.success(
+                ChaptersResponse(
+                    fiction = fiction,
+                    serverTime = "2026-08-14T10:31:00Z",
+                    updatedSince = "2026-08-14T10:00:00Z",
+                    delta = true,
+                    deleted = listOf(102),
+                    total = 1,
+                    chapters = listOf(
+                        ChapterSummary(id = 101, fictionId = 7, title = "Updated", displayNumber = 1.0),
+                    ),
+                ),
+            ),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+            .attachDiskCache { disk }
+
+        cache.ensureChapters(7)
+        runCurrent()
+
+        val merged = cache.chapters(7).value.value!!
+        assertEquals(listOf(101), merged.chapters.map { it.id })
+        assertEquals("Updated", merged.chapters.single().title)
+        assertEquals(listOf(7 to "2026-08-14T10:00:00Z"), repository.chapterDeltaCalls)
+        assertEquals(0, repository.chaptersCalls)
+        assertEquals("2026-08-14T10:31:00Z", disk.loadChapters(7)?.value?.serverTime)
         cache.close()
     }
 

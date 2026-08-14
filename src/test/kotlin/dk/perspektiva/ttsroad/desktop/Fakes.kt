@@ -6,6 +6,7 @@ import dk.perspektiva.ttsroad.desktop.data.BookmarkPatchRequest
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
+import dk.perspektiva.ttsroad.desktop.data.DeltaSyncResponse
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.LoginResult
@@ -33,6 +34,12 @@ open class FakeRepository(
     var loginResult: LoginResult = LoginResult.Success,
     var libraryResult: Result<LibraryResponse> = Result.success(LibraryResponse()),
     var chaptersResult: Result<ChaptersResponse> = Result.success(ChaptersResponse(fiction = FictionSummary())),
+    /** Null means use [libraryResult], which models an older endpoint returning a full response. */
+    var libraryDeltaResult: Result<LibraryResponse>? = null,
+    /** Null means use [chaptersResult], which models an older endpoint returning a full response. */
+    var chaptersDeltaResult: Result<ChaptersResponse>? = null,
+    /** `success(null)` is the server saying it has no delta index. */
+    var deltaSyncResult: Result<DeltaSyncResponse?> = Result.success(null),
     var serverUrl: String = "https://ttsroad.example.com/",
     var capabilitiesResult: ServerCapabilities = ServerCapabilities.Baseline,
     /** `success(null)` is the server saying it has no device API — not "no devices". */
@@ -68,6 +75,9 @@ open class FakeRepository(
         private set
     var chaptersCalls: Int = 0
         private set
+    val libraryDeltaCursors: MutableList<String> = mutableListOf()
+    val chapterDeltaCalls: MutableList<Pair<Int, String>> = mutableListOf()
+    val deltaSyncCursors: MutableList<String> = mutableListOf()
     var devicesCalls: Int = 0
         private set
     var revokeOtherDevicesCalls: Int = 0
@@ -151,6 +161,16 @@ open class FakeRepository(
             .getOrThrow()
     }
 
+    override suspend fun libraryDelta(updatedSince: String): LibraryResponse {
+        libraryDeltaCursors += updatedSince
+        return (libraryDeltaResult ?: libraryResult).getOrThrow()
+    }
+
+    override suspend fun deltaSync(updatedSince: String): DeltaSyncResponse? {
+        deltaSyncCursors += updatedSince
+        return deltaSyncResult.getOrThrow()
+    }
+
     override suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? {
         followCalls += fictionId to following
         // An *unset* `followResult` echoes what was asked, which is what a healthy server does.
@@ -180,6 +200,11 @@ open class FakeRepository(
     override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
         chaptersCalls++
         return chaptersResult.getOrThrow()
+    }
+
+    override suspend fun chaptersDelta(fictionId: Int, updatedSince: String): ChaptersResponse {
+        chapterDeltaCalls += fictionId to updatedSince
+        return (chaptersDeltaResult ?: chaptersResult).getOrThrow()
     }
 
     override suspend fun search(

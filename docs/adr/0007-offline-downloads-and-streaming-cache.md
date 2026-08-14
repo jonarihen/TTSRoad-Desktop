@@ -91,6 +91,18 @@ On first open after restart, `LibraryCache` publishes the disk snapshot immediat
 last-success time, then refreshes. A network failure appears above retained content, which remains
 clearly dated. Stored models remove backend error text and server-local audio filename/path fields.
 
+When a cached response carries a server timestamp, refresh first asks the timestamped sync index
+which resource changed. An unchanged resource advances to the index's pre-query `server_time`
+without transferring the full payload; a changed resource requests its sparse delta and merges rows
+and explicit tombstones. Chapter display/player positions are recomputed from the merged whole so an
+insert cannot leave derived ordering stale. A missing endpoint, a non-delta response, or a snapshot
+from an older server safely falls back to the full resource request.
+
+Follow membership is checked from the library delta's complete `following_ids` even when the current
+server's index reports no library change. An unknown newly followed id triggers a full library pull.
+This compatibility request can disappear once the server's index treats follow-table mutations as
+library changes; until then it prevents a quiet index from hiding cross-client follows and unfollows.
+
 Signing out deletes none of these roots, but `DownloadCoordinator` closes the live stack unless a
 real bearer credential is present. Retained login hints are not authority to enumerate another
 account's index or fiction titles. Signing the same account back in resolves the same namespace.

@@ -86,6 +86,58 @@ class RepositoryTest {
     }
 
     @Test
+    fun `delta index and resource pulls echo the server cursor`() = runTest {
+        enqueue(
+            200,
+            """
+            {"api_version":1,"server_time":"2026-08-14T11:00:00Z",
+             "updated_since":"2026-08-14T10:00:00Z","delta":true,
+             "changed":{"fictions":[{"fiction_id":7,"changed_chapters":1,
+               "deleted_chapters":0,"changed_playback":1}],"playback":1,"bookmarks":0},
+             "deleted":{"fictions":[],"chapters":[],"bookmarks":[]}}
+            """.trimIndent(),
+        )
+        val index = requireNotNull(repository.deltaSync("2026-08-14T10:00:00Z"))
+        assertTrue(index.changesFiction(7))
+        assertEquals(1, index.changed.playback)
+        var request = server.takeRequest()
+        assertEquals("/api/mobile/sync", request.url.encodedPath)
+        assertEquals("2026-08-14T10:00:00Z", request.url.queryParameter("updated_since"))
+
+        enqueue(
+            200,
+            """{"scope":"followed","server_time":"2026-08-14T11:01:00Z",
+                "updated_since":"2026-08-14T10:00:00Z","delta":true,
+                "deleted":[],"fictions":[],"continue_listening":[],"recent_chapters":[]}""",
+        )
+        assertTrue(repository.libraryDelta("2026-08-14T10:00:00Z").delta)
+        request = server.takeRequest()
+        assertEquals("/api/mobile/library", request.url.encodedPath)
+        assertEquals("followed", request.url.queryParameter("scope"))
+        assertEquals("2026-08-14T10:00:00Z", request.url.queryParameter("updated_since"))
+
+        enqueue(
+            200,
+            """{"fiction":{"id":7},"server_time":"2026-08-14T11:02:00Z",
+                "updated_since":"2026-08-14T10:00:00Z","delta":true,
+                "deleted":[101],"total":0,"chapters":[]}""",
+        )
+        assertEquals(listOf(101), repository.chaptersDelta(7, "2026-08-14T10:00:00Z").deleted)
+        request = server.takeRequest()
+        assertEquals("/api/mobile/fictions/7/chapters", request.url.encodedPath)
+        assertEquals("2026-08-14T10:00:00Z", request.url.queryParameter("updated_since"))
+    }
+
+    @Test
+    fun `a missing delta index falls back without ending the session`() = runTest {
+        enqueue(404, """{"detail":"Not found"}""")
+
+        assertNull(repository.deltaSync("2026-08-14T10:00:00Z"))
+        assertTrue(sessionStore.current().isLoggedIn)
+        assertNull(repository.sessionEnd.value)
+    }
+
+    @Test
     fun `read-along sends its ETag and exposes a normal 304`() = runTest {
         server.enqueue(MockResponse(code = 304))
 

@@ -52,7 +52,15 @@ data class LibraryResponse(
      * `scope` key at all.
      */
     val scope: String? = null,
+    /** Server-issued cursor, echoed as `updated_since` on the next delta pull. */
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    @param:Json(name = "updated_since") val updatedSince: String? = null,
+    val delta: Boolean = false,
+    /** Fiction ids removed since [updatedSince]. Empty on a full response. */
+    val deleted: List<Int> = emptyList(),
     val fictions: List<FictionSummary> = emptyList(),
+    /** Complete account membership even on a delta; absent on pre-follows servers. */
+    @param:Json(name = "following_ids") val followingIds: List<Int>? = null,
     @param:Json(name = "continue_listening") val continueListening: List<ChapterSummary> = emptyList(),
     @param:Json(name = "recent_chapters") val recentChapters: List<ChapterSummary> = emptyList(),
 )
@@ -85,6 +93,12 @@ data class FollowResponse(
 data class ChaptersResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
     val fiction: FictionSummary,
+    /** Server-issued cursor, echoed as `updated_since` on the next delta pull. */
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    @param:Json(name = "updated_since") val updatedSince: String? = null,
+    val delta: Boolean = false,
+    /** Deleted or newly excluded chapter ids since [updatedSince]. */
+    val deleted: List<Int> = emptyList(),
     val total: Int = 0,
     val chapters: List<ChapterSummary> = emptyList(),
 )
@@ -214,6 +228,10 @@ data class PlaybackInfo(
     @param:Json(name = "remaining_seconds") val remainingSeconds: Double? = null,
     /** ISO-8601 UTC; null until the chapter has actually been listened to. */
     @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
+    /** Server write clock used by `updated_since` filtering. */
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+    /** Device clock that resolves conflicts between offline writes. */
+    @param:Json(name = "client_updated_at") val clientUpdatedAt: String? = null,
 )
 
 data class PlaybackProgressRequest(

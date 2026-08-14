@@ -20,6 +20,9 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ### Added
 
+- Timestamp-based metadata refresh for the library and chapter lists. Servers that advertise the
+  delta-sync contract now receive one small change-index request followed only by the sparse data
+  that changed; older servers continue to receive ordinary full refreshes.
 - Cross-device jump-back history through the server's `kind=auto` bookmarks. The desktop writes a
   breadcrumb every five minutes of playback and at its existing transition points, merges moments
   recorded by other clients into the Jump back shelf, and retains the bounded local copy offline.

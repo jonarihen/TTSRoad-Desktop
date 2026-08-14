@@ -108,6 +108,12 @@ interface TtsRoadRepository {
 
     suspend fun library(scope: LibraryScope = LibraryScope.Followed): LibraryResponse
 
+    /** The changed shelf rows and complete listening rails since a server-issued cursor. */
+    suspend fun libraryDelta(updatedSince: String): LibraryResponse = library()
+
+    /** The cheap delta index, or null when this server predates it. */
+    suspend fun deltaSync(updatedSince: String): DeltaSyncResponse? = null
+
     /**
      * Follows or unfollows a fiction, answering the state **the server now holds**, or null when it
      * answered 404.
@@ -149,6 +155,9 @@ interface TtsRoadRepository {
     suspend fun revokeOtherDevices(): Boolean
 
     suspend fun chapters(fictionId: Int, playableOnly: Boolean = false): ChaptersResponse
+
+    /** Changed/deleted chapter rows for one fiction since a server-issued cursor. */
+    suspend fun chaptersDelta(fictionId: Int, updatedSince: String): ChaptersResponse = chapters(fictionId)
 
     /**
      * Server-side search, or **null when this server has no search endpoint**.
@@ -406,6 +415,12 @@ class RetrofitTtsRoadRepository(
     override suspend fun library(scope: LibraryScope): LibraryResponse =
         withAuthorizedApi { it.library(scope.wireValue) }
 
+    override suspend fun libraryDelta(updatedSince: String): LibraryResponse =
+        withAuthorizedApi { it.library(LibraryScope.Followed.wireValue, updatedSince) }
+
+    override suspend fun deltaSync(updatedSince: String): DeltaSyncResponse? =
+        ifEndpointExists { it.deltaSync(updatedSince) }
+
     override suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? =
         ifEndpointExists {
             // The answer is read, never assumed: a response is the only proof the shelf changed.
@@ -424,6 +439,9 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse =
         withAuthorizedApi { it.chapters(fictionId = fictionId, playableOnly = playableOnly) }
+
+    override suspend fun chaptersDelta(fictionId: Int, updatedSince: String): ChaptersResponse =
+        withAuthorizedApi { it.chapters(fictionId = fictionId, updatedSince = updatedSince) }
 
     override suspend fun search(query: String, limit: Int, offset: Int): SearchResponse? =
         ifEndpointExists {

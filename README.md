@@ -53,6 +53,7 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | App shortcuts — Space, arrows, Ctrl+arrows, Ctrl+L, Ctrl+, plus an F1 list | ✅ |
 | Offline downloads — per chapter, next 10, restart-safe queue, storage controls | ✅ |
 | Bounded streaming cache and previously loaded library browsing while offline | ✅ |
+| Timestamped delta refresh for cached library and chapter metadata | ✅ |
 | Audio-synchronized read-along — offline text, word seek, find, themes and zoom | ✅ |
 | Streaming playback — audio starts before the chapter has downloaded | ✅ Linux |
 | Seeking without decoding from the start of the chapter | ✅ Linux |
@@ -295,6 +296,7 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── Cached.kt                 value + error + isRefreshing + last success, independently
 │   ├── LibraryCache.kt           library/chapter state held above the screens
 │   ├── LibraryDiskCache.kt       account-scoped rebuildable metadata for offline browsing
+│   ├── DeltaSync.kt              sparse metadata merge + deletion/cursor rules
 │   ├── ReadAlongModels.kt        compact text/cue and account-preference API models
 │   ├── ReadAlongDocument.kt      validated spans + binary highlight/seek/find lookup
 │   ├── ReadAlongSentences.kt     paragraph-bounded sentence segmentation
