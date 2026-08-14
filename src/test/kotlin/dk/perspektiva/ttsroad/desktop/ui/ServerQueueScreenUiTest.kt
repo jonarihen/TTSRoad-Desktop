@@ -3,11 +3,15 @@ package dk.perspektiva.ttsroad.desktop.ui
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.waitUntilAtLeastOneExists
+import androidx.compose.ui.test.waitUntilNodeCount
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
@@ -30,6 +34,15 @@ class ServerQueueScreenUiTest {
     @get:Rule
     val compose = createComposeRule()
 
+    /**
+     * The screen loads through the holder's coroutine, and `waitForIdle` covers composition rather
+     * than a `launch` on the main dispatcher. So every test waits for the thing it is about to
+     * assert on to exist; asserting one idle pass after `setContent` raced the load and failed
+     * under a loaded machine.
+     */
+    private fun awaitRows(count: Int = 3) =
+        compose.waitUntilNodeCount(hasTestTag(ServerQueueRowTestTag), count, 5_000)
+
     @Test
     fun `a cross-library queue shows every row and names both fictions`() {
         val repository = FakeRepository(queueResult = Result.success(ParsedFixtures.queue))
@@ -44,7 +57,7 @@ class ServerQueueScreenUiTest {
                 )
             }
         }
-        compose.waitForIdle()
+        awaitRows()
 
         compose.onAllNodesWithTag(ServerQueueRowTestTag).assertCountEquals(3)
         compose.onNodeWithText("A Practical Guide to Sorcery").assertIsDisplayed()
@@ -65,7 +78,7 @@ class ServerQueueScreenUiTest {
                 )
             }
         }
-        compose.waitForIdle()
+        compose.waitUntilAtLeastOneExists(hasText("NOTHING QUEUED"), 5_000)
 
         compose.onNodeWithText("NOTHING QUEUED").assertIsDisplayed()
     }
@@ -85,7 +98,7 @@ class ServerQueueScreenUiTest {
                 )
             }
         }
-        compose.waitForIdle()
+        compose.waitUntilAtLeastOneExists(hasText("NO SHARED QUEUE ON THIS SERVER"), 5_000)
 
         compose.onNodeWithText("NO SHARED QUEUE ON THIS SERVER").assertIsDisplayed()
         compose.onAllNodesWithTag(ServerQueueRowTestTag).assertCountEquals(0)
@@ -105,7 +118,7 @@ class ServerQueueScreenUiTest {
                 )
             }
         }
-        compose.waitForIdle()
+        awaitRows()
 
         compose.onNodeWithText("CLEAR QUEUE", useUnmergedTree = true).performClick()
         compose.waitForIdle()
@@ -132,12 +145,12 @@ class ServerQueueScreenUiTest {
                 )
             }
         }
-        compose.waitForIdle()
+        awaitRows()
 
         compose.onNodeWithText("CLEAR QUEUE", useUnmergedTree = true).performClick()
         compose.waitForIdle()
         compose.onNodeWithText("CLEAR").performClick()
-        compose.waitForIdle()
+        compose.waitUntil(5_000) { repository.queueRequests.isNotEmpty() }
 
         assertEquals(ServerQueueAction.Clear, repository.queueRequests.single().action)
     }
@@ -157,7 +170,7 @@ class ServerQueueScreenUiTest {
                 )
             }
         }
-        compose.waitForIdle()
+        awaitRows()
 
         compose.onNodeWithContentDescription("Play A Practical Guide to Sorcery").assertIsDisplayed()
         compose.onNodeWithContentDescription("Remove A Practical Guide to Sorcery from the queue")
@@ -179,11 +192,11 @@ class ServerQueueScreenUiTest {
                 )
             }
         }
-        compose.waitForIdle()
+        awaitRows()
 
         compose.onNodeWithContentDescription("Remove A Practical Guide to Sorcery from the queue")
             .performClick()
-        compose.waitForIdle()
+        compose.waitUntil(5_000) { repository.queueRequests.isNotEmpty() }
 
         val request = repository.queueRequests.single()
         assertEquals(ServerQueueAction.Remove, request.action)
@@ -207,10 +220,10 @@ class ServerQueueScreenUiTest {
                 )
             }
         }
-        compose.waitForIdle()
+        awaitRows()
 
         compose.onNodeWithContentDescription("Play A Practical Guide to Sorcery").performClick()
-        compose.waitForIdle()
+        compose.waitUntil(5_000) { playback.calls.isNotEmpty() }
 
         assertEquals(listOf("playQueue(101)"), playback.calls)
         assertTrue(repository.queueRequests.isEmpty(), "advance must never be called")

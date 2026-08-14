@@ -57,6 +57,8 @@ class AppNavigationTest {
         stack = stack.navigateTo(Destination.Bookmarks)
 
         assertEquals(listOf(Destination.Library, Destination.Bookmarks), stack)
+    }
+
     /**
      * The queue is a place, so re-opening it pops back rather than stacking a second copy — the
      * same rule every other destination follows, and what keeps Back predictable after

@@ -242,6 +242,8 @@ open class FakeRepository(
     override suspend fun deleteBookmark(bookmarkId: Int): Boolean {
         deletedBookmarks += bookmarkId
         return deleteBookmarkResult.getOrThrow()
+    }
+
     override suspend fun serverQueue(): ServerQueueResponse? {
         queueCalls++
         return queueResult.getOrThrow()
