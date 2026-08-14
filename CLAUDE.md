@@ -173,7 +173,13 @@ apply to audio.
   falls back because the session no longer authorizes account content. `App` clears memory and
   `DownloadCoordinator` makes the retained disk namespace unreachable on sign-out.
 - `ReaderScreen` renders one lazy item per paragraph, not one composable per word. Wheel, drag and
-  scrollbar input permanently surrender follow until Back to current. Highlighting a chapter other
+  scrollbar input permanently surrender follow until Back to current.
+- Distraction-free reading (`F11`) is owned by `App`, because the header and now-playing bar are half
+  of what it hides. It is a posture, not a preference: never persisted, dropped on leaving the reader,
+  and never a fifth `/api/me/preferences` key. `readingModeChromeVisible` is the pure reveal rule —
+  an unmoved or departed pointer is the same `null` and keeps the chrome hidden, and the bottom-edge
+  rule requires a measured viewport. Hiding the now-playing bar obliges the mode to draw pause and
+  the two skips; chapter stepping is deliberately left to the shortcuts. Highlighting a chapter other
   than the one playing is forbidden; queue advance changes the document only after the reader has
   actually followed its own chapter.
 - Reader appearance is local-first in `reader.json` and synchronized only through the four known

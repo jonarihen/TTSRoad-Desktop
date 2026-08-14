@@ -54,6 +54,15 @@ enum class AppShortcut {
     /** Ctrl+Shift+B — the list of them. */
     OpenBookmarks,
 
+    /**
+     * F11 — distraction-free reading.
+     *
+     * Only the reader acts on it; everywhere else it is a key that does nothing, which is a better
+     * answer than a mode that appears on a screen with no text in it. F11 is the platform habit for
+     * "get the frame out of the way", and no text field claims it.
+     */
+    ToggleReadingMode,
+
     /** F1 or Ctrl+slash. */
     ShowShortcuts,
     ;
@@ -73,7 +82,7 @@ enum class AppShortcut {
     val firesWhileTyping: Boolean
         get() = when (this) {
             Back, Refresh, Dismiss, OpenLibrary, OpenSettings, ShowShortcuts,
-            AddBookmark, OpenBookmarks,
+            AddBookmark, OpenBookmarks, ToggleReadingMode,
             -> true
             PlayPause, SeekBackward, SeekForward, PreviousChapter, NextChapter -> false
         }
@@ -114,6 +123,7 @@ private fun match(key: Key, alt: Boolean, ctrl: Boolean, meta: Boolean, shift: B
         key == Key.Escape -> AppShortcut.Dismiss
         key == Key.F5 -> AppShortcut.Refresh
         key == Key.F1 -> AppShortcut.ShowShortcuts
+        key == Key.F11 -> AppShortcut.ToggleReadingMode
         key == Key.R && accel -> AppShortcut.Refresh
         key == Key.L && accel -> AppShortcut.OpenLibrary
         key == Key.Comma && accel -> AppShortcut.OpenSettings
@@ -191,6 +201,7 @@ val ShortcutHelpTable: List<ShortcutHelp> = listOf(
     ShortcutHelp("Ctrl+L", "Library"),
     ShortcutHelp("Ctrl+B", "Bookmark this spot"),
     ShortcutHelp("Ctrl+Shift+B", "Your bookmarks"),
+    ShortcutHelp("F11", "Distraction-free reading, in the reader"),
     ShortcutHelp("Ctrl+,", "Settings"),
     ShortcutHelp("F5 / Ctrl+R", "Refresh the current screen"),
     ShortcutHelp("Escape", "Close a dialog, or go back"),

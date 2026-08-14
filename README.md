@@ -57,6 +57,7 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Timestamped delta refresh for cached library and chapter metadata | ✅ |
 | Admin audiobook exports — resumable M4B save to a user-selected file | ✅ |
 | Audio-synchronized read-along — offline text, word seek, find, themes and zoom | ✅ |
+| Distraction-free reading — F11 hides every frame, hover brings the transport back | ✅ |
 | Streaming playback — audio starts before the chapter has downloaded | ✅ Linux |
 | Seeking without decoding from the start of the chapter | ✅ Linux |
 | Variable-rate playback ("speed"), pitch-preserving 0.5×–3.0× | ✅ Linux |
@@ -466,6 +467,11 @@ is not playing never highlights it against unrelated audio.
 - Font size (14–30), line height (1.3–2.4), dark/sepia/light theme, and sentence/word/off highlight
   are saved locally first and synchronized through `GET/PATCH /api/me/preferences` when supported.
   An older or offline server leaves the last-known local values usable.
+- **Distraction-free reading** (`F11`, or the toolbar button) hides the header, the now-playing bar
+  and the reader's own toolbar, and narrows the text from 920 dp to a 760 dp measure. Move the
+  pointer to either edge and the frame comes back, with a transport that can pause and skip — the
+  mode never leaves the audio without a visible way to stop it. `Escape` restores the frame rather
+  than leaving the chapter, and the mode is dropped on leaving the reader rather than remembered.
 
 ## 🎚️ Listening preferences, the sleep timer and the desktop
 
@@ -533,6 +539,8 @@ a note in the log rather than a failure.
 | `Ctrl+,` | Settings |
 | `F5` / `Ctrl+R` | Refresh the current screen |
 | `Escape` | Close a dialog, or go back |
+| `Ctrl+B` / `Ctrl+Shift+B` | Bookmark this spot / your bookmarks |
+| `F11` | Distraction-free reading, in the reader |
 | `F1` / `Ctrl+/` | The in-app shortcut list |
 
 **Shortcuts that would type do not fire while you are typing.** That is structural rather than a

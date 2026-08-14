@@ -20,6 +20,11 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ### Added
 
+- Distraction-free reading. `F11` in the reader — or the new toolbar button — hides the header, the
+  now-playing bar and the reader's own toolbar, and narrows the text to a comfortable measure. The
+  frame returns when the pointer reaches either edge, along with a transport that can pause and skip
+  so hiding the now-playing bar never leaves the audio unreachable. `Escape` restores the frame
+  rather than leaving the chapter.
 - Timestamp-based metadata refresh for the library and chapter lists. Servers that advertise the
   delta-sync contract now receive one small change-index request followed only by the sparse data
   that changed; older servers continue to receive ordinary full refreshes.
