@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.desktop.ui
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertCountEquals
@@ -26,7 +27,10 @@ import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
 import dk.perspektiva.ttsroad.desktop.ServerFixtures
+import dk.perspektiva.ttsroad.desktop.data.InMemoryListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.ListeningDay
+import dk.perspektiva.ttsroad.desktop.data.ListeningStats
 import dk.perspektiva.ttsroad.desktop.data.AudiobookExport
 import dk.perspektiva.ttsroad.desktop.data.AudiobookExportsResponse
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
@@ -120,6 +124,8 @@ class SettingsScreenUiTest {
         closeToTray: Boolean = false,
         onCloseToTrayChange: (Boolean) -> Unit = {},
         traySupported: Boolean = true,
+        listeningStats: InMemoryListeningStatsStore = InMemoryListeningStatsStore(),
+        historyOwnerKey: String = "owner-a",
     ) {
         val store = InMemorySessionStore(session)
         repository.capabilitiesResult = capabilities
@@ -136,6 +142,8 @@ class SettingsScreenUiTest {
                     closeToTray = closeToTray,
                     onCloseToTrayChange = onCloseToTrayChange,
                     traySupported = traySupported,
+                    listeningStats = listeningStats,
+                    historyOwnerKey = historyOwnerKey,
                     nowMs = { now },
                 )
             }
@@ -398,6 +406,35 @@ class SettingsScreenUiTest {
 
         compose.onAllNodesWithContentDescription("KEEP PLAYING WHEN THE WINDOW CLOSES").assertCountEquals(0)
         compose.onNodeWithText("No system tray on this desktop", ignoreCase = true).assertExists()
+    }
+
+    @Test
+    fun `the listening pane says so plainly when there is nothing yet`() {
+        setContent(FakeRepository())
+        navEntry("LISTENING").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Nothing yet", ignoreCase = true).assertExists()
+        compose.onNodeWithText("never sent to the server", substring = true, ignoreCase = true).assertExists()
+    }
+
+    @Test
+    fun `the listening pane totals this account's days and not another's`() {
+        val stats = InMemoryListeningStatsStore(
+            listOf(
+                ListeningDay("owner-a", ListeningStats.dateOf(now), seconds = 3_660.0, chaptersFinished = 2),
+                ListeningDay("owner-b", ListeningStats.dateOf(now), seconds = 99_999.0, chaptersFinished = 40),
+            ),
+        )
+        setContent(FakeRepository(), listeningStats = stats, historyOwnerKey = "owner-a")
+        navEntry("LISTENING").performClick()
+        compose.waitForIdle()
+
+        compose.onAllNodesWithText("1h 1m").onFirst().assertExists()
+        // Streak, longest streak and days-with-listening are all one day here.
+        compose.onAllNodesWithText("1 day", substring = true).assertCountEquals(3)
+        // The other account's evening must not appear anywhere on this pane.
+        compose.onAllNodesWithText("27h", substring = true).assertCountEquals(0)
     }
 
     @Test

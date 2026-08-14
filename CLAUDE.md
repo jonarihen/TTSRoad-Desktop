@@ -124,6 +124,13 @@ apply to audio.
   criterion. Fade gain is published as a multiplier and combined with the volume boost in one place,
   so cancelling a fade restores the boost rather than unity. End-of-chapter is checked *before* the
   auto-advance and disarms itself.
+- `data/ListeningStats.kt` — day totals in `listening.json`, bounded to 730 rows and keyed by the
+  same hashed owner key the history uses, so two accounts on one machine never pool their hours.
+  The controller banks *playing* ticks — never wall time, so a suspended laptop is not a night of
+  listening — batched to once a minute and flushed at every transition. A chapter counts finished
+  only when it ran to its end; marking one played by hand does not. Nothing is sent to the server.
+  `summarise` takes `today` as an argument because a streak is the one number that changes without
+  anyone listening.
 - `data/PlaybackHistory.kt` — a bounded local-first fallback, 60 entries and one per chapter;
   `SyncedPlaybackHistoryStore` writes the same `kind=auto` bookmarks as the web and merges a full
   server pull without replacing newer offline work. The controller records at transitions and

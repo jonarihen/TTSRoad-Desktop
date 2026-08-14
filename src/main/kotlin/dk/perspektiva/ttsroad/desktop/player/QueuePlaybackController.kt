@@ -2,7 +2,10 @@ package dk.perspektiva.ttsroad.desktop.player
 
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.InMemoryListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.ListeningStats
+import dk.perspektiva.ttsroad.desktop.data.ListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
@@ -71,6 +74,11 @@ class QueuePlaybackController(
      */
     private val preferencesStore: PlaybackPreferencesStore = InMemoryPlaybackPreferencesStore(),
     private val historyStore: PlaybackHistoryStore = InMemoryPlaybackHistoryStore(),
+    /**
+     * Day totals for the Listening pane. Fed from the same tick as everything else, because the
+     * controller is the only thing that knows the difference between playing and merely loaded.
+     */
+    private val statsStore: ListeningStatsStore = InMemoryListeningStatsStore(),
     private val sleepTimer: SleepTimer = SleepTimer(),
     private val clock: () -> Long = System::currentTimeMillis,
     /**
@@ -83,6 +91,7 @@ class QueuePlaybackController(
     private val tickIntervalMs: Long = 250,
     private val progressIntervalMs: Long = 10_000,
     private val historyRecordIntervalMs: Long = 5 * 60_000L,
+    private val listeningFlushIntervalMs: Long = 60_000L,
 ) : PlaybackController {
 
     private val _state = MutableStateFlow(emptyState())
@@ -133,6 +142,15 @@ class QueuePlaybackController(
 
     /** Playing time since the last cross-device jump-back breadcrumb. Pauses add nothing. */
     private var playedSinceHistoryRecordMs = 0L
+
+    /**
+     * Playing time not yet added to the day total.
+     *
+     * Batched rather than written per tick: four writes a second to a JSON file for a number nobody
+     * reads more than once a week would be absurd. Flushed on the interval below and at every
+     * transition, so the most a crash can lose is under a minute of a total measured in hours.
+     */
+    private var unflushedListeningMs = 0L
 
     /**
      * Engine events, queued for the attempt loop to consume.
@@ -484,6 +502,10 @@ class QueuePlaybackController(
                 // Reaching here means the chapter ended on its own.
                 val duration = _state.value.durationMs
                 saveProgress(chapter, duration.takeIf { it > 0 } ?: lastKnownPositionMs, isPlayed = true)
+                // A chapter that ran to its end is the only thing this client can honestly call
+                // "finished": marking one played by hand says the listener is done with it, not
+                // that they heard it.
+                flushListening(chaptersFinished = 1)
 
                 // Checked before the advance, which is the whole requirement: "end of current
                 // chapter" has to prevent auto-advance, not stop the next one a moment after it
@@ -629,6 +651,10 @@ class QueuePlaybackController(
                     playedSinceHistoryRecordMs = 0L
                     recordHistory()
                 }
+                // Counted from ticks rather than from the clock for the same reason: a laptop
+                // suspended mid-chapter must not wake up having "listened" for five hours.
+                unflushedListeningMs += tickIntervalMs
+                if (unflushedListeningMs >= listeningFlushIntervalMs) flushListening()
             }
 
             if (lastKnownPositionMs - lastSavedMs >= progressIntervalMs) {
@@ -714,6 +740,8 @@ class QueuePlaybackController(
      * the user making it.
      */
     private fun recordHistory() {
+        // Every transition that files a snapshot is also a good moment to bank the minutes.
+        flushListening()
         val chapter = queue.getOrNull(queueIndex) ?: return
         val current = _state.value
         if (!current.hasMedia) return
@@ -733,6 +761,25 @@ class QueuePlaybackController(
                 recordedAtMs = clock(),
                 ownerKey = queueOwnerKey,
             ),
+        )
+    }
+
+    /**
+     * Adds the playing time accumulated since the last flush to today's total.
+     *
+     * Attributed to [queueOwnerKey] rather than to whoever is signed in *now*, for the reason the
+     * history snapshot is: a sign-out while a flush is pending must not file one account's evening
+     * under another's name.
+     */
+    private fun flushListening(chaptersFinished: Int = 0) {
+        val seconds = unflushedListeningMs / 1000.0
+        unflushedListeningMs = 0L
+        if (seconds <= 0.0 && chaptersFinished == 0) return
+        statsStore.record(
+            ownerKey = queueOwnerKey,
+            date = ListeningStats.dateOf(clock()),
+            seconds = seconds,
+            chaptersFinished = chaptersFinished,
         )
     }
 

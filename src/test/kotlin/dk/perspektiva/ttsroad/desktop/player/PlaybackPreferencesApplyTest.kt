@@ -3,7 +3,9 @@ package dk.perspektiva.ttsroad.desktop.player
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.AudioInfo
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+import dk.perspektiva.ttsroad.desktop.data.InMemoryListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.ListeningStats
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackInfo
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
@@ -219,6 +221,88 @@ class PlaybackPreferencesApplyTest {
 
         awaitCondition("the default to move") { preferences.preferences.value.speed == 1.75f }
         assertTrue(preferences.preferences.value.fictionSpeeds.isEmpty())
+    }
+
+    // --- Listening statistics ---------------------------------------------------------------------
+
+    @Test
+    fun `playing time is banked against the account and the day, not against the clock`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val stats = InMemoryListeningStatsStore()
+        val clock = FakeClock(java.time.Instant.parse("2026-08-14T20:00:00Z").toEpochMilli())
+        val playback = QueuePlaybackController(
+            repository = FakeRepository(),
+            sources = FakeMediaSourceFactory(),
+            engine = engine,
+            ioDispatcher = Dispatchers.Default,
+            statsStore = stats,
+            clock = clock,
+            ownerKey = { "owner-a" },
+            tickIntervalMs = 5,
+            // Twenty milliseconds of ticks stands in for the production one-minute flush.
+            listeningFlushIntervalMs = 20,
+        )
+
+        playback.playQueue(listOf(chapter(1)), startChapterId = 1, fiction = null)
+        awaitCondition("a flushed day total") { stats.days.value.isNotEmpty() }
+
+        val day = stats.days.value.single()
+        assertEquals("owner-a", day.ownerKey)
+        assertEquals(ListeningStats.dateOf(clock()), day.date)
+        assertTrue(day.seconds > 0.0, "was ${day.seconds}")
+        playback.release()
+    }
+
+    @Test
+    fun `a paused player banks nothing at all`() = runBlocking {
+        // The tick loop keeps running through a pause — it is what notices the engine's events — so
+        // counting ticks rather than playing ticks would turn an overnight pause into a night of
+        // listening.
+        val engine = FakePlaybackEngine()
+        val stats = InMemoryListeningStatsStore()
+        val playback = QueuePlaybackController(
+            repository = FakeRepository(),
+            sources = FakeMediaSourceFactory(),
+            engine = engine,
+            ioDispatcher = Dispatchers.Default,
+            statsStore = stats,
+            ownerKey = { "owner-a" },
+            tickIntervalMs = 5,
+            listeningFlushIntervalMs = 20,
+        )
+
+        playback.playQueue(listOf(chapter(1)), startChapterId = 1, fiction = null)
+        awaitCondition("playback to start") { playback.state.value.isPlaying }
+        playback.togglePlayPause()
+        awaitCondition("the pause") { !playback.state.value.isPlaying }
+        val bankedAtPause = stats.days.value.sumOf { it.seconds }
+
+        delay(120)
+
+        assertEquals(bankedAtPause, stats.days.value.sumOf { it.seconds })
+        playback.release()
+    }
+
+    @Test
+    fun `a chapter that runs to its end counts as finished`() = runBlocking {
+        val engine = FakePlaybackEngine(completeOnPlay = true)
+        val stats = InMemoryListeningStatsStore()
+        val playback = QueuePlaybackController(
+            repository = FakeRepository(),
+            sources = FakeMediaSourceFactory(),
+            engine = engine,
+            ioDispatcher = Dispatchers.Default,
+            statsStore = stats,
+            ownerKey = { "owner-a" },
+            tickIntervalMs = 5,
+        )
+
+        playback.playQueue(listOf(chapter(1)), startChapterId = 1, fiction = null)
+
+        awaitCondition("the finished chapter to be counted") {
+            stats.days.value.sumOf { it.chaptersFinished } == 1
+        }
+        playback.release()
     }
 
     // --- Skip interval --------------------------------------------------------------------------

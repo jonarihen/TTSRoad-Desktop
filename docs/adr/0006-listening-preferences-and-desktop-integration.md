@@ -307,6 +307,33 @@ wholesale, which would silently revert a setting changed five minutes earlier.
 MPRIS `Raise` un-hides as well as raising, since after a close-to-tray the window is not merely
 behind something, and `Quit` from a shell quits rather than hiding: a client asking a player to quit
 is not asking it to get out of the way.
+### Listening statistics are days, not sessions
+
+`listening.json` holds one row per account per calendar day: seconds and chapters finished. A day
+is the coarsest unit that still answers all three questions worth asking — hours, chapters, a
+streak — and storing sessions instead would mean keeping a minute-resolution record of *when*
+somebody listened, for years, to answer questions that never needed it.
+
+- **Per account, on a shared machine.** Rows carry the same hashed owner key the history uses.
+  "You have listened for 300 hours" is a claim about a person; pooling two accounts would be wrong
+  in the direction that flatters.
+- **Playing ticks, never wall time.** The controller counts the same 250 ms tick the rest of the
+  loop runs on, and only while playing — a laptop suspended mid-chapter must not wake up having
+  listened for five hours, and a player left paused overnight has listened for nothing.
+- **Batched, but not much.** Flushed once a minute of playing time and at every transition, so four
+  writes a second are avoided while a crash can lose under a minute of a total measured in hours.
+- **Finished means finished.** A chapter counts when it ran to its end. Marking one played by hand
+  says the listener is done with it, not that they heard it.
+- **Bounded at two years**, oldest first, because this file is appended to for the life of the
+  install.
+- `summarise` takes `today` as an argument. A streak is the one number here that changes without
+  anyone listening — it has to reach zero the day after it lapses — and a function that read the
+  clock could not be asserted on that at all. Today *or yesterday* keeps a streak alive: counting
+  only from today would report a broken streak every morning until the first chapter of the day,
+  which is both wrong and demoralising in a feature whose purpose is encouragement.
+
+Nothing here is sent to the server, and there is no account contract for it. It is local
+computation over local facts, and the file has nowhere to put a title, a chapter id or a URL.
 
 ## Consequences
 

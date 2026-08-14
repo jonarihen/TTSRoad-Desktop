@@ -68,6 +68,7 @@ full evidence table is in [`docs/QUALITY-GATE.md`](docs/QUALITY-GATE.md).
 | Playback preferences — default + per-book speed, skip interval, skip silence, volume boost | ✅ |
 | Sleep timer — 5/15/30/45/60 min or end of chapter, with a fade and "+5 min" | ✅ |
 | Cross-device listening history — local-first "Jump back in", dismissible per snapshot | ✅ |
+| Listening statistics — hours, chapters finished, streaks, computed locally | ✅ |
 | MPRIS over D-Bus — Cinnamon applet, lock screen, hardware media keys | ✅ Linux |
 | System tray transport, and an optional keep-playing-on-close | ✅ where the desktop has a tray |
 | App shortcuts — Space, arrows, Ctrl+arrows, Ctrl+L, Ctrl+, plus an F1 list | ✅ |
