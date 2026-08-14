@@ -144,8 +144,11 @@ apply to audio.
   above 1 GiB. Never surface streaming cache as a requested Offline download.
 - `LibraryDiskCache` holds owner-only rebuildable metadata under the same identity. It strips
   server-local paths/errors, publishes cached content with the original last-refresh time, and
-  refreshes underneath. Settings measures real files, groups downloads by fiction, and keeps
-  confirmed Delete all downloads separate from Clear streaming cache.
+  refreshes underneath. A snapshot's server cursor drives `/api/mobile/sync`; unchanged resources
+  advance that cursor without downloading their payload, while changed resources merge sparse
+  rows and tombstones through `data/DeltaSync.kt`. Missing/old delta endpoints fall back to a full
+  refresh. Settings measures real files, groups downloads by fiction, and keeps confirmed Delete
+  all downloads separate from Clear streaming cache.
 
 ### Read-along
 

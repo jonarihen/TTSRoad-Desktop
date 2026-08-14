@@ -67,7 +67,14 @@ interface TtsRoadApi {
      * answers the shared list it always did, which is what makes browse-all safe to ask for.
      */
     @GET("api/mobile/library")
-    suspend fun library(@Query("scope") scope: String = LibraryScope.Followed.wireValue): LibraryResponse
+    suspend fun library(
+        @Query("scope") scope: String = LibraryScope.Followed.wireValue,
+        @Query("updated_since") updatedSince: String? = null,
+    ): LibraryResponse
+
+    /** Cheap index before resource-specific delta pulls. 404 on a pre-delta server. */
+    @GET("api/mobile/sync")
+    suspend fun deltaSync(@Query("updated_since") updatedSince: String): DeltaSyncResponse
 
     /** Puts a fiction on this account's shelf. 404 for a fiction that does not exist. */
     @POST("api/mobile/fictions/{fiction_id}/follow")
@@ -95,6 +102,7 @@ interface TtsRoadApi {
         @Path("fiction_id") fictionId: Int,
         @Query("playable_only") playableOnly: Boolean = false,
         @Query("include_excluded") includeExcluded: Boolean = false,
+        @Query("updated_since") updatedSince: String? = null,
     ): ChaptersResponse
 
     /** Raw response exposes both the ETag and the normal 304 revalidation path. */

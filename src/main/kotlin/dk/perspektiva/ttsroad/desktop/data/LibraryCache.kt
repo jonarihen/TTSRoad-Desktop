@@ -84,17 +84,18 @@ class LibraryCache(
     }
 
     /** The explicit Refresh action. Always re-asks, cancelling any load already running. */
-    fun refreshLibrary() {
+    fun refreshLibrary(forceFull: Boolean = false) {
         libraryJob?.cancel()
         if (!_library.value.hasContent) primeLibraryFromDisk()
         _library.update { it.copy(isRefreshing = true, error = null) }
         val persistent = diskCache()
         libraryJob = scope.launch {
+            val current = _library.value.value
             load(
                 state = _library,
                 fallback = "Could not load library",
                 onLoaded = { value, savedAt -> persistent?.storeLibrary(value, savedAt) },
-            ) { repository.library() }
+            ) { refreshLibraryValue(current, forceFull) }
         }
     }
 
@@ -132,7 +133,7 @@ class LibraryCache(
         patchFollowing(fictionId, confirmed)
         // Membership changed, so the shelf is a different list now — a flag patch cannot express
         // a row appearing or disappearing.
-        refreshLibrary()
+        refreshLibrary(forceFull = true)
         return confirmed
     }
 
@@ -182,11 +183,12 @@ class LibraryCache(
         state.update { it.copy(isRefreshing = true, error = null) }
         val persistent = diskCache()
         chapterJobs[fictionId] = scope.launch {
+            val current = state.value.value
             load(
                 state = state,
                 fallback = "Could not load chapters",
                 onLoaded = { value, savedAt -> persistent?.storeChapters(fictionId, value, savedAt) },
-            ) { repository.chapters(fictionId) }
+            ) { refreshChaptersValue(fictionId, current) }
         }
     }
 
@@ -360,6 +362,40 @@ class LibraryCache(
         val stored = diskCache()?.loadChapters(fictionId) ?: return
         if (state.value.hasContent) return
         state.value = Cached(value = stored.value, lastSuccessMillis = stored.savedAtMillis)
+    }
+
+    /** One index call, then only the shelf bytes that actually changed. */
+    private suspend fun refreshLibraryValue(
+        current: LibraryResponse?,
+        forceFull: Boolean,
+    ): LibraryResponse {
+        if (forceFull) return repository.library()
+        val cursor = current?.serverTime?.takeIf { it.isNotBlank() } ?: return repository.library()
+        val index = repository.deltaSync(cursor) ?: return repository.library()
+        val nextCursor = index.serverTime?.takeIf { it.isNotBlank() } ?: return repository.library()
+        if (!index.delta) return repository.library()
+        // The current backend's sync index does not count follow-table changes. A follows-aware
+        // response therefore gets one cheap library delta even when the index is otherwise quiet;
+        // its complete `following_ids` detects removals and the rare new-row case below.
+        val checksMembership = current.scope == LibraryScope.Followed.wireValue && current.followingIds != null
+        if (!index.changesLibrary && !checksMembership) return current.withSyncCursor(nextCursor)
+        val delta = repository.libraryDelta(cursor)
+        if (current.deltaNeedsFullFollowPull(delta)) return repository.library()
+        return current.mergedWith(delta)
+    }
+
+    /** One index call, then one small per-fiction delta only when that fiction moved. */
+    private suspend fun refreshChaptersValue(
+        fictionId: Int,
+        current: ChaptersResponse?,
+    ): ChaptersResponse {
+        val cursor = current?.serverTime?.takeIf { it.isNotBlank() } ?: return repository.chapters(fictionId)
+        val index = repository.deltaSync(cursor) ?: return repository.chapters(fictionId)
+        val nextCursor = index.serverTime?.takeIf { it.isNotBlank() } ?: return repository.chapters(fictionId)
+        if (!index.delta) return repository.chapters(fictionId)
+        check(fictionId !in index.deleted.fictions) { "This fiction was deleted on the server" }
+        if (!index.changesFiction(fictionId)) return current.withSyncCursor(nextCursor)
+        return current.mergedWith(repository.chaptersDelta(fictionId, cursor))
     }
 
     private suspend fun <T> load(
