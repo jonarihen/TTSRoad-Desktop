@@ -48,7 +48,7 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Device sessions — list, mark current, revoke one / revoke all others | ✅ |
 | Playback preferences — speed, skip interval, skip silence, volume boost | ✅ |
 | Sleep timer — 5/15/30/45/60 min or end of chapter, with a fade and "+5 min" | ✅ |
-| Local listening history — "Jump back in", dismissible per snapshot | ✅ |
+| Cross-device listening history — local-first "Jump back in", dismissible per snapshot | ✅ |
 | MPRIS over D-Bus — Cinnamon applet, lock screen, hardware media keys | ✅ Linux |
 | App shortcuts — Space, arrows, Ctrl+arrows, Ctrl+L, Ctrl+, plus an F1 list | ✅ |
 | Offline downloads — per chapter, next 10, restart-safe queue, storage controls | ✅ |
@@ -167,7 +167,7 @@ The back stack, the repository-backed cache, lazy lists and the adaptive breakpo
 [`docs/adr/0004-stateful-adaptive-navigation.md`](docs/adr/0004-stateful-adaptive-navigation.md).
 Chapter filtering and ordering, bulk marking, optimistic rollback and current-chapter resolution are in
 [`docs/adr/0005-chapter-browsing-and-bulk-controls.md`](docs/adr/0005-chapter-browsing-and-bulk-controls.md).
-Listening preferences, the sleep timer, local history, MPRIS and the shortcut table are in
+Listening preferences, the sleep timer, local-first cross-device history, MPRIS and the shortcut table are in
 [`docs/adr/0006-listening-preferences-and-desktop-integration.md`](docs/adr/0006-listening-preferences-and-desktop-integration.md).
 Offline namespaces, resumable downloads, streamed-audio retention and disk metadata are in
 [`docs/adr/0007-offline-downloads-and-streaming-cache.md`](docs/adr/0007-offline-downloads-and-streaming-cache.md).
@@ -291,6 +291,7 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── Models.kt                 mobile API models (Moshi)
 │   ├── PlaybackPreferences.kt    speed/skip/silence/boost, machine-local, migrating on read
 │   ├── PlaybackHistory.kt        bounded local snapshots, last-heard and jump-back selection
+│   ├── SyncedPlaybackHistoryStore.kt  cross-device auto-bookmark reconciliation
 │   ├── Cached.kt                 value + error + isRefreshing + last success, independently
 │   ├── LibraryCache.kt           library/chapter state held above the screens
 │   ├── LibraryDiskCache.kt       account-scoped rebuildable metadata for offline browsing
@@ -476,10 +477,13 @@ The **sleep timer** offers 5/15/30/45/60 minutes or the end of the current chapt
 None of that is timed by a scheduler: the timer is a state machine ticked by the playback loop over
 an injected clock, so a test steps an hour in one line.
 
-**Local history** (`history.json`, 60 entries, one per chapter) backs the "Jump back in" strip. It
-holds ids and titles and *no URL of any kind* — covers are re-resolved from the live library cache.
-Dismissing an entry hides that snapshot, not the day: a later chapter of the same serial comes back
-on its own, and a progress save for a dismissed chapter does not resurrect it.
+**Listening history** is local-first: `history.json` keeps 60 entries, one per chapter, while
+`kind=auto` server bookmarks share the same moments with the web and other native clients. The
+desktop records at playback transitions and every five minutes of active listening, then merges a
+server refresh without replacing newer offline work. The local file holds ids and titles and *no
+URL of any kind* — covers are re-resolved from the live library cache. Dismissing an entry hides
+that snapshot on this machine, not the day: a later chapter of the same serial comes back on its
+own, and a later refresh or progress save does not resurrect the dismissed chapter.
 
 On Linux the player appears on the session bus over **MPRIS**, so Cinnamon's media applet, the lock
 screen and hardware media keys show the right metadata and control playback. It is pure Java —

@@ -167,6 +167,40 @@ class PlaybackHistoryTest {
     }
 
     @Test
+    fun `a remote breadcrumb cannot replace a newer local position or undo its dismissal`() {
+        val local = snapshot(
+            chapterId = 7,
+            positionSeconds = 300.0,
+            durationSeconds = 900.0,
+            recordedAtMs = 2_000,
+            dismissed = true,
+        )
+        val olderRemote = snapshot(
+            chapterId = 7,
+            positionSeconds = 120.0,
+            durationSeconds = 0.0,
+            recordedAtMs = 1_000,
+        )
+
+        val merged = PlaybackHistory.merge(listOf(local), listOf(olderRemote)).single()
+
+        assertEquals(300.0, merged.positionSeconds)
+        assertEquals(900.0, merged.durationSeconds)
+        assertTrue(merged.dismissed)
+    }
+
+    @Test
+    fun `a newer remote position keeps the duration this machine already resolved`() {
+        val local = snapshot(chapterId = 7, positionSeconds = 120.0, durationSeconds = 900.0, recordedAtMs = 1_000)
+        val remote = snapshot(chapterId = 7, positionSeconds = 300.0, durationSeconds = 0.0, recordedAtMs = 2_000)
+
+        val merged = PlaybackHistory.merge(listOf(local), listOf(remote)).single()
+
+        assertEquals(300.0, merged.positionSeconds)
+        assertEquals(900.0, merged.durationSeconds)
+    }
+
+    @Test
     fun `progress is bounded to zero and one`() {
         assertEquals(0f, snapshot(positionSeconds = -5.0).progress)
         assertEquals(1f, snapshot(positionSeconds = 9_999.0, durationSeconds = 600.0).progress)

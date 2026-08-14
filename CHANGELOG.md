@@ -20,6 +20,9 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ### Added
 
+- Cross-device jump-back history through the server's `kind=auto` bookmarks. The desktop writes a
+  breadcrumb every five minutes of playback and at its existing transition points, merges moments
+  recorded by other clients into the Jump back shelf, and retains the bounded local copy offline.
 - The account's cross-library queue, shared with the web client, as a browsable surface of its own.
   Chapter rows gain "Play next" and "Add to queue", the chapter list gains "Queue unplayed", and the
   queue screen can reorder, remove and clear. Shown only on a server that advertises the capability.

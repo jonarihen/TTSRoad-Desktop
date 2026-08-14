@@ -153,6 +153,10 @@ fun LibraryScreen(
     // Keyless on purpose: fires once per screen *appearance*, not per recomposition. Reuses cached
     // content and coalesces with a load already in flight, so Back into the library costs nothing.
     LaunchedEffect(Unit) { cache.ensureLibrary() }
+    // Local history paints immediately; the account-wide auto bookmarks merge underneath it when
+    // reachable, so opening the library after listening in the browser adds those moments without
+    // blanking the offline fallback.
+    LaunchedEffect(history, historyOwnerKey) { history.refresh(historyOwnerKey) }
     // Keyed, because switching modes is what makes browse-all worth fetching at all; it coalesces
     // the same way, so flipping back and forth costs one request each.
     LaunchedEffect(browseAll) { if (browseAll) cache.ensureBrowseAll() }
@@ -226,9 +230,9 @@ fun LibraryScreen(
                         }
                     }
 
-                    // Local, and therefore true even when the server's own continue-listening is
-                    // stale or unreachable: this is what *this machine* was playing. Dismissing an
-                    // entry hides that snapshot, not "today" — see PlaybackHistory.
+                    // Local-first and cross-device: the server's `auto` bookmarks merge into the
+                    // same bounded list, while this machine's copy survives an offline start.
+                    // Dismissing an entry hides that snapshot locally, not "today".
                     if (jumpBack.isNotEmpty()) {
                         fullWidthItem("jump-back") {
                             Column {

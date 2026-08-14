@@ -82,6 +82,7 @@ class QueuePlaybackController(
     private val retryDelaysMs: List<Long> = listOf(2_000, 5_000, 15_000),
     private val tickIntervalMs: Long = 250,
     private val progressIntervalMs: Long = 10_000,
+    private val historyRecordIntervalMs: Long = 5 * 60_000L,
 ) : PlaybackController {
 
     private val _state = MutableStateFlow(emptyState())
@@ -111,6 +112,9 @@ class QueuePlaybackController(
     @Volatile private var lastKnownPositionMs = 0L
 
     @Volatile private var speed = preferencesStore.preferences.value.speed
+
+    /** Playing time since the last cross-device jump-back breadcrumb. Pauses add nothing. */
+    private var playedSinceHistoryRecordMs = 0L
 
     /**
      * Engine events, queued for the attempt loop to consume.
@@ -553,6 +557,17 @@ class QueuePlaybackController(
             if (position > 0) lastKnownPositionMs = position
             val duration = engine.durationMs().takeIf { it > 0 } ?: _state.value.durationMs
             _state.update { it.copy(positionMs = lastKnownPositionMs, durationMs = duration) }
+
+            // The web client writes the same `kind=auto` breadcrumb every five minutes of actual
+            // playback. Counting active ticks avoids treating a suspended laptop as five hours of
+            // listening when its coroutine resumes after sleep.
+            if (_state.value.isPlaying) {
+                playedSinceHistoryRecordMs += tickIntervalMs
+                if (playedSinceHistoryRecordMs >= historyRecordIntervalMs) {
+                    playedSinceHistoryRecordMs = 0L
+                    recordHistory()
+                }
+            }
 
             if (lastKnownPositionMs - lastSavedMs >= progressIntervalMs) {
                 lastSavedMs = lastKnownPositionMs

@@ -16,6 +16,7 @@ import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinator
 import dk.perspektiva.ttsroad.desktop.download.OfflineFirstMediaSourceFactory
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
+import dk.perspektiva.ttsroad.desktop.data.SyncedPlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadAuthInterceptor
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.WindowPreferencesStore
@@ -94,7 +95,9 @@ class AppContainer(
      * test never writes into the user's config directory.
      */
     val playbackPreferences: PlaybackPreferencesStore = FilePlaybackPreferencesStore(),
-    val playbackHistory: PlaybackHistoryStore = FilePlaybackHistoryStore(),
+    // Null selects the production local-plus-server store. Supplying a store keeps UI tests wholly
+    // in memory and avoids making a fake repository call just because the library was composed.
+    playbackHistory: PlaybackHistoryStore? = null,
     playbackFactory: (
         TtsRoadRepository,
         MediaSourceFactory,
@@ -162,13 +165,21 @@ class AppContainer(
         if (session.serverUrl.isBlank()) "" else PlaybackHistory.ownerKeyFor(session.serverUrl, session.username)
     }
 
+    /** Local fallback plus the account-wide `kind=auto` bookmark store shared with the web. */
+    val playbackHistory: PlaybackHistoryStore = playbackHistory ?: SyncedPlaybackHistoryStore(
+        local = FilePlaybackHistoryStore(),
+        repository = repository,
+        dispatcher = dispatchers.io,
+        currentOwnerKey = historyOwnerKey,
+    )
+
     val playback: PlaybackController = playbackFactory(
         repository,
         mediaSources,
         audioEngine,
         dispatchers,
         playbackPreferences,
-        playbackHistory,
+        this.playbackHistory,
         historyOwnerKey,
     )
 
@@ -249,6 +260,7 @@ class AppContainer(
         mprisScope.cancel()
         runCatching { downloads.close() }
         playback.release()
+        this.playbackHistory.close()
         libraryCache.close()
         readAlongCache.clear()
         readerPreferences.close()

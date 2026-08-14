@@ -5,6 +5,7 @@ import dk.perspektiva.ttsroad.desktop.data.AudioInfo
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -40,13 +41,19 @@ class QueuePlaybackControllerTest {
         sources: FakeMediaSourceFactory = FakeMediaSourceFactory(),
         repository: FakeRepository = FakeRepository(),
         retryDelaysMs: List<Long> = emptyList(),
+        history: InMemoryPlaybackHistoryStore = InMemoryPlaybackHistoryStore(),
+        ownerKey: () -> String = { "" },
+        historyRecordIntervalMs: Long = 5 * 60_000L,
     ) = QueuePlaybackController(
         repository = repository,
         sources = sources,
         engine = engine,
         ioDispatcher = Dispatchers.Default,
+        historyStore = history,
+        ownerKey = ownerKey,
         retryDelaysMs = retryDelaysMs,
         tickIntervalMs = 10,
+        historyRecordIntervalMs = historyRecordIntervalMs,
     )
 
     private suspend fun PlaybackController.await(
@@ -342,6 +349,32 @@ class QueuePlaybackControllerTest {
         awaitCondition("a save on pause at the reported position") {
             repository.savedProgress.any { it.first == 101 && it.second == 42.0 && !it.third }
         }
+        controller.release()
+    }
+
+    @Test
+    fun `playing continuously records a jump-back breadcrumb every five minutes`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        engine.durationOnPrepare = 600_000
+        val history = InMemoryPlaybackHistoryStore()
+        val controller = controllerFor(
+            engine = engine,
+            history = history,
+            ownerKey = { "owner" },
+            // Thirty milliseconds in the test represents the production five-minute cadence.
+            historyRecordIntervalMs = 30,
+        )
+
+        controller.play(chapter(101, "Chapter 3", 600.0), FictionSummary(id = 7, title = "A Test Serial"))
+        controller.await("playback to start") { it.isPlaying }
+        engine.setPosition(45_000)
+
+        awaitCondition("a periodic history record while playback continues") { history.history.value.isNotEmpty() }
+
+        val snapshot = history.history.value.single()
+        assertEquals(101, snapshot.chapterId)
+        assertEquals(45.0, snapshot.positionSeconds)
+        assertEquals("owner", snapshot.ownerKey)
         controller.release()
     }
 

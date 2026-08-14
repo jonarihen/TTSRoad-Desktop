@@ -104,6 +104,38 @@ object PlaybackHistory {
             .take(MaxEntries)
     }
 
+    /**
+     * Reconciles snapshots learned from another client with this machine's local fallback.
+     *
+     * A remote full pull can contain several breadcrumbs for the same chapter, while the desktop
+     * intentionally keeps one snapshot per chapter. The newest observation wins, except for the
+     * two facts only this machine can know: a local dismissal and a duration resolved by its player.
+     */
+    fun merge(
+        existing: List<PlaybackSnapshot>,
+        incoming: List<PlaybackSnapshot>,
+    ): List<PlaybackSnapshot> = (existing + incoming)
+        .groupBy(PlaybackSnapshot::key)
+        .values
+        .map { versions ->
+            val newest = versions.maxBy { it.recordedAtMs }
+            newest.copy(
+                fictionTitle = newest.fictionTitle.ifBlank {
+                    versions.filter { it.fictionTitle.isNotBlank() }
+                        .maxByOrNull { it.recordedAtMs }?.fictionTitle.orEmpty()
+                },
+                chapterTitle = newest.chapterTitle.ifBlank {
+                    versions.filter { it.chapterTitle.isNotBlank() }
+                        .maxByOrNull { it.recordedAtMs }?.chapterTitle.orEmpty()
+                },
+                durationSeconds = newest.durationSeconds.takeIf { it > 0.0 }
+                    ?: versions.maxOf { it.durationSeconds },
+                dismissed = versions.any { it.dismissed },
+            )
+        }
+        .sortedByDescending { it.recordedAtMs }
+        .take(MaxEntries)
+
     /** Marks one chapter's snapshot dismissed. A later snapshot of a *different* chapter is unaffected. */
     fun dismiss(existing: List<PlaybackSnapshot>, key: String): List<PlaybackSnapshot> =
         existing.map { if (it.key == key) it.copy(dismissed = true) else it }
@@ -189,14 +221,22 @@ object PlaybackHistory {
 }
 
 /** Seam so tests never touch the real user config directory. */
-interface PlaybackHistoryStore {
+interface PlaybackHistoryStore : AutoCloseable {
     val history: StateFlow<List<PlaybackSnapshot>>
 
     fun record(snapshot: PlaybackSnapshot)
 
+    /** Merge snapshots learned from the server without replacing newer offline work. */
+    fun merge(snapshots: List<PlaybackSnapshot>)
+
     fun dismiss(key: String)
 
     fun clear()
+
+    /** Refreshes cross-device breadcrumbs where this store has a server-backed implementation. */
+    suspend fun refresh(ownerKey: String) = Unit
+
+    override fun close() = Unit
 }
 
 /** In-memory store for tests and for a session with nowhere safe to write. */
@@ -209,6 +249,11 @@ class InMemoryPlaybackHistoryStore(
     @Synchronized
     override fun record(snapshot: PlaybackSnapshot) {
         _history.value = PlaybackHistory.record(_history.value, snapshot)
+    }
+
+    @Synchronized
+    override fun merge(snapshots: List<PlaybackSnapshot>) {
+        _history.value = PlaybackHistory.merge(_history.value, snapshots)
     }
 
     @Synchronized
@@ -253,6 +298,11 @@ class FilePlaybackHistoryStore(
     @Synchronized
     override fun record(snapshot: PlaybackSnapshot) {
         write(PlaybackHistory.record(_history.value, snapshot))
+    }
+
+    @Synchronized
+    override fun merge(snapshots: List<PlaybackSnapshot>) {
+        write(PlaybackHistory.merge(_history.value, snapshots))
     }
 
     @Synchronized

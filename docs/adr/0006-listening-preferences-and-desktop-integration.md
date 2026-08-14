@@ -188,11 +188,18 @@ With no focus they go to the desktop, which routes them over MPRIS — the same 
 other door. **No global hotkeys are installed**, per the issue: grabbing keys system-wide without an
 explicit opt-in is hostile.
 
-### History is bounded by construction
+### History is local-first and shared through automatic bookmarks
 
-`history.json`, at most 60 entries, one per chapter, newest first. It is written on every pause and
-chapter change for the life of the install, so an unbounded list would be a slow leak that only
-shows up on the machines of the people who use the app most.
+`history.json`, at most 60 entries, one per chapter, newest first, remains the offline fallback.
+`SyncedPlaybackHistoryStore` also writes each observation as a `kind=auto` bookmark and merges the
+account's live automatic bookmarks when the library opens. Those rows are the server-side home the
+web client also uses, so a moment recorded on one device is discoverable on another without putting
+the network in the path of playback or startup.
+
+The controller records on pause and chapter change and once every five minutes of active playback,
+matching the web cadence. The ten-second progress tick does not write history. A suspended laptop
+counts as no listening time, and failed background writes are silent: progress sync still owns the
+resumable position, while the local snapshot survives for the next offline launch.
 
 Two decisions worth recording:
 
@@ -204,9 +211,13 @@ Two decisions worth recording:
   position for a chapter that is already dismissed *inherits* the dismissal — otherwise the next
   progress save would undo a dismissal within a tick of the user making it. A different chapter is a
   different snapshot and appears normally.
+- **Remote merge never replaces newer offline work.** The newest observation for a chapter wins,
+  but a duration already resolved locally and a local dismissal survive because neither exists in
+  the bookmark contract. The server's rolling window owns remote retention; the desktop's 60-row
+  bound still owns its local file.
 
-History is recorded at transitions — pause, chapter change, sleep, stop, shutdown — and deliberately
-not on the ten-second progress tick, which would be write amplification for no extra information.
+This amends the original local-only decision after the shared bookmark contract landed. Keeping a
+local fallback was retained rather than replacing it because offline playback is a first-class path.
 
 ## Consequences
 
