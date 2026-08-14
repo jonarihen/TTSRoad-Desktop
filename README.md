@@ -12,7 +12,8 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 ![Compose Multiplatform](https://img.shields.io/badge/Compose%20Multiplatform-1.11.1-4285F4?logo=jetpackcompose&logoColor=white)
 ![JDK](https://img.shields.io/badge/JDK-25-ED8B00?logo=openjdk&logoColor=white)
 ![Gradle](https://img.shields.io/badge/Gradle-9.7.0-02303A?logo=gradle&logoColor=white)
-![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-informational)
+![Platforms](https://img.shields.io/badge/Linux-supported-success)
+![Platforms](https://img.shields.io/badge/Windows%20%7C%20macOS-best--effort-informational)
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 
 </div>
@@ -25,6 +26,23 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 - 📦 **Real installers** — ships as `.deb` (Linux), `.msi` (Windows) and `.dmg` (macOS) with a **bundled Java runtime**, so end users never install Java. Linux is the platform with a clean-machine install/upgrade/uninstall test; see [Releases](#-releases).
 - 🔗 **Shares the mobile API** — talks to the same `/api/mobile/*` endpoints as the Android app, and wears the same **AARIS** design language.
 - 🔊 **Real audio playback** — bearer-protected chapter MP3s are decoded in pure JVM and streamed to the system audio device.
+
+## 🖧 Platform support, stated once
+
+This is a **Linux-native** client. The other two platforms are *buildable*, not supported, and the
+presence of a `.msi`/`.dmg` target should not be read as more than that:
+
+| Platform | Status | What CI actually proves |
+| --- | --- | --- |
+| Linux (Mint 22.x / Ubuntu 24.04, amd64) | **Supported** | full test suite, `.deb` metadata and payload inspection, and a clean-container install → upgrade → uninstall lifecycle on every PR |
+| Windows x64 | Best-effort | the release workflow builds the `.msi` and starts the application image (`--smoke-test`); the Credential Manager path has its own round-trip test. No clean-machine installer run. |
+| macOS | Best-effort | the release workflow builds the `.dmg` and starts the application image. No clean-machine installer run. |
+
+Variable-rate playback, skip silence, seeking without re-decoding and MPRIS are GStreamer- and
+D-Bus-backed, so they are Linux features; elsewhere the app falls back to the Java Sound engine and
+hides the controls that backend cannot honour. A best-effort platform is still expected to sign in,
+browse, download and play — bug reports for it are welcome — but a release is not blocked on it. The
+full evidence table is in [`docs/QUALITY-GATE.md`](docs/QUALITY-GATE.md).
 
 ## 🧩 What works
 
@@ -218,6 +236,12 @@ Two flags CI adds, which you can use locally to reproduce a CI failure:
 
 > **Note:** Compose UI tests need a display (Skiko renders through AWT even off-screen). They run
 > against your desktop locally, and under `xvfb-run` in CI.
+
+New maintainers should read [`docs/MAINTAINER-GUIDE.md`](docs/MAINTAINER-GUIDE.md) for the
+architecture/data-flow diagram, API and capability rules, fixture conventions, storage boundaries,
+release runbook and dependency process. The executable accessibility/performance/compatibility
+matrix and latest recorded evidence live in
+[`docs/QUALITY-GATE.md`](docs/QUALITY-GATE.md).
 
 ## 🔢 Versioning
 

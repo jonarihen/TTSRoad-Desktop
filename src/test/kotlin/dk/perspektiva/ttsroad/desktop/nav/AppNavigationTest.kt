@@ -106,6 +106,19 @@ class AppNavigationTest {
     }
 
     @Test
+    fun `ten thousand ordinary navigation loops keep the stack bounded`() {
+        var stack = rootBackStack
+        repeat(10_000) { index ->
+            stack = stack
+                .navigateTo(fiction(index % 17 + 1))
+                .navigateTo(Destination.Player)
+                .navigateTo(Destination.Library)
+        }
+
+        assertEquals(rootBackStack, stack)
+    }
+
+    @Test
     fun `popping walks back one entry at a time`() {
         val stack = rootBackStack.navigateTo(fiction(7)).navigateTo(Destination.Player)
 

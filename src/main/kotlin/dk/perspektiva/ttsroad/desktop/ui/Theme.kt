@@ -40,14 +40,18 @@ object AarisColor {
     val BgInput = Color(0xFF0B0D11)
     val Ink = Color(0xFFE9ECEF)
     val Muted = Color(0xFF8B939E)
-    val Dim = Color(0xFF4D545E)
+    // Secondary text still has to be text. This is the lowest AARIS foreground that maintains
+    // WCAG AA 4.5:1 against Bg, BgRaise, BgHover and BgInput; the old #4D545E was only 2.39:1 on
+    // cards and made durations/status hints effectively decorative for low-vision listeners.
+    val Dim = Color(0xFF808995)
     val Line = Color(0xFF232830)
     val LineSoft = Color(0xFF1A1E25)
     val Accent = Color(0xFFFF5A1F)
     val AccentHover = Color(0xFFFF7A44)
     val Ok = Color(0xFF3FD97F)
     val Warning = Color(0xFFFFB224)
-    val Danger = Color(0xFFE5484D)
+    // Bright enough to keep error text above 4.5:1 even on the hover surface.
+    val Danger = Color(0xFFEC555A)
 }
 
 val MonoFamily: FontFamily = FontFamily.Monospace
