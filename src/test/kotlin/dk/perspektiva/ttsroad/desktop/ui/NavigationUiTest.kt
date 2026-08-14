@@ -1,6 +1,8 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -24,6 +26,7 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.withKeyDown
+import androidx.compose.ui.unit.Density
 import dk.perspektiva.ttsroad.desktop.App
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
@@ -242,6 +245,26 @@ class NavigationUiTest {
         val composed = compose.onAllNodesWithTag(FictionCardTestTag).fetchSemanticsNodes().size
         assertTrue(composed in 1..100, "the lazy grid composed $composed cards after scrolling")
         compose.onNodeWithText("Serial 900").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the primary library and settings flows remain usable at two hundred percent text scaling`() {
+        val repository = FakeRepository(libraryResult = Result.success(bigLibrary(4)))
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 2f)) {
+                TtsRoadTheme { App(container(repository, FakePlaybackController())) }
+            }
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("SEARCH TITLE, AUTHOR OR TAG").assertIsDisplayed()
+        compose.onNodeWithText("Serial 01").assertIsDisplayed()
+        compose.onNodeWithText("SETTINGS").performClick()
+        compose.waitForIdle()
+
+        compose.onAllNodesWithText("ACCOUNT", useUnmergedTree = true)[0].assertIsDisplayed()
+        compose.onNodeWithText("SIGN OUT").performScrollTo().assertIsDisplayed()
     }
 
     // --- Settings as a destination --------------------------------------------------------------

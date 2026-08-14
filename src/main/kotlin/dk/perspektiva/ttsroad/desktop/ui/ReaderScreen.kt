@@ -127,7 +127,7 @@ fun readerPalette(theme: ReaderTheme): ReaderPalette = when (theme) {
         AarisColor.Accent, AarisColor.BgHover, Color(0x665B7CFF),
     )
     ReaderTheme.Sepia -> ReaderPalette(
-        Color(0xFFF2E7CF), Color(0xFF382F26), Color(0xFF776752), Color(0xFFCDBB99),
+        Color(0xFFF2E7CF), Color(0xFF382F26), Color(0xFF756550), Color(0xFFCDBB99),
         Color(0xFF9A431C), Color(0x33A86D32), Color(0x55638BA8),
     )
     ReaderTheme.Light -> ReaderPalette(

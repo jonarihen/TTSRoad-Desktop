@@ -166,6 +166,28 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `a four-hour playback position stays precise and is persisted`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val repository = FakeRepository()
+        val controller = controllerFor(engine, repository = repository)
+        val fourHoursMs = 4L * 60 * 60 * 1_000
+
+        controller.play(
+            chapter(101, "A very long chapter", durationSeconds = 5.0 * 60 * 60),
+            FictionSummary(id = 7, title = "A Test Serial"),
+        )
+        controller.await("playback to start") { it.hasMedia && it.isPlaying }
+        engine.setPosition(fourHoursMs)
+        controller.await("the four-hour engine position") { it.positionMs == fourHoursMs }
+        awaitCondition("the four-hour progress save") {
+            repository.savedProgress.any { it == Triple(101, 4.0 * 60 * 60, false) }
+        }
+
+        assertEquals(fourHoursMs, controller.state.value.positionMs)
+        controller.release()
+    }
+
+    @Test
     fun `opening a bookmark starts at the mark rather than at the saved position`() = runBlocking {
         val engine = FakePlaybackEngine(completeOnPlay = true)
         val controller = controllerFor(engine)

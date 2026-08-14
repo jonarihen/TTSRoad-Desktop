@@ -362,3 +362,8 @@ under Xvfb, a configuration-only re-run for build-script deprecations, release-d
 Debian metadata/payload inspection, and an Ubuntu 24.04 clean-install/upgrade/uninstall lifecycle.
 Note it has **no base-branch filter** on purpose — roadmap phases land as stacked PRs whose base is
 the preceding phase branch, not `master`.
+
+`docs/QUALITY-GATE.md` maps the release accessibility, performance/soak and compatibility matrix to
+specific executable tests and recorded workflow runs. `docs/MAINTAINER-GUIDE.md` is the operational
+architecture/API/storage/fixtures/release guide. Update both when a change alters a support claim,
+capability surface, release gate or evidence path; an undocumented skip is not a passing gate.

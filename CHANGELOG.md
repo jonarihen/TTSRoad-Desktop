@@ -18,6 +18,16 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Completed the release quality gate with a documented accessibility/performance/compatibility
+  matrix, maintainer architecture/API/release runbook, 200% text-scale and long-session/navigation
+  soak coverage, and automated WCAG AA contrast checks. Secondary/error/sepia text tokens now meet
+  the 4.5:1 normal-text threshold on their supported surfaces.
+- The README now states the platform support policy once and plainly: Linux is supported and proven
+  by a clean-container install/upgrade/uninstall run, while the Windows and macOS installers are
+  built and smoke-launched but have no clean-machine lifecycle coverage.
+
 ### Added
 
 - Timestamp-based metadata refresh for the library and chapter lists. Servers that advertise the
