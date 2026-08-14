@@ -403,6 +403,10 @@ class FakePlaybackController(initial: PlayerUiState = PlayerUiState()) : Playbac
         calls += "speed($speed)"
     }
 
+    override fun clearFictionSpeed() {
+        calls += "clearFictionSpeed"
+    }
+
     override fun stop() {
         calls += "stop"
     }

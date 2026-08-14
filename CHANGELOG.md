@@ -30,6 +30,9 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ### Added
 
+- Per-book playback speed. Changing speed in the player now sets it for the serial that is playing,
+  since different narrators want different paces; Settings owns the default every book starts at,
+  and a book with its own rate offers a one-click way back to that default.
 - A system tray icon with the transport on it, so the app can get out of the way without stopping.
   It names the chapter and serial, offers play/pause and the two skips, and its Quit entry always
   stops the app for good. **Closing the window still quits by default** — the new Playback setting

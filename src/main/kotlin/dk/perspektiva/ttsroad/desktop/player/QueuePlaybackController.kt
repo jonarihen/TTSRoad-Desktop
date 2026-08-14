@@ -113,6 +113,24 @@ class QueuePlaybackController(
 
     @Volatile private var speed = preferencesStore.preferences.value.speed
 
+    /**
+     * The serial whose rate is in force, or 0 for none.
+     *
+     * Held separately from [queueFiction] because the rate has to be resolved from the *chapter*
+     * when playback started from a library shelf, which carries no `FictionSummary` at all.
+     */
+    @Volatile private var speedFictionId = 0
+
+    /**
+     * Serialises every path that resolves a rate.
+     *
+     * Two of them run concurrently: the preference collector and a queue being loaded. Without a
+     * lock they interleave as *compute, then write*, so a collector that resolved the rate before a
+     * queue arrived could land its now-stale answer after the queue had applied the serial's own —
+     * leaving the engine on one rate and the UI showing another until the next preference change.
+     */
+    private val rateLock = Any()
+
     /** Playing time since the last cross-device jump-back breadcrumb. Pauses add nothing. */
     private var playedSinceHistoryRecordMs = 0L
 
@@ -133,16 +151,10 @@ class QueuePlaybackController(
         // the restored preferences would take effect one chapter late.
         scope.launch {
             preferencesStore.preferences.collect { preferences ->
-                speed = preferences.speed
-                val applied = engine.setRate(preferences.speed)
+                reapplyRate()
                 engine.setSkipSilence(preferences.skipSilence)
                 applyGain()
-                _state.update {
-                    it.copy(
-                        speed = applied,
-                        skipIntervalMs = preferences.skipIntervalMs,
-                    )
-                }
+                _state.update { it.copy(skipIntervalMs = preferences.skipIntervalMs) }
             }
         }
 
@@ -171,6 +183,40 @@ class QueuePlaybackController(
         skipIntervalMs = preferencesStore.preferences.value.skipIntervalMs,
         sleepTimer = sleepTimer.state.value,
     )
+
+    /**
+     * Points the rate at the serial now loaded, and applies its rate if that changes anything.
+     *
+     * Called as the queue's fiction is established rather than on every chapter, because
+     * auto-advance stays inside one serial and re-pushing an unchanged rate to the engine mid-book
+     * is a needless pipeline poke.
+     */
+    private fun useFictionSpeed(fictionId: Int) {
+        val next = fictionId.takeIf { it > 0 } ?: 0
+        if (next == speedFictionId) return
+        reapplyRate(next)
+    }
+
+    /**
+     * Resolves the rate from the current preferences and the loaded serial, and pushes it.
+     *
+     * The single writer of [speed], so the value the engine holds and the value the UI shows can
+     * never disagree about which serial they were derived from. Reads the store rather than taking
+     * a snapshot argument for the same reason: inside the lock, "current" has one meaning.
+     */
+    private fun reapplyRate(fictionId: Int? = null) = synchronized(rateLock) {
+        fictionId?.let { speedFictionId = it }
+        val preferences = preferencesStore.preferences.value
+        val wanted = preferences.speedFor(speedFictionId)
+        speed = wanted
+        val applied = engine.setRate(wanted)
+        _state.update {
+            it.copy(
+                speed = applied,
+                speedIsPerFiction = preferences.fictionSpeeds.containsKey(speedFictionId),
+            )
+        }
+    }
 
     override suspend fun play(chapter: ChapterSummary, fiction: FictionSummary?) {
         if (chapter.audio == null) {
@@ -202,6 +248,7 @@ class QueuePlaybackController(
         queue = listOf(chapter)
         queueFiction = fiction
         queueOwnerKey = ownerKey()
+        useFictionSpeed(fictionIdOf(chapter, fiction))
         begin(0, resumeMsOf(chapter), leaveCurrent = false)
     }
 
@@ -224,6 +271,7 @@ class QueuePlaybackController(
         queue = playable
         queueFiction = fiction
         queueOwnerKey = ownerKey()
+        useFictionSpeed(fictionIdOf(playable.first(), fiction))
         val startIndex = playable.indexOfFirst { it.resolvedChapterId == startChapterId }.coerceAtLeast(0)
         // An explicit start position only applies to the chapter that was asked for. Falling back
         // to the saved position when the requested chapter is not in the queue is what stops a
@@ -296,7 +344,21 @@ class QueuePlaybackController(
         //
         // An engine that cannot resample still stores the wish — a listener who set 1.5× on a
         // machine without GStreamer and later installs it should find 1.5× waiting.
-        preferencesStore.update { it.copy(speed = speed) }
+        //
+        // With a serial loaded this is *that serial's* rate: a listener slowing down for a dense
+        // translation is answering a question about the narrator in front of them, not about every
+        // book they will ever open. The default lives in Settings, where it reads as a default.
+        val fictionId = speedFictionId
+        if (fictionId > 0) {
+            preferencesStore.update { it.withFictionSpeed(fictionId, speed) }
+        } else {
+            preferencesStore.update { it.copy(speed = speed) }
+        }
+    }
+
+    override fun clearFictionSpeed() {
+        val fictionId = speedFictionId.takeIf { it > 0 } ?: return
+        preferencesStore.update { it.withFictionSpeed(fictionId, null) }
     }
 
     override fun setSleepTimer(mode: SleepTimerMode) {
@@ -619,6 +681,7 @@ class QueuePlaybackController(
         durationMs = ((chapter.audioDuration ?: 0.0) * 1000).toLong(),
         positionMs = positionMs,
         speed = engine.capabilities.coerceSpeed(speed),
+        speedIsPerFiction = preferencesStore.preferences.value.fictionSpeeds.containsKey(speedFictionId),
         canChangeSpeed = engine.capabilities.variableSpeed,
         canSkipSilence = engine.capabilities.skipSilence,
         // Rebuilt from the live values rather than copied from the previous state: this function

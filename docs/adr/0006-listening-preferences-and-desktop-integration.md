@@ -49,6 +49,36 @@ Speed gets one extra rule. The offered list always contains the *stored* value e
 one of this build's presets, so a rate set by another build stays selectable instead of being
 silently rounded away the first time the menu is opened.
 
+### Speed is per serial, over a default
+
+`speed` is the rate every book starts at; `fictionSpeeds` overrides it for one fiction id. The
+player's control writes the **loaded serial's** entry and only falls back to the default when
+nothing is loaded, because that is the question a listener at the transport is actually answering:
+different narrators want different paces, and a pace chosen for a dense translation should not
+follow them into the next book. Settings owns the default, where it reads as one.
+
+Three consequences worth recording:
+
+- **The way back is drawn only when there is something to go back to.** A row that always carried a
+  "use the default" entry would imply an override exists whenever a book is open; a row that never
+  carried one would leave a rate the listener could change and not undo. It also *names* the
+  default — "use 1.25×" — because asking someone to remember a number from another screen is not
+  offering them a way back.
+- **Fiction ids are safe in this account-less file.** A fiction is a shared server object, not a
+  per-account one, so an id here says nothing about who read it — the same reasoning that lets two
+  accounts under one OS login share the rest of the file.
+- **The map is bounded, oldest first.** `playback.json` is written for the life of the install, so
+  an unbounded map would be a slow leak on exactly the machines of the people who use the app most.
+  Insertion order is the only ordering a stored map has, and the least recently *set* rate is the
+  least likely to be missed.
+
+`reapplyRate` is the single writer of the rate, and it holds a lock. Two paths resolve one
+concurrently — the preference collector and a queue being loaded — and without serialisation they
+interleave as *compute, then write*: a collector that resolved the rate before a queue arrived can
+land its now-stale answer after the queue applied the serial's own, leaving the engine on one rate
+and the UI showing another until the next preference change. That is not a hypothetical; it showed
+up as a flaky test the first time both paths existed.
+
 ### The later account preference API does not change that ownership
 
 Issue #35 revisited this decision after the server added `player_preferences`, with account keys for

@@ -164,4 +164,67 @@ class PlaybackPreferencesTest {
         assertFalse(prefsFile.name.contains("session"))
         assertEquals(2f, FilePlaybackPreferencesStore(prefsFile).preferences.value.speed)
     }
+
+    // --- Per-serial rates -------------------------------------------------------------------------
+
+    @Test
+    fun `a serial without its own rate simply uses the default`() {
+        val preferences = PlaybackPreferences(speed = 1.25f, fictionSpeeds = mapOf(7 to 2f))
+
+        assertEquals(2f, preferences.speedFor(7))
+        assertEquals(1.25f, preferences.speedFor(8))
+        assertEquals(1.25f, preferences.speedFor(0), "no serial loaded is not a serial with no rate")
+    }
+
+    @Test
+    fun `setting and clearing one serial's rate leaves the others and the default alone`() {
+        val start = PlaybackPreferences(speed = 1.25f, fictionSpeeds = mapOf(7 to 2f))
+
+        val added = start.withFictionSpeed(8, 0.75f)
+        assertEquals(mapOf(7 to 2f, 8 to 0.75f), added.fictionSpeeds)
+
+        val cleared = added.withFictionSpeed(7, null)
+        assertEquals(mapOf(8 to 0.75f), cleared.fictionSpeeds)
+        assertEquals(1.25f, cleared.speed, "the default is not what the player was changing")
+    }
+
+    @Test
+    fun `a serial rate that is out of range is snapped rather than handed to the engine`() {
+        val store = InMemoryPlaybackPreferencesStore()
+
+        store.update { it.withFictionSpeed(7, 9f).withFictionSpeed(8, -1f) }
+
+        assertEquals(PlaybackPreferences.MaxSpeed, store.preferences.value.fictionSpeeds[7])
+        assertEquals(PlaybackPreferences.MinSpeed, store.preferences.value.fictionSpeeds[8])
+    }
+
+    @Test
+    fun `per-serial rates are bounded, oldest first`() {
+        // This file is written for the life of the install; an unbounded map would leak on exactly
+        // the machines of the people who use the app most.
+        val store = InMemoryPlaybackPreferencesStore()
+
+        store.update { start ->
+            (1..PlaybackPreferences.MaxFictionSpeeds + 5).fold(start) { acc, id ->
+                acc.withFictionSpeed(id, 1.5f)
+            }
+        }
+
+        val kept = store.preferences.value.fictionSpeeds
+        assertEquals(PlaybackPreferences.MaxFictionSpeeds, kept.size)
+        assertFalse(kept.containsKey(1), "the rate set longest ago is the one to forget")
+        assertTrue(kept.containsKey(PlaybackPreferences.MaxFictionSpeeds + 5))
+    }
+
+    @Test
+    fun `per-serial rates round-trip through the file, and a nonsense key is dropped`(@TempDir dir: File) {
+        val file = dir.resolve("playback.json")
+        FilePlaybackPreferencesStore(file).update { it.withFictionSpeed(7, 1.5f) }
+
+        assertEquals(mapOf(7 to 1.5f), FilePlaybackPreferencesStore(file).preferences.value.fictionSpeeds)
+
+        // A file from another build — or a hand-edited one — must load degraded, never throw.
+        file.writeText("""{"version":1,"speed":1.0,"fictionSpeeds":{"7":1.5,"not-an-id":2.0,"0":3.0}}""")
+        assertEquals(mapOf(7 to 1.5f), FilePlaybackPreferencesStore(file).preferences.value.fictionSpeeds)
+    }
 }

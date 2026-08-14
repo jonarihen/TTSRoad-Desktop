@@ -65,7 +65,7 @@ full evidence table is in [`docs/QUALITY-GATE.md`](docs/QUALITY-GATE.md).
 | **MP3 audio playback** | ✅ |
 | Settings — two-pane control centre (account, devices, playback, offline, audiobooks, about) | ✅ |
 | Device sessions — list, mark current, revoke one / revoke all others | ✅ |
-| Playback preferences — speed, skip interval, skip silence, volume boost | ✅ |
+| Playback preferences — default + per-book speed, skip interval, skip silence, volume boost | ✅ |
 | Sleep timer — 5/15/30/45/60 min or end of chapter, with a fade and "+5 min" | ✅ |
 | Cross-device listening history — local-first "Jump back in", dismissible per snapshot | ✅ |
 | MPRIS over D-Bus — Cinnamon applet, lock screen, hardware media keys | ✅ Linux |

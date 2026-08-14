@@ -279,7 +279,14 @@ private fun PlayerMain(
         // then there is no control at all rather than one that silently does nothing.
         if (s.canChangeSpeed) {
             Spacer(Modifier.height(18.dp))
-            SpeedControl(current = s.speed, enabled = s.hasMedia) { playback.setSpeed(it) }
+            SpeedControl(
+                current = s.speed,
+                enabled = s.hasMedia,
+                perFiction = s.speedIsPerFiction,
+                defaultSpeed = prefs.speed,
+                onSelect = playback::setSpeed,
+                onUseDefault = playback::clearFictionSpeed,
+            )
         }
         // Skip-silence belongs next to speed rather than only in Settings: both change how long
         // the chapter takes, and a listener reaching for one is usually reaching for the other.
@@ -332,10 +339,25 @@ private fun PlayerMain(
 private val SpeedPresets = listOf(0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f)
 
 const val SpeedChipTestTag = "player-speed-chip"
+const val SpeedDefaultChipTestTag = "player-speed-default"
 const val RetryButtonTestTag = "player-retry"
 
+/**
+ * The rate row, which sets the rate for *this serial* while one is loaded.
+ *
+ * The way back is drawn only when there is something to go back to. A row that always carried a
+ * "use default" entry would imply an override exists whenever a serial is open, and a row that
+ * never carried one would leave a rate the listener could change but not undo.
+ */
 @Composable
-private fun SpeedControl(current: Float, enabled: Boolean, onSelect: (Float) -> Unit) {
+private fun SpeedControl(
+    current: Float,
+    enabled: Boolean,
+    perFiction: Boolean,
+    defaultSpeed: Float,
+    onSelect: (Float) -> Unit,
+    onUseDefault: () -> Unit,
+) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         MetaText("Speed", color = AarisColor.Dim)
         SpeedPresets.forEach { preset ->
@@ -354,6 +376,19 @@ private fun SpeedControl(current: Float, enabled: Boolean, onSelect: (Float) -> 
                     .clickable(enabled = enabled) { onSelect(preset) }
                     .pointerHoverIcon(PointerIcon.Hand)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
+        if (perFiction) {
+            Text(
+                text = "THIS BOOK ONLY · USE ${formatSpeed(defaultSpeed)}",
+                color = if (enabled) AarisColor.Muted else AarisColor.Dim,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .testTag(SpeedDefaultChipTestTag)
+                    .clickable(enabled = enabled, onClick = onUseDefault)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .semantics { contentDescription = "Use the default speed for this book" },
             )
         }
     }

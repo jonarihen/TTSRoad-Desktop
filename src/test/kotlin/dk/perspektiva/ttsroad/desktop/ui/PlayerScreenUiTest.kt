@@ -1,14 +1,19 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.desktop.player.PlayerUiState
 import dk.perspektiva.ttsroad.desktop.player.QueueItem
 import kotlin.test.assertEquals
@@ -53,6 +58,38 @@ class PlayerScreenUiTest {
         compose.onAllNodesWithText("Chapter 3 — The Descent").onFirst().assertIsDisplayed()
         // MetaText uppercases its content.
         compose.onNodeWithText("A TEST SERIAL").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a rate that belongs to one book offers the way back to the default`() {
+        val playback = FakePlaybackController(
+            playingState().copy(canChangeSpeed = true, speed = 1.5f, speedIsPerFiction = true),
+        )
+        compose.setContent {
+            TtsRoadTheme {
+                PlayerScreen(
+                    playback,
+                    onBack = {},
+                    preferences = InMemoryPlaybackPreferencesStore(PlaybackPreferences(speed = 1.25f)),
+                )
+            }
+        }
+
+        // Naming the default is the point: "use the default" without saying what it is asks the
+        // listener to remember a number from another screen.
+        compose.onNodeWithTag(SpeedDefaultChipTestTag).assertIsDisplayed().performClick()
+        compose.waitForIdle()
+
+        assertTrue(playback.calls.contains("clearFictionSpeed"), "calls were ${playback.calls}")
+    }
+
+    @Test
+    fun `a book following the default is not offered a way back to it`() {
+        // A row that always carried the entry would imply an override exists whenever a book is open.
+        val playback = FakePlaybackController(playingState().copy(canChangeSpeed = true, speed = 1.25f))
+        compose.setContent { TtsRoadTheme { PlayerScreen(playback, onBack = {}) } }
+
+        compose.onAllNodesWithTag(SpeedDefaultChipTestTag).assertCountEquals(0)
     }
 
     @Test
