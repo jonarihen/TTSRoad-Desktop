@@ -45,6 +45,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 
 /**
@@ -241,6 +244,31 @@ class AppContainer(
 
     /** Remembered window size/position/maximised state. Never holds anything transient or secret. */
     val windowPreferences: WindowPreferencesStore = windowPreferencesStore
+
+    /**
+     * The one window-behaviour flag a screen can change while the window is open.
+     *
+     * A flow rather than a re-read of `window.json`, because two places need the same answer at the
+     * same moment and neither owns it: Settings writes it, and `Main`'s close handler and tray read
+     * it. Written through to the file immediately so the choice survives a crash, and republished so
+     * the toggle reflects what was actually stored rather than what was clicked.
+     */
+    private val _closeToTray = MutableStateFlow(windowPreferencesStore.load().closeToTray)
+    val closeToTray: StateFlow<Boolean> = _closeToTray.asStateFlow()
+
+    fun setCloseToTray(enabled: Boolean) {
+        if (_closeToTray.value == enabled) return
+        _closeToTray.value = enabled
+        windowPreferences.save(windowPreferences.load().copy(closeToTray = enabled))
+    }
+
+    /** Records that the "still playing in the tray" notice has been shown, and whether to show it. */
+    fun consumeTrayNotice(): Boolean {
+        val stored = windowPreferences.load()
+        if (stored.trayNoticeShown) return false
+        windowPreferences.save(stored.copy(trayNoticeShown = true))
+        return true
+    }
 
     /**
      * Looks for a newer published build. On the shared HTTP client on purpose: the auth

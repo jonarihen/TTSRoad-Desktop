@@ -1,6 +1,15 @@
 package dk.perspektiva.ttsroad.desktop
 
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.window.Notification
+import androidx.compose.ui.window.Tray
+import androidx.compose.ui.window.isTraySupported
+import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -12,10 +21,16 @@ import dk.perspektiva.ttsroad.desktop.data.ScreenBounds
 import dk.perspektiva.ttsroad.desktop.data.AppLog
 import dk.perspektiva.ttsroad.desktop.data.WindowPlacement
 import dk.perspektiva.ttsroad.desktop.data.WindowPlacements
+import dk.perspektiva.ttsroad.desktop.data.withBehaviourOf
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
 import dk.perspektiva.ttsroad.desktop.resources.Res
 import dk.perspektiva.ttsroad.desktop.resources.ttsroad
 import dk.perspektiva.ttsroad.desktop.ui.TtsRoadTheme
+import dk.perspektiva.ttsroad.desktop.ui.WindowCloseIntent
+import dk.perspektiva.ttsroad.desktop.ui.trayNowPlayingLabel
+import dk.perspektiva.ttsroad.desktop.ui.trayPlayPauseLabel
+import dk.perspektiva.ttsroad.desktop.ui.trayTooltip
+import dk.perspektiva.ttsroad.desktop.ui.windowCloseIntent
 import java.awt.Dimension
 import java.awt.EventQueue
 import java.awt.Frame
@@ -176,12 +191,88 @@ private fun runDesktop(smokeTest: Boolean) {
     application {
         val state = rememberWindowState()
         val appIcon = painterResource(Res.drawable.ttsroad)
+
+        // A tray is a platform capability, not a preference: several Wayland sessions ship without
+        // one. Read once, because it cannot change while the process runs, and because a close
+        // control whose meaning flickered would be worse than either fixed answer.
+        // Skipped under --smoke-test for the reason MPRIS is: putting an icon in CI's tray for the
+        // two seconds before the process exits buys no coverage.
+        val traySupported = remember { !smokeTest && runCatching { isTraySupported }.getOrDefault(false) }
+        val trayState = rememberTrayState()
+        var windowVisible by remember { mutableStateOf(true) }
+        val closeToTray by container.closeToTray.collectAsState()
+        val player by container.playback.state.collectAsState()
+
+        fun savePlacement() {
+            // Behaviour from the file as it stands now, geometry from this run's window: Settings
+            // may have flipped the close preference since the placement was loaded at startup.
+            frame.get()?.let {
+                container.windowPreferences.save(
+                    currentPlacement(it, restored).withBehaviourOf(container.windowPreferences.load()),
+                )
+            }
+        }
+
+        fun quit() {
+            savePlacement()
+            container.close()
+            exitApplication()
+        }
+
+        fun showWindow() {
+            windowVisible = true
+            frame.get()?.let {
+                if (it.extendedState == Frame.ICONIFIED) it.extendedState = Frame.NORMAL
+                it.toFront()
+                it.requestFocus()
+            }
+        }
+
+        if (traySupported) {
+            Tray(
+                icon = appIcon,
+                state = trayState,
+                tooltip = trayTooltip(player),
+                onAction = ::showWindow,
+                menu = {
+                    trayNowPlayingLabel(player)?.let { Item(it, onClick = ::showWindow) }
+                    Item(trayPlayPauseLabel(player), enabled = player.hasMedia) {
+                        container.playback.togglePlayPause()
+                    }
+                    Item("Skip back", enabled = player.hasMedia) { container.playback.skipBackward() }
+                    Item("Skip forward", enabled = player.hasMedia) { container.playback.skipForward() }
+                    Separator()
+                    Item("Show ${BuildInfo.APP_NAME}", onClick = ::showWindow)
+                    Item("Quit", onClick = ::quit)
+                },
+            )
+        }
+
         Window(
             onCloseRequest = {
-                frame.get()?.let { container.windowPreferences.save(currentPlacement(it, restored)) }
-                container.close()
-                exitApplication()
+                when (windowCloseIntent(closeToTray, traySupported)) {
+                    WindowCloseIntent.Quit -> quit()
+                    WindowCloseIntent.HideToTray -> {
+                        // Saved on the way *down*, not only on quit: a machine that loses power
+                        // while TTSRoad sits in the tray would otherwise forget the window it had.
+                        savePlacement()
+                        windowVisible = false
+                        // Said once, the first time it happens. Somebody who asked for this knows
+                        // what they asked for by the second time, and a notification on every close
+                        // is exactly the tray noise this feature is supposed to avoid.
+                        if (container.consumeTrayNotice()) {
+                            trayState.sendNotification(
+                                Notification(
+                                    BuildInfo.APP_NAME,
+                                    "Still running in the tray. Use its Quit entry to stop it.",
+                                    Notification.Type.Info,
+                                ),
+                            )
+                        }
+                    }
+                }
             },
+            visible = windowVisible,
             title = "${BuildInfo.APP_NAME} ${BuildInfo.VERSION}",
             icon = appIcon,
             state = state,
@@ -197,11 +288,17 @@ private fun runDesktop(smokeTest: Boolean) {
                 if (!smokeTest) {
                     container.startMpris(
                         onRaise = {
+                            // Also un-hides: after a close-to-tray the window is not merely behind
+                            // something, and a Raise that only calls toFront would do nothing at
+                            // all from a media applet.
+                            windowVisible = true
                             window.toFront()
                             window.requestFocus()
                             if (window.extendedState == Frame.ICONIFIED) window.extendedState = Frame.NORMAL
                         },
-                        onQuit = { window.dispatchEvent(WindowEvent(window, WindowEvent.WINDOW_CLOSING)) },
+                        // Quit means quit, even with close-to-tray on: a shell asking a player to
+                        // quit is not asking it to hide.
+                        onQuit = ::quit,
                     )
                 }
                 window.minimumSize = Dimension(WindowPlacements.MinWidth, WindowPlacements.MinHeight)

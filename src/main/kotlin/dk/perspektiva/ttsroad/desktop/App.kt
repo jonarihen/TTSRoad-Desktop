@@ -60,6 +60,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.isTraySupported
 import dk.perspektiva.ttsroad.desktop.data.Bookmark
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
@@ -114,6 +115,10 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     val playback = container.playback
     val cache = container.libraryCache
     val session by sessionStore.session.collectAsState()
+    val closeToTray by container.closeToTray.collectAsState()
+    // Whether this desktop session has a system tray at all. Read once — it cannot change while
+    // the process runs — and `false` in a Compose test, where the setting is honestly unavailable.
+    val traySupported = remember { runCatching { isTraySupported }.getOrDefault(false) }
     val sessionEnd by repository.sessionEnd.collectAsState()
     val capabilities by repository.currentCapabilities.collectAsState()
     // Hoisted above navigation on purpose: `when (destination)` disposes the screen it leaves, so a
@@ -540,6 +545,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     // can do by construction.
                                     canChangeSpeed = playerState.canChangeSpeed,
                                     canSkipSilence = playerState.canSkipSilence,
+                                    closeToTray = closeToTray,
+                                    onCloseToTrayChange = container::setCloseToTray,
+                                    traySupported = traySupported,
                                     updates = updates,
                                     // Keeps the destination and the open pane in step, so the
                                     // Devices deep link and the in-screen pane list are the same

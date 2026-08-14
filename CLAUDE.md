@@ -210,6 +210,18 @@ means no MPRIS and a fully working player. `Position` is never announced via `Pr
 the spec excludes it; discontinuities go out as `Seeked`. `AppContainer.startMpris` is called from
 `Main` rather than the constructor because Raise/Quit need the window.
 
+### The tray, and what closing the window means
+
+`ui/TrayPresentation.kt` is pure — `windowCloseIntent`, `trayTooltip`, the two label helpers — and
+`Main` is the plumbing, the same split as MPRIS. Two rules are load-bearing: **both** the preference
+and `isTraySupported` must say yes before a close hides rather than quits (hiding into a tray the
+platform will not draw is a process the user cannot reach), and the preference **defaults to off**,
+because a close control that closes is what everyone expects and the reverse leaves a media session
+running for people who believed they had quit. The tray tooltip reuses MPRIS's audiobook mapping so
+one desktop never shows two different answers. `WindowPlacement` carries the flag; geometry and
+behaviour are written by different hands at different times, so the close handler merges through
+`withBehaviourOf` rather than saving the startup snapshot wholesale.
+
 ### Keyboard shortcuts
 
 `nav/Shortcuts.kt` is a pure matcher plus an `AppShortcut.firesWhileTyping` classification. `App`
