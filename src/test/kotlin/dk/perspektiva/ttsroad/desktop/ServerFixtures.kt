@@ -439,6 +439,111 @@ object ServerFixtures {
     val MARK_OK = """{"status": "ok", "played": true, "chapter_ids": [101], "count": 1}"""
 
     /**
+     * GET /api/mobile/queue — 200, and the reason this feature exists: the three rows span **two**
+     * fictions, which is the thing the player's own per-fiction queue structurally cannot express.
+     *
+     * `id` is the queue-row id and is deliberately unrelated to `chapter_id`; the two 4800-series
+     * ids next to 101/102/205 are what keeps a test honest about which one a mutation addresses.
+     */
+    val QUEUE = """
+        {
+          "api_version": 1,
+          "items": [
+            {
+              "id": 4801,
+              "position": 0,
+              "chapter_id": 101,
+              "chapter_title": "A Practical Guide to Sorcery",
+              "chapter_number": 1,
+              "fiction_id": 1,
+              "fiction_title": "The Wandering Inn",
+              "fiction_slug": "the-wandering-inn",
+              "cover_image_url": "/static/covers/wandering-inn.jpg",
+              "audio_duration": 1523.4,
+              "audio_duration_label": "25:23",
+              "has_timings": true,
+              "is_played": false,
+              "position_seconds": 240.5,
+              "audio_url": "/audio/the-wandering-inn/0001.mp3",
+              "audio": {
+                "filename": "0001.mp3",
+                "path": "/audio/the-wandering-inn/0001.mp3",
+                "url": "https://ttsroad.example.com/audio/the-wandering-inn/0001.mp3",
+                "requires_bearer_auth": true,
+                "sha256": null,
+                "filesize": 24371200
+              }
+            },
+            {
+              "id": 4802,
+              "position": 1,
+              "chapter_id": 205,
+              "chapter_title": "Interlude - The Titan",
+              "chapter_number": 12,
+              "fiction_id": 2,
+              "fiction_title": "Mother of Learning",
+              "fiction_slug": "mother-of-learning",
+              "cover_image_url": null,
+              "audio_duration": 2044.0,
+              "audio_duration_label": "34:04",
+              "has_timings": false,
+              "is_played": false,
+              "position_seconds": 0,
+              "audio_url": "/audio/mother-of-learning/0012.mp3",
+              "audio": {
+                "filename": "0012.mp3",
+                "path": "/audio/mother-of-learning/0012.mp3",
+                "url": "https://ttsroad.example.com/audio/mother-of-learning/0012.mp3",
+                "requires_bearer_auth": true,
+                "sha256": "abc123",
+                "filesize": 32710400
+              }
+            },
+            {
+              "id": 4803,
+              "position": 2,
+              "chapter_id": 102,
+              "chapter_title": "The Innkeeper's Daughter",
+              "chapter_number": 2,
+              "fiction_id": 1,
+              "fiction_title": "The Wandering Inn",
+              "fiction_slug": "the-wandering-inn",
+              "cover_image_url": "/static/covers/wandering-inn.jpg",
+              "audio_duration": 1810.0,
+              "audio_duration_label": "30:10",
+              "has_timings": true,
+              "is_played": true,
+              "position_seconds": 1810.0,
+              "audio_url": "/audio/the-wandering-inn/0002.mp3",
+              "audio": {
+                "filename": "0002.mp3",
+                "path": "/audio/the-wandering-inn/0002.mp3",
+                "url": "https://ttsroad.example.com/audio/the-wandering-inn/0002.mp3",
+                "requires_bearer_auth": true,
+                "sha256": null,
+                "filesize": 28966400
+              }
+            }
+          ],
+          "total": 3,
+          "when_empty": "stop",
+          "max_items": 500
+        }
+    """.trimIndent()
+
+    /** POST /api/mobile/queue — 200 after `clear`. A mutation echoes the whole queue plus a status. */
+    val QUEUE_EMPTY = """
+        {
+          "api_version": 1,
+          "status": "ok",
+          "items": [],
+          "total": 0,
+          "when_empty": "continue",
+          "max_items": 500
+        }
+    """.trimIndent()
+
+    /**
      * GET /api/mobile/bookmarks — 200, as `app/services/bookmarks.py` serialises it.
      *
      * Carries `user_id`, which this client deliberately does not model — every row already belongs
@@ -785,6 +890,12 @@ object ParsedFixtures {
         get() = requireNotNull(
             moshi.adapter(dk.perspektiva.ttsroad.desktop.data.SearchResponse::class.java)
                 .fromJson(ServerFixtures.SEARCH),
+        )
+
+    val queue: dk.perspektiva.ttsroad.desktop.data.ServerQueueResponse
+        get() = requireNotNull(
+            moshi.adapter(dk.perspektiva.ttsroad.desktop.data.ServerQueueResponse::class.java)
+                .fromJson(ServerFixtures.QUEUE),
         )
 
     val devices: List<dk.perspektiva.ttsroad.desktop.data.DeviceSession>

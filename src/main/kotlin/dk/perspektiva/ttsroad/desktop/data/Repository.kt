@@ -197,6 +197,18 @@ interface TtsRoadRepository {
     suspend fun deleteBookmark(bookmarkId: Int): Boolean
 
     /**
+     * The account's cross-library queue, or **null when the server has no queue API**.
+     *
+     * Null rather than an empty queue for the same reason [devices] does it: "your queue is empty"
+     * is a normal answer the user can act on, while "this server has no shared queue" has to hide
+     * the surface entirely instead of showing an empty list that no action can ever fill.
+     */
+    suspend fun serverQueue(): ServerQueueResponse?
+
+    /** The queue after [request], or null on a server with no queue API. */
+    suspend fun updateServerQueue(request: ServerQueueRequest): ServerQueueResponse?
+
+    /**
      * Record a listening position and try to get it to the server.
      *
      * Queued to disk with a timestamp *before* being sent. That ordering is the fix for #36: if the
@@ -478,6 +490,11 @@ class RetrofitTtsRoadRepository(
         // A 404 here is "already gone or never existed", which is the outcome the caller wanted
         // either way — the delete is idempotent by design, so it is not worth surfacing.
         ifEndpointExists { it.deleteBookmark(bookmarkId) } != null
+
+    override suspend fun serverQueue(): ServerQueueResponse? = ifEndpointExists { it.queue() }
+
+    override suspend fun updateServerQueue(request: ServerQueueRequest): ServerQueueResponse? =
+        ifEndpointExists { it.updateQueue(request) }
 
     override suspend fun saveProgress(
         fictionId: Int,

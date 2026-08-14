@@ -41,7 +41,27 @@ class ServerCapabilitiesTest {
         // False even though bulk marking demonstrably works: the flag tracks a named route, and
         // inferring it from observed behaviour is how a client ends up calling a 404.
         assertFalse(capabilities.batchProgress)
+        // Absent from that server's payload entirely, which must read as off rather than as unknown.
+        assertFalse(capabilities.queue)
         assertEquals(200, capabilities.maxChaptersPerPage)
+    }
+
+    @Test
+    fun `the queue capability is read from its own flag`() {
+        val capabilities = parse(
+            """{"api_version": 1, "server": {"name": "X", "version": "1.5.0"}, "capabilities": {"queue": true}}""",
+        )
+
+        assertTrue(capabilities.queue)
+    }
+
+    @Test
+    fun `a non-boolean queue flag is off`() {
+        val capabilities = parse(
+            """{"api_version": 1, "server": {"name": "X", "version": "1.5.0"}, "capabilities": {"queue": "yes"}}""",
+        )
+
+        assertFalse(capabilities.queue, "only a literal true may light up a surface")
     }
 
     @Test
@@ -73,6 +93,7 @@ class ServerCapabilitiesTest {
 
         assertFalse(baseline.readAlong)
         assertFalse(baseline.deviceManagement)
+        assertFalse(baseline.queue)
         assertNull(baseline.serverVersion)
         assertNull(baseline.maxChaptersPerPage)
         assertFalse(baseline.isDiscovered, "the login screen must not claim to have found a server")

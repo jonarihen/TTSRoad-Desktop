@@ -53,6 +53,15 @@ sealed interface Destination {
      */
     data object Bookmarks : Destination
 
+    /**
+     * The account's cross-library queue.
+     *
+     * Carries nothing: the list is the whole screen, and the holder that owns it is hoisted because
+     * the *writers* are elsewhere — "Add to queue" is pressed on a chapter list and has to work
+     * whether or not this destination has ever been opened.
+     */
+    data object Queue : Destination
+
     data object Settings : Destination
 
     data object Devices : Destination
@@ -74,6 +83,7 @@ val Destination.key: String
         is Destination.Reader -> "Reader:$chapterId"
         Destination.Search -> "Search"
         Destination.Bookmarks -> "Bookmarks"
+        Destination.Queue -> "Queue"
         Destination.Settings -> "Settings"
         Destination.Devices -> "Devices"
     }
