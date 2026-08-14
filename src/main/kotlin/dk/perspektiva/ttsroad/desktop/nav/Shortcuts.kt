@@ -42,6 +42,18 @@ enum class AppShortcut {
     /** Ctrl+comma — the platform convention for preferences. */
     OpenSettings,
 
+    /**
+     * Ctrl+B — mark the spot that is playing.
+     *
+     * Safe mid-word, and checked against the one text field that could plausibly claim it: the
+     * library's search box is a plain `OutlinedTextField`, which has no bold to toggle. So this is
+     * a combination no text field takes, and it stays live while typing like Ctrl+L and F5.
+     */
+    AddBookmark,
+
+    /** Ctrl+Shift+B — the list of them. */
+    OpenBookmarks,
+
     /** F1 or Ctrl+slash. */
     ShowShortcuts,
     ;
@@ -60,7 +72,9 @@ enum class AppShortcut {
      */
     val firesWhileTyping: Boolean
         get() = when (this) {
-            Back, Refresh, Dismiss, OpenLibrary, OpenSettings, ShowShortcuts -> true
+            Back, Refresh, Dismiss, OpenLibrary, OpenSettings, ShowShortcuts,
+            AddBookmark, OpenBookmarks,
+            -> true
             PlayPause, SeekBackward, SeekForward, PreviousChapter, NextChapter -> false
         }
 }
@@ -104,6 +118,10 @@ private fun match(key: Key, alt: Boolean, ctrl: Boolean, meta: Boolean, shift: B
         key == Key.L && accel -> AppShortcut.OpenLibrary
         key == Key.Comma && accel -> AppShortcut.OpenSettings
         key == Key.Slash && accel -> AppShortcut.ShowShortcuts
+
+        // The list is checked before the bare mark, so Ctrl+Shift+B does not also bookmark.
+        key == Key.B && accel && shift -> AppShortcut.OpenBookmarks
+        key == Key.B && accel -> AppShortcut.AddBookmark
 
         // Chapter stepping is checked before plain seeking: Ctrl+Left is a chapter, not a skip.
         key == Key.DirectionLeft && accel -> AppShortcut.PreviousChapter
@@ -171,6 +189,8 @@ val ShortcutHelpTable: List<ShortcutHelp> = listOf(
     ShortcutHelp("Ctrl+Left / Ctrl+Right", "Previous or next chapter"),
     ShortcutHelp("Alt+Left", "Back"),
     ShortcutHelp("Ctrl+L", "Library"),
+    ShortcutHelp("Ctrl+B", "Bookmark this spot"),
+    ShortcutHelp("Ctrl+Shift+B", "Your bookmarks"),
     ShortcutHelp("Ctrl+,", "Settings"),
     ShortcutHelp("F5 / Ctrl+R", "Refresh the current screen"),
     ShortcutHelp("Escape", "Close a dialog, or go back"),

@@ -118,4 +118,31 @@ interface TtsRoadApi {
 
     @POST("api/mobile/playback/mark")
     suspend fun markPlayback(@Body request: PlaybackMarkRequest): PlaybackMarkResponse
+
+    /**
+     * This account's bookmarks. Advertised as the `bookmarks` capability; 404 on an older server.
+     *
+     * [kind] is not optional in practice: without `manual` the list is drowned in the jump-back
+     * breadcrumbs the web player writes as `auto`.
+     */
+    @GET("api/mobile/bookmarks")
+    suspend fun bookmarks(
+        @Query("kind") kind: String? = BookmarkKind.Manual,
+        @Query("fiction_id") fictionId: Int? = null,
+        @Query("chapter_id") chapterId: Int? = null,
+    ): BookmarksResponse
+
+    /** 201 on success; 404 for an unknown chapter, 409 once the account is at its bookmark cap. */
+    @POST("api/mobile/bookmarks")
+    suspend fun createBookmark(@Body request: BookmarkCreateRequest): BookmarkWriteResponse
+
+    @PATCH("api/mobile/bookmarks/{bookmark_id}")
+    suspend fun updateBookmark(
+        @Path("bookmark_id") bookmarkId: Int,
+        @Body request: BookmarkPatchRequest,
+    ): BookmarkWriteResponse
+
+    /** Soft delete, idempotent: a second call answers the first one's tombstone, not a 404. */
+    @DELETE("api/mobile/bookmarks/{bookmark_id}")
+    suspend fun deleteBookmark(@Path("bookmark_id") bookmarkId: Int): BookmarkDeleteResponse
 }

@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.desktop.ui
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -59,6 +60,8 @@ class ReaderScreenUiTest {
         player: FakePlaybackController = FakePlaybackController(),
         preferences: InMemoryReaderPreferencesStore = InMemoryReaderPreferencesStore(),
         onAdvanced: (Int, String) -> Unit = { _, _ -> },
+        bookmarksAvailable: Boolean = false,
+        onAddBookmark: (Long, String?) -> Unit = { _, _ -> },
     ) {
         val repository = FakeRepository(
             readAlongResult = Result.success(ReadAlongFetchResult.Modified(response, "\"etag\"")),
@@ -71,12 +74,58 @@ class ReaderScreenUiTest {
                     cache = ReadAlongCache(repository),
                     preferences = preferences,
                     playback = player,
+                    bookmarksAvailable = bookmarksAvailable,
+                    onAddBookmark = onAddBookmark,
                     onBack = {},
                     onChapterAdvanced = onAdvanced,
                 )
             }
         }
         compose.waitForIdle()
+    }
+
+    /** Playing this chapter, at a position inside the second cue. */
+    private fun playingThisChapter(positionMs: Long = 6_000) = FakePlaybackController(
+        PlayerUiState(
+            title = "Chapter One",
+            hasMedia = true,
+            positionMs = positionMs,
+            durationMs = 60_000,
+            queue = listOf(QueueItem(10, "Chapter One")),
+        ),
+    )
+
+    @Test
+    fun `no bookmark control at all where the server has no bookmark API`() {
+        screen(player = playingThisChapter(), bookmarksAvailable = false)
+
+        compose.onAllNodesWithTag(ReaderBookmarkButtonTestTag).assertCountEquals(0)
+    }
+
+    @Test
+    fun `bookmarking a passage sends the sentence start and the sentence itself`() {
+        var marked: Pair<Long, String?>? = null
+        screen(
+            player = playingThisChapter(positionMs = 6_000),
+            bookmarksAvailable = true,
+            onAddBookmark = { position, label -> marked = position to label },
+        )
+
+        compose.onNodeWithTag(ReaderBookmarkButtonTestTag).performClick()
+
+        // The cue at 6s starts at 5s and belongs to the first sentence, which starts at 0s. A mark
+        // means the passage, not the syllable that was sounding — and it names itself with the
+        // words, which is the thing this client can do that a phone's transport button cannot.
+        assertEquals(0L to "Snow fell softly.", marked)
+    }
+
+    @Test
+    fun `the bookmark control is inert while reading a chapter that is not playing`() {
+        // Nothing is playing, so there is no honest position — the same rule that already disables
+        // highlighting. The control stays put rather than appearing later and moving its neighbours.
+        screen(player = FakePlaybackController(), bookmarksAvailable = true)
+
+        compose.onNodeWithTag(ReaderBookmarkButtonTestTag).assertIsNotEnabled()
     }
 
     @Test

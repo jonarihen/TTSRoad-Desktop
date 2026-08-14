@@ -1,5 +1,8 @@
 package dk.perspektiva.ttsroad.desktop
 
+import dk.perspektiva.ttsroad.desktop.data.Bookmark
+import dk.perspektiva.ttsroad.desktop.data.BookmarkCreateRequest
+import dk.perspektiva.ttsroad.desktop.data.BookmarkPatchRequest
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
@@ -45,6 +48,11 @@ open class FakeRepository(
     var browseAllResult: Result<LibraryResponse> = Result.success(LibraryResponse()),
     /** Null means "echo what was asked". `success(null)` is the server's 404. */
     var followResult: Result<Boolean?>? = null,
+    /** `success(null)` is the server saying it has no bookmark API — not "no bookmarks". */
+    var bookmarksResult: Result<List<Bookmark>?> = Result.success(emptyList()),
+    var createBookmarkResult: Result<Bookmark?> = Result.success(Bookmark(id = 1)),
+    var updateBookmarkResult: Result<Bookmark?> = Result.success(Bookmark(id = 1)),
+    var deleteBookmarkResult: Result<Boolean> = Result.success(true),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -81,6 +89,12 @@ open class FakeRepository(
     val followCalls: MutableList<Pair<Int, Boolean>> = mutableListOf()
     val markedPlayed: MutableList<Pair<List<Int>, Boolean>> = mutableListOf()
     val savedProgress: MutableList<Triple<Int, Double, Boolean>> = mutableListOf()
+
+    /** Bookmark traffic, in order — the `kind` filter is part of what the tests assert. */
+    val bookmarkListCalls: MutableList<Pair<String?, Int?>> = mutableListOf()
+    val createdBookmarks: MutableList<BookmarkCreateRequest> = mutableListOf()
+    val patchedBookmarks: MutableList<Pair<Int, BookmarkPatchRequest>> = mutableListOf()
+    val deletedBookmarks: MutableList<Int> = mutableListOf()
 
     private val _currentCapabilities = MutableStateFlow(ServerCapabilities.Baseline)
     override val currentCapabilities: StateFlow<ServerCapabilities> = _currentCapabilities.asStateFlow()
@@ -192,6 +206,35 @@ open class FakeRepository(
         return PlaybackMarkResponse(status = "ok", played = played, chapterIds = chapterIds, count = chapterIds.size)
     }
 
+    override suspend fun bookmarks(kind: String?, fictionId: Int?): List<Bookmark>? {
+        bookmarkListCalls += kind to fictionId
+        return bookmarksResult.getOrThrow()
+    }
+
+    override suspend fun createBookmark(request: BookmarkCreateRequest): Bookmark? {
+        createdBookmarks += request
+        return createBookmarkResult.getOrThrow()?.copy(
+            chapterId = request.chapterId,
+            positionSeconds = request.positionSeconds,
+            label = request.label,
+            note = request.note,
+        )
+    }
+
+    override suspend fun updateBookmark(bookmarkId: Int, request: BookmarkPatchRequest): Bookmark? {
+        patchedBookmarks += bookmarkId to request
+        return updateBookmarkResult.getOrThrow()?.copy(
+            id = bookmarkId,
+            label = request.label,
+            note = request.note,
+        )
+    }
+
+    override suspend fun deleteBookmark(bookmarkId: Int): Boolean {
+        deletedBookmarks += bookmarkId
+        return deleteBookmarkResult.getOrThrow()
+    }
+
     override suspend fun saveProgress(
         fictionId: Int,
         chapterId: Int,
@@ -240,8 +283,13 @@ class FakePlaybackController(initial: PlayerUiState = PlayerUiState()) : Playbac
         chapters: List<ChapterSummary>,
         startChapterId: Int,
         fiction: FictionSummary?,
+        startPositionMs: Long?,
     ) {
-        calls += "playQueue($startChapterId)"
+        calls += if (startPositionMs == null) {
+            "playQueue($startChapterId)"
+        } else {
+            "playQueue($startChapterId@$startPositionMs)"
+        }
     }
 
     override fun togglePlayPause() {

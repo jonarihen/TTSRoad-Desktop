@@ -87,8 +87,18 @@ interface PlaybackController {
     /**
      * Play a whole fiction as a queue, starting at [startChapterId] — enables next/previous,
      * auto-advance, and the up-next list (mirrors the Android client's playQueue).
+     *
+     * [startPositionMs] overrides the chapter's saved resume position, and exists for the one
+     * caller that knows better than the server does: opening a bookmark means "start *here*", and
+     * resuming where this chapter was last left would silently ignore the mark that was clicked.
+     * Null — every other caller — keeps the saved position.
      */
-    suspend fun playQueue(chapters: List<ChapterSummary>, startChapterId: Int, fiction: FictionSummary?)
+    suspend fun playQueue(
+        chapters: List<ChapterSummary>,
+        startChapterId: Int,
+        fiction: FictionSummary?,
+        startPositionMs: Long? = null,
+    )
 
     fun togglePlayPause()
 

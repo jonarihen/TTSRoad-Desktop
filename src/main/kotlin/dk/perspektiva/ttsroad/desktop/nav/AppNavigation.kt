@@ -44,6 +44,15 @@ sealed interface Destination {
      */
     data object Search : Destination
 
+    /**
+     * The account's bookmarks.
+     *
+     * Carries nothing. The list lives in the hoisted bookmarks holder because the *writer* is the
+     * player or the reader — a mark made with Ctrl+B has to land somewhere whether or not this
+     * destination has ever been opened.
+     */
+    data object Bookmarks : Destination
+
     data object Settings : Destination
 
     data object Devices : Destination
@@ -64,6 +73,7 @@ val Destination.key: String
         Destination.Player -> "Player"
         is Destination.Reader -> "Reader:$chapterId"
         Destination.Search -> "Search"
+        Destination.Bookmarks -> "Bookmarks"
         Destination.Settings -> "Settings"
         Destination.Devices -> "Devices"
     }

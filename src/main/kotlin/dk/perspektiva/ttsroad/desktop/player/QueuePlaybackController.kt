@@ -205,6 +205,7 @@ class QueuePlaybackController(
         chapters: List<ChapterSummary>,
         startChapterId: Int,
         fiction: FictionSummary?,
+        startPositionMs: Long?,
     ) {
         // Canonical reading order, never the order the screen happens to be sorted in: a listener
         // who flipped the list to newest-first still wants the serial to play forwards.
@@ -220,7 +221,13 @@ class QueuePlaybackController(
         queueFiction = fiction
         queueOwnerKey = ownerKey()
         val startIndex = playable.indexOfFirst { it.resolvedChapterId == startChapterId }.coerceAtLeast(0)
-        begin(startIndex, resumeMsOf(playable[startIndex]), leaveCurrent = false)
+        // An explicit start position only applies to the chapter that was asked for. Falling back
+        // to the saved position when the requested chapter is not in the queue is what stops a
+        // bookmark on a chapter that has since lost its audio from seeking chapter one to 41:12.
+        val requestedFound = playable[startIndex].resolvedChapterId == startChapterId
+        val startMs = startPositionMs?.takeIf { requestedFound }?.coerceAtLeast(0L)
+            ?: resumeMsOf(playable[startIndex])
+        begin(startIndex, startMs, leaveCurrent = false)
     }
 
     override fun togglePlayPause() {
