@@ -5,7 +5,9 @@ import dk.perspektiva.ttsroad.desktop.data.FilePlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.FilePlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.FileSessionStore
 import dk.perspektiva.ttsroad.desktop.data.FileWindowPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.FileListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
+import dk.perspektiva.ttsroad.desktop.data.ListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.FileReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackHistory
 import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
@@ -103,6 +105,8 @@ class AppContainer(
     // Null selects the production local-plus-server store. Supplying a store keeps UI tests wholly
     // in memory and avoids making a fake repository call just because the library was composed.
     playbackHistory: PlaybackHistoryStore? = null,
+    /** Day totals for the Listening pane. In-memory in a test, so no screen writes to a real home. */
+    val listeningStats: ListeningStatsStore = FileListeningStatsStore(),
     playbackFactory: (
         TtsRoadRepository,
         MediaSourceFactory,
@@ -110,10 +114,20 @@ class AppContainer(
         AppDispatchers,
         PlaybackPreferencesStore,
         PlaybackHistoryStore,
+        ListeningStatsStore,
         () -> String,
     ) -> PlaybackController =
-        { repo, mediaSources, engine, d, prefs, history, owner ->
-            QueuePlaybackController(repo, mediaSources, engine, d.io, prefs, history, ownerKey = owner)
+        { repo, mediaSources, engine, d, prefs, history, stats, owner ->
+            QueuePlaybackController(
+                repo,
+                mediaSources,
+                engine,
+                d.io,
+                prefs,
+                history,
+                stats,
+                ownerKey = owner,
+            )
         },
     libraryCacheFactory: (TtsRoadRepository, AppDispatchers, () -> Long) -> LibraryCache =
         { repo, d, now -> LibraryCache(repo, d.main, now) },
@@ -194,6 +208,7 @@ class AppContainer(
         dispatchers,
         playbackPreferences,
         this.playbackHistory,
+        listeningStats,
         historyOwnerKey,
     )
 

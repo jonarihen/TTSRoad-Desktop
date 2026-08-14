@@ -65,11 +65,16 @@ import dk.perspektiva.ttsroad.desktop.BuildInfo
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
 import dk.perspektiva.ttsroad.desktop.data.AudiobookExport
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryListeningStatsStore
+import dk.perspektiva.ttsroad.desktop.data.ListeningStats
+import dk.perspektiva.ttsroad.desktop.data.ListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
+import dk.perspektiva.ttsroad.desktop.data.formatListeningSpan
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.AppDirectories
 import dk.perspektiva.ttsroad.desktop.update.UpdateStatus
+import java.time.LocalDate
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
@@ -128,6 +133,14 @@ fun SettingsScreen(
     onCloseToTrayChange: (Boolean) -> Unit = {},
     /** False on a desktop session with no system tray, where the control would promise nothing. */
     traySupported: Boolean = true,
+    /**
+     * Day totals for the Listening pane, and whose they are.
+     *
+     * Defaulted to an in-memory store for the same reason the preferences are: rendering a pane in
+     * a test must not read or write the user's real `listening.json`.
+     */
+    listeningStats: ListeningStatsStore = remember { InMemoryListeningStatsStore() },
+    historyOwnerKey: String = "",
     // Injected so "expires in 42 days" can be asserted without the test depending on wall time.
     nowMs: () -> Long = System::currentTimeMillis,
     /**
@@ -185,6 +198,7 @@ fun SettingsScreen(
                             onCloseToTrayChange,
                             traySupported,
                         )
+                        SettingsSection.Listening -> ListeningPane(listeningStats, historyOwnerKey, nowMs)
                         SettingsSection.Offline -> OfflinePane(ui.offline, holder)
                         SettingsSection.Audiobooks -> AudiobookPane(ui.audiobooks, holder)
                         SettingsSection.About -> AboutPane(session, capabilities, sessionStore, updates)
@@ -866,6 +880,59 @@ private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
         MetaText(label, color = if (selected || hovered || focused) AarisColor.Ink else AarisColor.Muted)
     }
 }
+
+/**
+ * Hours, chapters and a streak, computed locally from `listening.json`.
+ *
+ * Nothing here is sent anywhere or read from the server: the totals are about time spent on *this*
+ * machine, they have to survive a sign-out, and there is no account contract for them.
+ */
+@Composable
+private fun ListeningPane(
+    stats: ListeningStatsStore,
+    ownerKey: String,
+    nowMs: () -> Long,
+) {
+    val days by stats.days.collectAsState()
+    // Keyed on the rows and the account, not on the clock: a pane that recomputed on every frame
+    // would walk two years of history for a number that changes at midnight.
+    val summary = remember(days, ownerKey) {
+        ListeningStats.summarise(days, ownerKey, LocalDate.parse(ListeningStats.dateOf(nowMs())))
+    }
+
+    PaneTitle("Listening", "Counted on this computer, for this account")
+
+    SettingsCard {
+        if (!summary.hasAnything) {
+            SettingRow("SO FAR", "Nothing yet")
+            MetaText(
+                "Totals start the first time a chapter plays. They are computed here from a local " +
+                    "file and are never sent to the server.",
+            )
+            return@SettingsCard
+        }
+
+        SettingRow("TOTAL", formatListeningSpan(summary.seconds))
+        RowDivider()
+        SettingRow("CHAPTERS FINISHED", "${summary.chaptersFinished}")
+        MetaText("A chapter counts once it has played to its end — marking one played by hand does not.")
+        RowDivider()
+        SettingRow("LAST 7 DAYS", formatListeningSpan(summary.last7DaysSeconds))
+        RowDivider()
+        SettingRow("LAST 30 DAYS", formatListeningSpan(summary.last30DaysSeconds))
+        RowDivider()
+        SettingRow("CURRENT STREAK", plural(summary.currentStreakDays, "day"))
+        MetaText("Today or yesterday keeps a streak alive; a whole day missed ends it.")
+        RowDivider()
+        SettingRow("LONGEST STREAK", plural(summary.longestStreakDays, "day"))
+        RowDivider()
+        SettingRow("DAYS WITH ANY LISTENING", plural(summary.daysListened, "day"))
+        RowDivider()
+        SettingRow("BEST DAY", formatListeningSpan(summary.bestDaySeconds))
+    }
+}
+
+private fun plural(count: Int, noun: String): String = if (count == 1) "1 $noun" else "$count ${noun}s"
 
 @Composable
 private fun ToggleRow(

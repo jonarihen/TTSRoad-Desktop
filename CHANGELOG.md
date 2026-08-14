@@ -30,6 +30,10 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ### Added
 
+- Listening statistics, in a Settings pane of their own: total hours, chapters finished, the last
+  seven and thirty days, a current and longest streak, days with any listening, and the best day.
+  Computed locally from a bounded two-year file, kept per account on a shared machine, and never
+  sent anywhere.
 - Per-book playback speed. Changing speed in the player now sets it for the serial that is playing,
   since different narrators want different paces; Settings owns the default every book starts at,
   and a book with its own rate offers a one-click way back to that default.

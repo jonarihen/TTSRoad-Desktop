@@ -548,6 +548,8 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     closeToTray = closeToTray,
                                     onCloseToTrayChange = container::setCloseToTray,
                                     traySupported = traySupported,
+                                    listeningStats = container.listeningStats,
+                                    historyOwnerKey = container.historyOwnerKey(),
                                     updates = updates,
                                     // Keeps the destination and the open pane in step, so the
                                     // Devices deep link and the in-screen pane list are the same
