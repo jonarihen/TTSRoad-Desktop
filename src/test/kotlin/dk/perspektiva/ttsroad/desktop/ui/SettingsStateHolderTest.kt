@@ -4,11 +4,17 @@ import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
 import dk.perspektiva.ttsroad.desktop.ServerFixtures
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
+import dk.perspektiva.ttsroad.desktop.data.AudiobookExport
+import dk.perspektiva.ttsroad.desktop.data.AudiobookExportsResponse
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionState
 import dk.perspektiva.ttsroad.desktop.download.OfflineFictionUsage
+import dk.perspektiva.ttsroad.desktop.download.AudiobookDownloadResult
+import dk.perspektiva.ttsroad.desktop.download.AudiobookExportDownloader
+import dk.perspektiva.ttsroad.desktop.download.DownloadFailure
+import dk.perspektiva.ttsroad.desktop.download.UnavailableAudiobookExportDownloader
 import dk.perspektiva.ttsroad.desktop.download.OfflineStorageController
 import dk.perspektiva.ttsroad.desktop.download.OfflineStorageSummary
 import kotlin.test.assertEquals
@@ -22,6 +28,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import java.io.File
 import org.junit.jupiter.api.Test
 
 /**
@@ -61,6 +68,21 @@ class SettingsStateHolderTest {
         }
     }
 
+    private class FakeAudiobookDownloader(
+        var result: AudiobookDownloadResult = AudiobookDownloadResult.Success(File("saved.m4b"), 100),
+    ) : AudiobookExportDownloader {
+        val destinations = mutableListOf<File>()
+        override suspend fun download(
+            export: AudiobookExport,
+            destination: File,
+            onProgress: (Long, Long) -> Unit,
+        ): AudiobookDownloadResult {
+            destinations += destination
+            onProgress(50, 100)
+            return result
+        }
+    }
+
     private val signedIn = SessionState(
         serverUrl = "https://ttsroad.example.com/",
         token = "ttsr_token",
@@ -78,6 +100,8 @@ class SettingsStateHolderTest {
         repository: FakeRepository,
         store: InMemorySessionStore = InMemorySessionStore(signedIn),
         offline: OfflineStorageController = FakeOfflineStorage(),
+        audiobookDownloader: AudiobookExportDownloader = UnavailableAudiobookExportDownloader,
+        audiobookSavePicker: AudiobookSavePicker = AudiobookSavePicker { null },
     ): SettingsStateHolder {
         // Publishing capabilities is what a real sign-in does; the gate reads them from here.
         val holder = SettingsStateHolder(
@@ -85,8 +109,102 @@ class SettingsStateHolderTest {
             store,
             UnconfinedTestDispatcher(testScheduler),
             offline,
+            audiobookDownloader,
+            audiobookSavePicker,
         )
         return holder
+    }
+
+    @Test
+    fun `audiobook exports require both the capability and a current admin account`() = runTest {
+        val repository = FakeRepository(
+            capabilitiesResult = capable.copy(audiobookExport = true),
+            currentUserResult = Result.success(MobileUser(2, "listener", isAdmin = false)),
+            audiobookExportsResult = Result.success(AudiobookExportsResponse()),
+        )
+        repository.refreshCurrentCapabilities()
+        val holder = holder(repository)
+
+        holder.ensureAudiobooksLoaded()
+        runCurrent()
+
+        assertTrue(holder.state.value.audiobooks.adminOnly)
+        assertEquals(0, repository.audiobookExportsCalls)
+        holder.clear()
+    }
+
+    @Test
+    fun `an admin loads finished exports and saves through the injected native destination`() = runTest {
+        val export = AudiobookExport(
+            id = 17,
+            title = "Serial",
+            filename = "../../serial-part-1",
+            sizeBytes = 100,
+            downloadUrl = "/api/exports/17/download",
+            downloadable = true,
+        )
+        val repository = FakeRepository(
+            capabilitiesResult = capable.copy(audiobookExport = true),
+            currentUserResult = Result.success(MobileUser(1, "admin", isAdmin = true)),
+            audiobookExportsResult = Result.success(
+                AudiobookExportsResponse(ffmpegAvailable = true, exports = listOf(export)),
+            ),
+        )
+        repository.refreshCurrentCapabilities()
+        val downloader = FakeAudiobookDownloader()
+        var suggested = ""
+        val holder = holder(
+            repository,
+            audiobookDownloader = downloader,
+            audiobookSavePicker = AudiobookSavePicker { name ->
+                suggested = name
+                File("chosen/book")
+            },
+        )
+        holder.ensureAudiobooksLoaded()
+        runCurrent()
+
+        holder.downloadAudiobook(export)
+        runCurrent()
+
+        assertEquals("serial-part-1.m4b", suggested)
+        assertEquals("book.m4b", downloader.destinations.single().name)
+        assertTrue(holder.state.value.audiobooks.notice.orEmpty().contains("Saved"))
+        assertNull(holder.state.value.audiobooks.downloadingExportId)
+        holder.clear()
+    }
+
+    @Test
+    fun `an audiobook transfer failure stays in its pane with an actionable reason`() = runTest {
+        val export = AudiobookExport(
+            id = 17,
+            filename = "serial.m4b",
+            downloadUrl = "/api/exports/17/download",
+            downloadable = true,
+        )
+        val repository = FakeRepository(
+            capabilitiesResult = capable.copy(audiobookExport = true),
+            currentUserResult = Result.success(MobileUser(1, "admin", isAdmin = true)),
+            audiobookExportsResult = Result.success(AudiobookExportsResponse(exports = listOf(export))),
+        )
+        repository.refreshCurrentCapabilities()
+        val downloader = FakeAudiobookDownloader(
+            AudiobookDownloadResult.Failed(DownloadFailure.OutOfSpace("Free some disk space")),
+        )
+        val holder = holder(
+            repository,
+            audiobookDownloader = downloader,
+            audiobookSavePicker = AudiobookSavePicker { File("serial.m4b") },
+        )
+        holder.ensureAudiobooksLoaded()
+        runCurrent()
+
+        holder.downloadAudiobook(export)
+        runCurrent()
+
+        assertEquals("Free some disk space", holder.state.value.audiobooks.error)
+        assertNotNull(holder.state.value.audiobooks.loaded)
+        holder.clear()
     }
 
     private suspend fun FakeRepository.publish(capabilities: ServerCapabilities) {

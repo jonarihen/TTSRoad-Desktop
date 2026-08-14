@@ -45,7 +45,7 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Searchable up-next panel for long queues | ✅ |
 | Player UI (play/pause, seek, configurable skip, next/previous, up-next queue) | ✅ |
 | **MP3 audio playback** | ✅ |
-| Settings — two-pane control centre (account, devices, playback, offline, about) | ✅ |
+| Settings — two-pane control centre (account, devices, playback, offline, audiobooks, about) | ✅ |
 | Device sessions — list, mark current, revoke one / revoke all others | ✅ |
 | Playback preferences — speed, skip interval, skip silence, volume boost | ✅ |
 | Sleep timer — 5/15/30/45/60 min or end of chapter, with a fade and "+5 min" | ✅ |
@@ -55,6 +55,7 @@ Built with Compose for Desktop — real Skia-rendered UI, real OS installers, no
 | Offline downloads — per chapter, next 10, restart-safe queue, storage controls | ✅ |
 | Bounded streaming cache and previously loaded library browsing while offline | ✅ |
 | Timestamped delta refresh for cached library and chapter metadata | ✅ |
+| Admin audiobook exports — resumable M4B save to a user-selected file | ✅ |
 | Audio-synchronized read-along — offline text, word seek, find, themes and zoom | ✅ |
 | Streaming playback — audio starts before the chapter has downloaded | ✅ Linux |
 | Seeking without decoding from the start of the chapter | ✅ Linux |
@@ -177,6 +178,8 @@ Read-along parsing, ETag caching, media-time highlighting and account preference
 [`docs/adr/0008-audio-synchronized-read-along.md`](docs/adr/0008-audio-synchronized-read-along.md).
 Linux package identity, dependencies, upgrade semantics, diagnostics and lifecycle verification are
 in [`docs/adr/0009-linux-debian-package.md`](docs/adr/0009-linux-debian-package.md).
+Read-only M4B export listing, resumable user-selected saves and their storage boundary are in
+[`docs/adr/0013-audiobook-export-downloads.md`](docs/adr/0013-audiobook-export-downloads.md).
 
 ## 🚀 Bootstrap
 
@@ -291,6 +294,7 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   └── Shortcuts.kt              the keyboard table and Escape's precedence, as pure functions
 ├── data/
 │   ├── Models.kt                 mobile API models (Moshi)
+│   ├── AudiobookExports.kt       completed server M4B export API models
 │   ├── PlaybackPreferences.kt    speed/skip/silence/boost, machine-local, migrating on read
 │   ├── PlaybackHistory.kt        bounded local snapshots, last-heard and jump-back selection
 │   ├── SyncedPlaybackHistoryStore.kt  cross-device auto-bookmark reconciliation
@@ -337,6 +341,7 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
 │   ├── DownloadIndex.kt          transactional, migrating queue/index state
 │   ├── DownloadStorage.kt        owner-only explicit-download root + safe cleanup
 │   ├── ChapterDownloader.kt      range resume, validation, fsync and atomic promotion
+│   ├── AudiobookExportDownloader.kt authenticated resumable save to a selected M4B path
 │   ├── DownloadManager.kt        bounded queue, backoff, cancellation and restart recovery
 │   ├── DownloadCoordinator.kt    current-account lifecycle, totals and cleanup seam
 │   ├── StreamingCache.kt         bounded validated cache populated while playback reads
@@ -350,6 +355,7 @@ src/main/kotlin/dk/perspektiva/ttsroad/desktop/
     ├── SettingsStateHolder.kt    settings panes, device sessions, confirmations
     ├── FictionManagementStateHolder.kt capability + current-admin gate and mutation state
     ├── FictionManagementDialogs.kt add/edit forms and destructive shared-delete warning
+    ├── AudiobookSavePicker.kt    native user-selected M4B destination
     ├── LibraryScreen.kt          LazyVerticalGrid: hero, shelves, search, fictions
     ├── FictionDetailScreen.kt    LazyColumn: one header item, then chapter rows + bulk controls
     ├── ReaderScreen.kt           lazy selectable reader, follow/find/zoom/theme controls
@@ -427,6 +433,19 @@ and keeps **Delete all downloads** separate from **Clear streaming cache**, each
 Signing out keeps bytes but closes the account's index and fiction titles until that account signs
 in again.
 
+## 🎧 Audiobook exports
+
+When an administrator's server advertises `audiobook_export`, Settings → **Audiobooks** lists its
+finished M4B volumes. The surface is intentionally read-only: create and remove exports in the web
+admin, then save a completed volume to a path chosen through the native file dialog. Exported files
+are for third-party players and are never offered as chapters inside TTSRoad.
+
+Large saves resume from a partial file beside the destination. The downloader uses the same
+same-origin bearer-authenticated client as playback, checks free space and expected length, fsyncs
+and validates the M4B container, then promotes it atomically. Pausing or closing retains a resumable
+partial; a corrupt completed body is removed. Saved exports are user-owned files outside TTSRoad's
+managed offline/cache roots, so sign-out and storage cleanup do not delete them.
+
 ## 📖 Read-along reader
 
 The reader is offered only when capability discovery reports `readalong`. `has_timings` changes the
@@ -451,8 +470,14 @@ is not playing never highlights it against unrelated audio.
 ## 🎚️ Listening preferences, the sleep timer and the desktop
 
 Speed, skip interval, skip silence and volume boost live in `playback.json` next to the session and
-window files — **not** in the session. Signing out does not reset them, and a second account on a
-shared machine does not inherit the first one's. The file has no notion of a user at all.
+window files — **not** in the session. Signing out does not reset them. The file belongs to the OS
+profile and has no TTSRoad account key, so accounts under the same OS login intentionally share the
+machine's output settings; different OS users have separate config directories.
+
+The server's later `player_preferences` capability does not change that boundary. Speed, skip,
+silence removal and gain are output/engine-shaped, and the sleep timer remains an explicit action
+rather than inheriting an account default. Reader appearance is still account-synchronized because
+it describes portable content presentation rather than this machine's audio path.
 
 - **They are applied by the controller, not the player screen.** An auto-advanced chapter and a
   media-key start use the same values as a chapter you pressed play on, because only the controller

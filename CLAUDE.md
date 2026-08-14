@@ -103,11 +103,12 @@ apply to audio.
 ### Listening preferences, the sleep timer and history
 
 - `data/PlaybackPreferences.kt` — speed, skip interval, skip silence, volume boost, in
-  `playback.json`. **Machine-local, not session data**: signing out must not reset them and a second
-  account must not inherit them, so the store has no reference to a session at all. The on-disk type
-  is separate and fully nullable, so a file from another build loads degraded rather than throwing;
-  out-of-range values are *snapped*, not defaulted. The offered speed list always includes the
-  stored value even when it isn't a preset.
+  `playback.json`. **OS-profile-local, not session or TTSRoad account data**: signing out must not
+  reset them. Accounts under the same OS login intentionally share the machine's output settings;
+  different OS users get different config roots. Do not synchronize the server's later
+  `player_preferences` keys: speed/skip/silence/gain are output-shaped, and a sleep default merely
+  highlights a choice rather than arming the safety action. The on-disk type is separate and fully
+  nullable, out-of-range values are snapped, and the offered speed list preserves a custom value.
 - **The controller applies preferences, not the player screen.** `QueuePlaybackController` collects
   the store and pushes rate/gain/skip-silence to the engine, so an auto-advanced chapter and a
   media-key start use the same values as one the user pressed play on. `setSpeed` writes the
@@ -149,6 +150,17 @@ apply to audio.
   rows and tombstones through `data/DeltaSync.kt`. Missing/old delta endpoints fall back to a full
   refresh. Settings measures real files, groups downloads by fiction, and keeps confirmed Delete
   all downloads separate from Clear streaming cache.
+
+### Audiobook exports
+
+- `data/AudiobookExports.kt` + `download/AudiobookExportDownloader.kt` consume the read-only admin
+  `/api/mobile/exports` contract when capability `audiobook_export` is true. Settings lists finished
+  exports; create/delete stay in the web admin and `playable_in_app` must remain false.
+- The native picker chooses a destination outside managed storage. Never put an M4B export in the
+  chapter index/cache or delete it on sign-out. The shared authenticated client downloads to a
+  per-export partial beside the destination, resumes ranges, checks space/length/`ftyp`, fsyncs and
+  atomically promotes. Cancellation retains the partial; corrupt completion deletes it. See ADR
+  0013.
 
 ### Read-along
 
@@ -248,7 +260,9 @@ release with no asset for this platform/architecture is announced *without* a do
 
 `GET /api/mobile/capabilities` is unauthenticated and additive. Only a literal JSON `true` enables a
 feature; unknown keys are ignored; `404` means baseline and is cached; a transient failure keeps the
-last known answer rather than downgrading; `api_version` is never a proxy for a feature.
+last known answer rather than downgrading; `api_version` is never a proxy for a feature. The
+Audiobooks settings navigation entry is stricter than older endpoint-probing surfaces: it is visible
+only for the explicit `audiobook_export` flag, then still treats an endpoint 404 as unsupported.
 
 `fiction_management` says only that the admin add/edit/delete routes exist. The UI separately asks
 `/api/mobile/me` and offers controls only for its current `is_admin=true`; never trust the role
@@ -337,8 +351,9 @@ device sessions and Settings (0003), navigation (0004), chapter browsing (0005),
 preferences / sleep timer / MPRIS / shortcuts (0006). Read the relevant one before changing any of
 the invariants above; offline storage and caching are in 0007, read-along is in 0008, and Debian
 packaging/operations are in 0009, and releases/update checking are in 0010. They exist because
-the alternative was tried or measured. The cross-library server queue is in 0011.
-Admin fiction management and its two independent gates are in 0012.
+the alternative was tried or measured. The cross-library server queue is in 0011, admin fiction
+management and its two independent gates are in 0012, and read-only audiobook export downloads are
+in 0013.
 
 ## CI
 

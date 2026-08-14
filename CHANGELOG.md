@@ -36,6 +36,10 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
   Playing from the queue starts that chapter's fiction through the ordinary player, so what happens
   at the end of a chapter — including offline — is unchanged. The account's "when the queue is
   empty" preference is therefore displayed rather than acted on; see `docs/adr/0011`.
+- A capability-gated Audiobooks settings pane for administrators. It lists finished server M4B
+  exports and saves them to a user-selected path with authenticated range resume, free-space and
+  container validation, fsync, atomic promotion, and resumable partials. Export creation/deletion
+  remains in the web admin and saved files stay outside TTSRoad-managed offline storage.
 
 ## [1.0.2] - 2026-08-10
 
