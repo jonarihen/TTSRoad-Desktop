@@ -200,9 +200,8 @@ class RepositoryTest {
     fun `saveProgress is a no-op when signed out, so a stray progress tick cannot crash playback`() = runTest {
         sessionStore.clearToken()
 
-        val response = repository.saveProgress(7, 101, 12.0, isPlayed = false)
+        repository.saveProgress(7, 101, 12.0, isPlayed = false)
 
-        assertNull(response)
         assertEquals(0, server.requestCount)
     }
 

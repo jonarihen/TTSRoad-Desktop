@@ -236,6 +236,11 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             // Local values are already usable; a capable server can now replace them with this
             // account's cross-device reader settings. Older/offline servers leave them alone.
             container.readerPreferences.refreshFromServer()
+            // Relaunching is the reconnect that matters: positions recorded while the last run was
+            // offline have been on disk since, and this is the first chance to send them. After
+            // discovery, so the flush knows whether the server can order writes. Failure is fine —
+            // the queue survives and the next save retries it.
+            runCatching { repository.flushProgress() }
         }
     }
 

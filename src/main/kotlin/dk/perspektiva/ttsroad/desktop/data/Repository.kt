@@ -21,6 +21,13 @@ import retrofit2.converter.moshi.MoshiConverterFactory
  */
 private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
 
+/**
+ * Batch size used when the server has `/playback/sync` but published no limit. Matches the
+ * backend's own `MAX_PLAYBACK_SYNC_ITEMS`, and is a floor rather than a guess: sending fewer items
+ * than allowed only costs an extra round trip, while sending more loses the whole batch to a 400.
+ */
+private const val DefaultMaxPlaybackSyncItems = 500
+
 /** Outcome of a login attempt. */
 sealed interface LoginResult {
     data object Success : LoginResult
@@ -51,6 +58,23 @@ interface TtsRoadRepository {
 
     /** Why the stored credential was dropped, or null while the session is usable. */
     val sessionEnd: StateFlow<SessionEnd?>
+
+    /**
+     * What the server says it holds for chapters this client has written to, as of the last flush.
+     *
+     * This is how a losing write gets noticed. `/playback/sync` returns the server's own state for
+     * every chapter in a batch, so when an offline position loses to a newer one from the browser,
+     * the newer position is here — and playback can resume from it rather than the stale local one.
+     */
+    val serverPlaybackState: StateFlow<Map<Int, PlaybackStateRow>>
+
+    /**
+     * Send everything queued but unsent. Safe to call when there is nothing to do.
+     *
+     * Separate from [saveProgress] so a reconnect — app launch, session restored — can drain a
+     * queue left behind by an earlier run without first having to play something.
+     */
+    suspend fun flushProgress()
 
     suspend fun login(
         baseUrl: String,
@@ -128,12 +152,25 @@ interface TtsRoadRepository {
 
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse
 
+    /**
+     * Record a listening position and try to get it to the server.
+     *
+     * Queued to disk with a timestamp *before* being sent. That ordering is the fix for #36: if the
+     * send fails — offline, server down, laptop closed — the position survives with the time it was
+     * actually reached, so when it does land it can be ordered against whatever happened since
+     * instead of blindly overwriting it.
+     *
+     * Failures propagate, as they did before the queue existed — a 401 in particular still has to
+     * reach the session-end handling. The caller ([dk.perspektiva.ttsroad.desktop.player
+     * .QueuePlaybackController]) already treats a failed save as non-fatal, and the position stays
+     * queued either way, so the next save retries it.
+     */
     suspend fun saveProgress(
         fictionId: Int,
         chapterId: Int,
         positionSeconds: Double,
         isPlayed: Boolean,
-    ): PlaybackProgressResponse?
+    )
 
     /** Whether a bearer credential exists at all, so the audio path can fail fast when signed out. */
     fun authHeaderValue(): String?
@@ -156,6 +193,13 @@ class RetrofitTtsRoadRepository(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val clock: () -> Long = System::currentTimeMillis,
     private val deviceNameProvider: () -> String = ::defaultDeviceName,
+    /**
+     * Unsent listening positions. Injected so a test can hold the queue in memory instead of
+     * writing to the user's real config directory, the same reason the session store is.
+     */
+    private val progressOutbox: ProgressOutboxStore =
+        FileProgressOutboxStore(AppDirectories.configDir().resolve("progress-outbox.json")),
+    private val stamp: () -> String = ::nowStamp,
 ) : TtsRoadRepository {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
 
@@ -177,6 +221,10 @@ class RetrofitTtsRoadRepository(
 
     private val _sessionEnd = MutableStateFlow<SessionEnd?>(null)
     override val sessionEnd: StateFlow<SessionEnd?> = _sessionEnd.asStateFlow()
+
+    private val _serverPlaybackState = MutableStateFlow<Map<Int, PlaybackStateRow>>(emptyMap())
+    override val serverPlaybackState: StateFlow<Map<Int, PlaybackStateRow>> =
+        _serverPlaybackState.asStateFlow()
 
     override suspend fun login(
         baseUrl: String,
@@ -342,12 +390,93 @@ class RetrofitTtsRoadRepository(
         chapterId: Int,
         positionSeconds: Double,
         isPlayed: Boolean,
-    ): PlaybackProgressResponse? {
-        if (!sessionStore.current().isLoggedIn) return null
-        return withAuthorizedApi {
-            it.saveProgress(
-                PlaybackProgressRequest(fictionId, chapterId, positionSeconds.coerceAtLeast(0.0), isPlayed),
+    ) {
+        // Nothing is queued while signed out. A position recorded with no account behind it
+        // belongs to nobody, and keeping it would mean the next person to sign in on this machine
+        // flushes the last one's listening history to their own account.
+        if (!sessionStore.current().isLoggedIn) return
+        progressOutbox.record(
+            PendingProgress(
+                fictionId = fictionId,
+                chapterId = chapterId,
+                positionSeconds = positionSeconds.coerceAtLeast(0.0),
+                isPlayed = isPlayed,
+                clientUpdatedAt = stamp(),
+            ),
+        )
+        flushProgress()
+    }
+
+    /**
+     * Drain the outbox.
+     *
+     * Batched through `/playback/sync` when the server has it, in chunks of the published
+     * `max_playback_sync_items`. Falls back to `/playback/progress` otherwise — that endpoint
+     * cannot order writes, so the overwrite this exists to prevent is still possible against an
+     * older server, but losing the position entirely would be worse and the backend keeps it
+     * working deliberately.
+     */
+    override suspend fun flushProgress() {
+        if (!sessionStore.current().isLoggedIn) return
+        val pending = progressOutbox.entries.value
+        if (pending.isEmpty()) return
+
+        try {
+            if (currentCapabilities.value.batchProgress) {
+                flushBatched(pending)
+            } else {
+                flushOneByOne(pending)
+            }
+        } catch (e: HttpException) {
+            // A dead credential can never flush this queue, so holding it would mean carrying a
+            // growing file forever. Anything else is transient as far as this client can tell.
+            if (e.code() == 401) progressOutbox.clear()
+            throw e
+        }
+    }
+
+    private suspend fun flushBatched(pending: List<PendingProgress>) {
+        val limit = currentCapabilities.value.maxPlaybackSyncItems ?: DefaultMaxPlaybackSyncItems
+        for (batch in ProgressOutbox.batches(pending, limit)) {
+            val response = withAuthorizedApi { api ->
+                api.syncProgress(
+                    PlaybackSyncRequest(
+                        batch.map {
+                            PlaybackSyncItem(
+                                chapterId = it.chapterId,
+                                positionSeconds = it.positionSeconds,
+                                isPlayed = it.isPlayed,
+                                clientUpdatedAt = it.clientUpdatedAt,
+                            )
+                        },
+                    ),
+                )
+            }
+            // Rejections are as final as acceptances — every reason the server can give is terminal
+            // for that item, so re-sending would only get the same answer.
+            progressOutbox.drop(
+                response.accepted.map { it.chapterId } + response.rejected.map { it.chapterId },
             )
+            if (response.serverState.isNotEmpty()) {
+                _serverPlaybackState.value =
+                    _serverPlaybackState.value + response.serverState.associateBy { it.chapterId }
+            }
+        }
+    }
+
+    private suspend fun flushOneByOne(pending: List<PendingProgress>) {
+        for (entry in pending) {
+            withAuthorizedApi {
+                it.saveProgress(
+                    PlaybackProgressRequest(
+                        entry.fictionId,
+                        entry.chapterId,
+                        entry.positionSeconds,
+                        entry.isPlayed,
+                    ),
+                )
+            }
+            progressOutbox.drop(listOf(entry.chapterId))
         }
     }
 
@@ -364,6 +493,9 @@ class RetrofitTtsRoadRepository(
     private fun forgetSessionScopedState(serverUrl: String) {
         forgetCapabilities(serverUrl)
         _currentCapabilities.value = ServerCapabilities.Baseline
+        // Chapter ids are per server; carrying reconciled positions across a sign-out would let one
+        // account's resume point leak into another's.
+        _serverPlaybackState.value = emptyMap()
     }
 
     /**

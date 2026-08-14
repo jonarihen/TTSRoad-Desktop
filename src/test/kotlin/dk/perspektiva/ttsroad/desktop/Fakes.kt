@@ -8,7 +8,7 @@ import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.LoginResult
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.PlaybackMarkResponse
-import dk.perspektiva.ttsroad.desktop.data.PlaybackProgressResponse
+import dk.perspektiva.ttsroad.desktop.data.PlaybackStateRow
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionEnd
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
@@ -161,9 +161,19 @@ open class FakeRepository(
         chapterId: Int,
         positionSeconds: Double,
         isPlayed: Boolean,
-    ): PlaybackProgressResponse {
+    ) {
         savedProgress += Triple(chapterId, positionSeconds, isPlayed)
-        return PlaybackProgressResponse(status = "saved", chapterId = chapterId)
+    }
+
+    /** Positions the server would report back; set by a test that wants a losing write reconciled. */
+    val serverPlaybackStateFlow = MutableStateFlow<Map<Int, PlaybackStateRow>>(emptyMap())
+    override val serverPlaybackState: StateFlow<Map<Int, PlaybackStateRow>> = serverPlaybackStateFlow
+
+    var flushCount: Int = 0
+        private set
+
+    override suspend fun flushProgress() {
+        flushCount++
     }
 
     override fun authHeaderValue(): String? = "Bearer test-token"

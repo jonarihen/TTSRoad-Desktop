@@ -330,8 +330,20 @@ class QueuePlaybackController(
         scope.cancel()
     }
 
-    private fun resumeMsOf(chapter: ChapterSummary): Long =
-        (chapter.resolvedPositionSeconds * 1000).toLong().coerceAtLeast(0L)
+    /**
+     * Where to start this chapter.
+     *
+     * Prefers the server's reconciled state when there is one. That map is only populated by a
+     * `/playback/sync` round trip, which is strictly later than the chapter list this summary came
+     * from — so when a position saved here lost to a newer one reached in the browser, this picks
+     * up the browser's position instead of silently restarting from the stale local one. That is
+     * the user-visible half of #36.
+     */
+    private fun resumeMsOf(chapter: ChapterSummary): Long {
+        val reconciled = repository.serverPlaybackState.value[chapter.resolvedChapterId]
+        val seconds = reconciled?.positionSeconds ?: chapter.resolvedPositionSeconds
+        return (seconds * 1000).toLong().coerceAtLeast(0L)
+    }
 
     private suspend fun stopInternal(clearQueue: Boolean) {
         playJob?.cancelAndJoin()
