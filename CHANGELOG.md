@@ -18,17 +18,11 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
-### Changed
+## [1.1.0] - 2026-08-17
 
-- The README now shows how to bind global skip-back and skip-forward keys yourself, over the MPRIS
-  `Seek` method the app already implements. TTSRoad still registers no global hotkeys of its own.
-- Completed the release quality gate with a documented accessibility/performance/compatibility
-  matrix, maintainer architecture/API/release runbook, 200% text-scale and long-session/navigation
-  soak coverage, and automated WCAG AA contrast checks. Secondary/error/sepia text tokens now meet
-  the 4.5:1 normal-text threshold on their supported surfaces.
-- The README now states the platform support policy once and plainly: Linux is supported and proven
-  by a clean-container install/upgrade/uninstall run, while the Windows and macOS installers are
-  built and smoke-launched but have no clean-machine lifecycle coverage.
+Three-client parity and the desktop-native features that follow from having a real filesystem, a
+real window manager and a real keyboard. Every server-dependent feature here is capability-gated,
+so an older server keeps its existing login, library and playback behaviour unchanged.
 
 ### Added
 
@@ -75,6 +69,18 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
   container validation, fsync, atomic promotion, and resumable partials. Export creation/deletion
   remains in the web admin and saved files stay outside TTSRoad-managed offline storage.
 
+### Changed
+
+- Completed the release quality gate with a documented accessibility/performance/compatibility
+  matrix, maintainer architecture/API/release runbook, 200% text-scale and long-session/navigation
+  soak coverage, and automated WCAG AA contrast checks. Secondary/error/sepia text tokens now meet
+  the 4.5:1 normal-text threshold on their supported surfaces.
+- The README now shows how to bind global skip-back and skip-forward keys yourself, over the MPRIS
+  `Seek` method the app already implements. TTSRoad still registers no global hotkeys of its own.
+- The README now states the platform support policy once and plainly: Linux is supported and proven
+  by a clean-container install/upgrade/uninstall run, while the Windows and macOS installers are
+  built and smoke-launched but have no clean-machine lifecycle coverage.
+
 ## [1.0.2] - 2026-08-10
 
 ### Fixed
@@ -109,6 +115,7 @@ server.
 - A Debian package with a bundled JDK 25 runtime, desktop entry, upgrade-safe revisioning and XDG
   rotating logs, plus credential-safe `--version` and `--diagnostics` commands.
 
-[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.1.0
 [1.0.2]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.0.2
 [1.0.1]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.0.1
