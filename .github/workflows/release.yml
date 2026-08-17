@@ -308,7 +308,7 @@ jobs:
       # Signed provenance for the installers themselves. The SBOM, checksums and licence file are
       # descriptions of those artifacts, not the artifacts a user executes.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             release/*.deb
