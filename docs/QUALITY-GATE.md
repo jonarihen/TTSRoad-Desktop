@@ -13,6 +13,7 @@ made from source inspection alone.
 | Ubuntu 24.04/Mint 22 ABI package build and clean install/upgrade/uninstall | Pass | [master CI run 31777210303](https://github.com/jonarihen/TTSRoad-Desktop/actions/runs/31777210303); every PR reruns the same jobs |
 | three-platform release dry run | Pass | [release dry run 31407730692](https://github.com/jonarihen/TTSRoad-Desktop/actions/runs/31407730692) |
 | tagged 1.0.2 release gate | Pass | [release run 31426739896](https://github.com/jonarihen/TTSRoad-Desktop/actions/runs/31426739896) |
+| tagged 1.1.0 release gate | Pass | [release run 32030943255](https://github.com/jonarihen/TTSRoad-Desktop/actions/runs/32030943255) — all three installers built, release `.deb` install/upgrade/uninstall in a clean Ubuntu 24.04 container, SBOM, checksums and provenance attestation |
 
 The first two rows must be refreshed on the candidate commit. The CI/Release links establish that
 the package and publishing machinery have completed end to end; the candidate's own PR and dry-run
