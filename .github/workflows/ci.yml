@@ -184,7 +184,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Download the release packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: linux-deb-packages
           path: build/deb-artifacts
