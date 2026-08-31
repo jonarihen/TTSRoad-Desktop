@@ -11,7 +11,7 @@
 # Also referenced from settings.gradle.kts (foojay) and build.gradle.kts (jvmToolchain).
 jdk = "25"
 kotlin = "2.4.10"
-composeMultiplatform = "1.11.1"
+composeMultiplatform = "1.12.0"
 foojayResolver = "1.0.0"
 # Compose Multiplatform 1.11.1 ships ProGuard 7.7.0 by default, which cannot parse Java 25
 # class files (major 69). 7.8.0 is the first release that can; 7.9.1 is the current stable.
