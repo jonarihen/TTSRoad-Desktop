@@ -10,12 +10,14 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -291,7 +293,11 @@ fun FictionDetailScreen(
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // The app promises 720 dp. At that width the 28 dp gutters leave 664, and the header's
+        // fixed 190 dp cover plus its 28 dp gap left barely 440 for a title, the counters and four
+        // buttons — which is why this screen needed a size class of its own like Settings has.
+        val compact = windowSizeClassFor(maxWidth).isCompact
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -338,7 +344,19 @@ fun FictionDetailScreen(
                         } else {
                             null
                         },
+                        compact = compact,
                     )
+
+                    if (fictionManagement.canManage) {
+                        Spacer(Modifier.height(16.dp))
+                        ManageFictionBlock(
+                            FictionManagementActions(
+                                busy = fictionManagement.isBusy,
+                                onEdit = { onEditFiction(header) },
+                                onDelete = { onDeleteFiction(header) },
+                            ),
+                        )
+                    }
 
                     actionError?.let { message ->
                         Spacer(Modifier.height(12.dp))
@@ -481,22 +499,35 @@ private fun ChapterListControls(
     queue: ChapterQueueUi,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // FlowRow, not Row: three filter tabs, an Order label and two sort tabs already fill the
+        // 664 dp a 720 dp window leaves after its gutters, and any UI scaling above 100% pushed them
+        // straight off the edge with nowhere to go.
+        FlowRow(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Kept together in their own Row so a wrap never splits one group across two lines,
+            // which would read as five unrelated tabs rather than two choices.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ChapterFilter.entries.forEach { entry ->
                     SegmentTab(entry.label, entry == options.filter) { onOptions(options.copy(filter = entry)) }
                 }
             }
-            Spacer(Modifier.width(24.dp))
-            MetaText("Order", color = AarisColor.Dim)
-            Spacer(Modifier.width(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MetaText("Order", color = AarisColor.Dim)
                 ChapterSort.entries.forEach { entry ->
                     SegmentTab(entry.label, entry == options.sort) { onOptions(options.copy(sort = entry)) }
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             BulkAction("Mark all played", enabled = canMarkPlayed, onClick = onMarkAllPlayed)
             BulkAction("Mark all unplayed", enabled = canMarkUnplayed, onClick = onMarkAllUnplayed)
             // Absent rather than disabled when there is nowhere to download to: a control that can
@@ -618,14 +649,16 @@ private fun FictionHeader(
     onResume: (ChapterSummary) -> Unit,
     follow: FollowUi? = null,
     management: FictionManagementActions? = null,
+    /** Below this the cover shrinks; the app promises 720 dp and the cover was a fixed 190. */
+    compact: Boolean = false,
 ) {
     Row(Modifier.fillMaxWidth()) {
         CoverImage(
             fiction.title,
             fiction.coverImageUrl?.let(repository::resolveUrl),
-            Modifier.width(190.dp).aspectRatio(2f / 3f),
+            Modifier.width(if (compact) 120.dp else 190.dp).aspectRatio(2f / 3f),
         )
-        Spacer(Modifier.width(28.dp))
+        Spacer(Modifier.width(if (compact) 16.dp else 28.dp))
         Column(Modifier.weight(1f)) {
             MetaText(text = "// Fiction", color = AarisColor.Accent)
             Spacer(Modifier.height(8.dp))
@@ -689,42 +722,64 @@ private fun FictionHeader(
             val target = remember(chapters) { resumeTarget(chapters) }
             if (target != null || follow != null || management != null) {
                 Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                // One primary control, then a wrapping row of secondaries. The admin pair moves out
+                // entirely — see `ManageFictionBlock`: an edit that permanently takes a field away
+                // from the source, and a delete that destroys every account's progress, are not
+                // things a header button should be able to do in passing.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     if (target != null) {
-                        Button(
+                        AarisPrimaryAction(
+                            label = if (target.resolvedPositionSeconds > 0.0) "Resume" else "Start listening",
                             onClick = { onResume(target) },
-                            shape = RectangleShape,
-                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(if (target.resolvedPositionSeconds > 0.0) "RESUME" else "START LISTENING")
-                        }
+                            icon = Icons.Default.PlayArrow,
+                        )
                     }
                     follow?.let { FollowButton(it) }
-                    management?.let { actions ->
-                        OutlinedButton(
-                            onClick = actions.onEdit,
-                            enabled = !actions.busy,
-                            shape = RectangleShape,
-                            modifier = Modifier
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .testTag(EditFictionButtonTestTag),
-                        ) { Text("EDIT METADATA") }
-                        OutlinedButton(
-                            onClick = actions.onDelete,
-                            enabled = !actions.busy,
-                            shape = RectangleShape,
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error,
-                            ),
-                            modifier = Modifier
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .testTag(DeleteFictionButtonTestTag),
-                        ) { Text("DELETE") }
-                    }
                 }
             }
+        }
+    }
+}
+
+const val ManageFictionTestTag: String = "manageFiction"
+
+/**
+ * The admin housekeeping, behind a disclosure rather than in the header.
+ *
+ * Both of these need a sentence to be safe to press — editing metadata claims the field against
+ * every future refresh of the source, and deleting destroys the shared chapters and every account's
+ * progress — which is the test for rank three. A header row of four equal buttons could say neither.
+ */
+@Composable
+private fun ManageFictionBlock(actions: FictionManagementActions) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxWidth().testTag(ManageFictionTestTag),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        AarisSecondaryAction(
+            label = if (open) "Hide management" else "Manage this fiction",
+            onClick = { open = !open },
+        )
+        if (open) {
+            AarisActionRow(
+                title = "Edit metadata",
+                subtitle = "Correcting a field stops the server refreshing it from the source.",
+                onClick = actions.onEdit,
+                enabled = !actions.busy,
+                modifier = Modifier.testTag(EditFictionButtonTestTag),
+            )
+            AarisActionRow(
+                title = "Delete fiction",
+                subtitle = "Destroys the shared chapters and every account's progress. Not undoable.",
+                onClick = actions.onDelete,
+                enabled = !actions.busy,
+                titleColor = AarisColor.Danger,
+                modifier = Modifier.testTag(DeleteFictionButtonTestTag),
+            )
         }
     }
 }

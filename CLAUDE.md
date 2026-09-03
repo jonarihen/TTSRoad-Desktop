@@ -300,6 +300,27 @@ one desktop never shows two different answers. `WindowPlacement` carries the fla
 behaviour are written by different hands at different times, so the close handler merges through
 `withBehaviourOf` rather than saving the startup snapshot wholesale.
 
+### Control rank
+
+`ui/Components.kt` carries three ranks — `AarisPrimaryAction`, `AarisSecondaryAction`,
+`AarisActionRow` — and the rule for picking one is *how often the control is reached for*, not how
+important it feels. **At most one primary per screen.** Secondaries go in a row, not a column;
+`fillMaxWidth()` is the exception there rather than the default. The AARIS look (no radius, thin
+border, mono uppercase) is handsome once and a wall of identical rectangles four times over, and
+colour here carries **severity**, not rank, so tinting a destructive action does not promote it.
+
+The test for rank three: **if a control needs a sentence under it to be safe to press, it is not a
+button, it is a row** — and it belongs behind a disclosure. Deleting a fiction destroys the shared
+chapters and every account's progress, and editing metadata claims the field against every future
+refresh of the source; neither fits on a button label, and neither belongs in the header beside
+Resume.
+
+Fiction detail derives its own `WindowSizeClass`, like Settings does. The app promises 720 dp, where
+the gutters leave 664: the header's cover shrinks, and both control groups are `FlowRow`s. The
+symptom of getting this wrong is not a clipped button but a **squeezed** one — a Row measures
+children against the space left, so the last control keeps its bounds and wraps its own label. That
+is what `ChapterBrowsingUiTest` asserts against: equal heights across the group.
+
 ### Keyboard shortcuts
 
 `nav/Shortcuts.kt` is a pure matcher plus an `AppShortcut.firesWhileTyping` classification. `App`

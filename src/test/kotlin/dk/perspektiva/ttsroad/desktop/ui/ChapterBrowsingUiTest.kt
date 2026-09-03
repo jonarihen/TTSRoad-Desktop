@@ -39,6 +39,11 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Modifier
+import dk.perspektiva.ttsroad.desktop.data.ChapterFilter
+import dk.perspektiva.ttsroad.desktop.data.ChapterSort
 
 /**
  * The acceptance criteria of the chapter-browsing phase, driven through the real
@@ -96,6 +101,88 @@ class ChapterBrowsingUiTest {
             }
         }
         compose.waitForIdle()
+    }
+
+    /** The screen at the smallest window the app promises to support. */
+    private fun compactScreen(
+        repository: FakeRepository,
+        cache: LibraryCache = testLibraryCache(repository),
+        downloads: ChapterDownloadsUi = ChapterDownloadsUi(),
+        queue: ChapterQueueUi = ChapterQueueUi(),
+    ) {
+        compose.setContent {
+            TtsRoadTheme {
+                Box(Modifier.size(MinWindowWidth, MinWindowHeight)) {
+                    FictionDetailScreen(
+                        fiction = fiction,
+                        cache = cache,
+                        repository = repository,
+                        playback = FakePlaybackController(),
+                        onBack = {},
+                        downloads = downloads,
+                        queue = queue,
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+    }
+
+    /**
+     * Asserts the node is inside the window, not merely present in the tree.
+     *
+     * `assertIsDisplayed` is not enough for this: a `Row` measures its children against whatever
+     * space is left, so an overflowing control is still "displayed" while sitting partly or wholly
+     * past the right edge with its label squeezed to nothing. Only the geometry catches it.
+     */
+    private fun assertWithinWindow(label: String) {
+        val node = compose.onNodeWithText(label).fetchSemanticsNode()
+        val right = node.boundsInRoot.right
+        val width = MinWindowWidth.value
+        assertTrue(
+            right <= width + 0.5f,
+            "\"$label\" ends at $right in a ${width}dp window — it has run off the edge",
+        )
+        assertTrue(node.size.width > 0, "\"$label\" was squeezed to zero width")
+    }
+
+    @Test
+    fun `every bulk control fits inside the supported minimum width`() {
+        // 720 dp minus the 28 dp gutters leaves 664, and the four Material bulk buttons already
+        // fill that at default text size. In a fixed Row the last simply ran off the edge.
+        val repository = FakeRepository(chaptersResult = Result.success(response((1..6).map { chapter(it) })))
+
+        compactScreen(
+            repository,
+            downloads = ChapterDownloadsUi(available = true),
+            queue = ChapterQueueUi(available = true),
+        )
+        scrollToControls()
+
+        val labels = listOf("MARK ALL PLAYED", "MARK ALL UNPLAYED", "DOWNLOAD NEXT 10", "QUEUE UNPLAYED")
+        val heights = labels.associateWith { compose.onNodeWithText(it).fetchSemanticsNode().size.height }
+
+        // A control forced taller than its neighbours is one whose label had to wrap, which is what
+        // "runs out of horizontal space" looks like in a Row: the last button was squeezed to 99 dp
+        // wide and 55 tall while the other three sat at 40. Wrapping the *group* is the fix; a
+        // wrapped label inside a squeezed button is the bug.
+        labels.forEach { assertWithinWindow(it) }
+        assertEquals(
+            1,
+            heights.values.distinct().size,
+            "a control had to wrap its own label to fit: $heights",
+        )
+    }
+
+    @Test
+    fun `the filter and order tabs fit inside the supported minimum width`() {
+        val repository = FakeRepository(chaptersResult = Result.success(response((1..6).map { chapter(it) })))
+
+        compactScreen(repository)
+        scrollToControls()
+
+        ChapterFilter.entries.forEach { assertWithinWindow(it.label.uppercase()) }
+        ChapterSort.entries.forEach { assertWithinWindow(it.label.uppercase()) }
     }
 
     /** The controls live in the header item, which auto-scroll may have pushed off screen. */

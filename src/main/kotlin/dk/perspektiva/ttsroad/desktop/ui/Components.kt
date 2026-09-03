@@ -270,6 +270,123 @@ fun <T> AarisChoiceRow(
     }
 }
 
+/**
+ * # Control rank
+ *
+ * AARIS says *no radius, thin border, mono uppercase label*. Applied to one control that is
+ * handsome; applied to every control on a screen it produces a stack of identical rectangles with
+ * nothing for the eye to land on. The fiction header reached four equal-weight buttons and the
+ * chapter list another four beside them, and colour was doing the only differentiating — colour
+ * here carries *severity*, not rank, so a rare destructive action and an everyday one looked
+ * equally loud and merely differently tinted.
+ *
+ * Three ranks. Pick by how often the control is reached for, not by how important it feels:
+ *
+ * 1. **Primary** — at most **one per screen**. Filled, accent. The thing the screen exists for:
+ *    Resume on a fiction, play/pause on the player.
+ * 2. **Secondary** — outlined, laid out in a row rather than a column. Two or three per screen.
+ *    `fillMaxWidth()` is the exception here, not the default.
+ * 3. **Tertiary / housekeeping** — [AarisActionRow], inside a sheet or a collapsed block. Anything
+ *    rare, destructive, or needing its consequence spelled out. Never in the primary scroll.
+ *
+ * The test for rank three is simple: **if the control needs a sentence under it to be safe to
+ * press, it is not a button, it is a row** — and it belongs behind something. "Deleting destroys
+ * every account's progress" cannot ride on a button's label, and trailing it underneath as loose
+ * caption text leaves the reader to guess which control the sentence belongs to.
+ */
+@Composable
+fun AarisPrimaryAction(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    icon: ImageVector? = null,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RectangleShape,
+        modifier = modifier.pointerHoverIcon(PointerIcon.Hand),
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(label.uppercase())
+    }
+}
+
+/** Rank two. See [AarisPrimaryAction] for what separates the three. */
+@Composable
+fun AarisSecondaryAction(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    icon: ImageVector? = null,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RectangleShape,
+        modifier = modifier.pointerHoverIcon(PointerIcon.Hand),
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(label.uppercase())
+    }
+}
+
+/**
+ * Rank three: a titled row carrying its own consequence.
+ *
+ * The [subtitle] is the whole argument for this over a button. "Deleting destroys the shared
+ * chapters and every account's progress" and "No chapters have audio yet" cannot ride on a button
+ * label, and when [enabled] is false this is where **the reason why not** goes — a greyed button
+ * that does not say why is a dead end.
+ */
+@Composable
+fun AarisActionRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    /** For a destructive row: pass [AarisColor.Danger]. Severity, deliberately not rank. */
+    titleColor: Color = AarisColor.Ink,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    val active = (hovered || focused) && enabled
+    Column(
+        modifier
+            .fillMaxWidth()
+            .hoverable(interaction, enabled = enabled)
+            .let { if (enabled) it.pointerHoverIcon(PointerIcon.Hand) else it }
+            .background(if (active) AarisColor.BgHover else Color.Transparent)
+            .border(1.dp, if (focused && enabled) AarisColor.Accent else AarisColor.Line)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            title.uppercase(),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (enabled) titleColor else AarisColor.Dim,
+        )
+        MetaText(subtitle, color = AarisColor.Dim)
+    }
+}
+
 @Composable
 fun SectionTitle(kicker: String, title: String, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth()) {
