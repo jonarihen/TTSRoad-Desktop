@@ -49,6 +49,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
@@ -264,6 +265,42 @@ fun StaleContentBanner(message: String, lastSuccessMillis: Long?, nowMillis: Lon
             shape = RectangleShape,
             modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
         ) { Text("RETRY") }
+    }
+}
+
+const val InlineNoticeTestTag: String = "inlineNotice"
+
+/**
+ * One line about something the user just did that did not work, with a way to dismiss it.
+ *
+ * Distinct from [StaleContentBanner], which is about the *content* being older than it looks and
+ * therefore always carries a Retry. This is about an *action* — a jump-back card that could not be
+ * opened, a bookmark whose fiction is gone — where retrying the same click is not obviously the
+ * right advice, and the only thing owed is a sentence saying the click was received.
+ */
+@Composable
+fun InlineNotice(message: String, onDismiss: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(AarisColor.BgRaise)
+            .border(1.dp, AarisColor.Warning)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .testTag(InlineNoticeTestTag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = AarisColor.Warning,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(12.dp))
+        OutlinedButton(
+            onClick = onDismiss,
+            shape = RectangleShape,
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+        ) { Text("DISMISS") }
     }
 }
 

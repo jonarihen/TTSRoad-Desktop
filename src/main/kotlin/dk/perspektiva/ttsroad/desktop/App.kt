@@ -145,7 +145,9 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     // Hoisted for a sharper reason than the other two: bookmarks are *written* from the player and
     // the reader and *read* on a destination the user may never open, so a holder owned by the
     // bookmarks screen would give Ctrl+B nowhere to put anything.
-    val bookmarks = rememberStateHolder(repository) { BookmarksStateHolder(repository) }
+    val bookmarks = rememberStateHolder(repository, cache) {
+        BookmarksStateHolder(repository, cachedChapters = { cache.chapters(it).value.value })
+    }
     // Hoisted for the same reason: "Add to queue" is pressed on a chapter list, so the queue has to
     // exist and report what happened whether or not the queue screen was ever opened.
     val serverQueue = rememberStateHolder(repository, playback) {
@@ -240,14 +242,17 @@ fun App(container: AppContainer = remember { AppContainer() }) {
      * Opens a mark: loads its fiction, queues it, and starts *at the mark* rather than at the
      * chapter's saved resume position — the whole point of having clicked it.
      *
-     * Fetched through the repository rather than the library cache because this screen has no
-     * fiction context at all: a bookmark can point at a serial the session has never opened.
+     * Loaded through the bookmarks holder, which prefers chapters this session already has and
+     * otherwise fetches them: a bookmark can point at a serial the session has never opened, and a
+     * failure has to be visible on the screen the click came from.
      */
     fun openBookmark(bookmark: Bookmark) {
-        val fictionId = bookmark.fictionId ?: return
         val chapterId = bookmark.chapterId ?: return
         scope.launch {
-            val loaded = runCatching { repository.chapters(fictionId) }.getOrNull() ?: return@launch
+            // The holder owns the request *and* the sentence about it failing; this navigator only
+            // acts on a success. Discarding the exception here is what made a Play against an
+            // unreachable server look like a click that never registered.
+            val loaded = bookmarks.loadForPlayback(bookmark) ?: return@launch
             playback.playQueue(loaded.chapters, chapterId, loaded.fiction, bookmark.positionMs)
             nav.open(Destination.Player)
         }

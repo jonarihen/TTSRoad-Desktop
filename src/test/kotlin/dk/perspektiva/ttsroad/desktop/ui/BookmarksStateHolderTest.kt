@@ -3,6 +3,9 @@ package dk.perspektiva.ttsroad.desktop.ui
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.Bookmark
 import dk.perspektiva.ttsroad.desktop.data.BookmarkKind
+import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
+import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -27,6 +30,71 @@ class BookmarksStateHolderTest {
 
     private fun bookmark(id: Int, createdAt: String = "2027-01-0${id}T09:00:00Z") =
         Bookmark(id = id, chapterId = 100 + id, fictionId = 7, createdAt = createdAt)
+
+    private fun chaptersFor(vararg chapterIds: Int) = ChaptersResponse(
+        fiction = FictionSummary(id = 7, title = "A Test Serial"),
+        chapters = chapterIds.map { ChapterSummary(id = it, title = "Chapter $it") },
+    )
+
+    @Test
+    fun `a bookmark that cannot be loaded says so instead of doing nothing`() = runTest {
+        // Regression: the navigator did `runCatching { ... }.getOrNull() ?: return@launch`, so a
+        // Play against an unreachable server produced no navigation and no message at all.
+        val repository = FakeRepository().apply {
+            chaptersResult = Result.failure(java.io.IOException("offline"))
+        }
+        val holder = holder(repository)
+
+        val loaded = holder.loadForPlayback(bookmark(1))
+
+        assertNull(loaded)
+        assertNotNull(holder.state.value.error, "a failed open has to be visible")
+    }
+
+    @Test
+    fun `a bookmark whose chapter is gone names the fiction it went missing from`() = runTest {
+        val repository = FakeRepository().apply {
+            // The fiction still exists; chapter 101 has been excluded or deleted since the mark.
+            chaptersResult = Result.success(chaptersFor(102, 103))
+        }
+        val holder = holder(repository)
+
+        val loaded = holder.loadForPlayback(bookmark(1))
+
+        assertNull(loaded)
+        assertEquals("That chapter is no longer in A Test Serial", holder.state.value.error)
+    }
+
+    @Test
+    fun `chapters this session already holds are preferred over a request`() = runTest {
+        val repository = FakeRepository().apply {
+            chaptersResult = Result.failure(java.io.IOException("offline"))
+        }
+        val holder = BookmarksStateHolder(
+            repository,
+            UnconfinedTestDispatcher(),
+            cachedChapters = { chaptersFor(101, 102) },
+        )
+
+        val loaded = holder.loadForPlayback(bookmark(1))
+
+        // Offline, but the serial is open in this session — the mark plays without a request.
+        assertNotNull(loaded)
+        assertEquals(0, repository.chaptersCalls)
+        assertNull(holder.state.value.error)
+    }
+
+    @Test
+    fun `a bookmark with no chapter is refused before any request`() = runTest {
+        val repository = FakeRepository()
+        val holder = holder(repository)
+
+        val loaded = holder.loadForPlayback(Bookmark(id = 1, chapterId = null, fictionId = 7))
+
+        assertNull(loaded)
+        assertEquals(0, repository.chaptersCalls)
+        assertNotNull(holder.state.value.error)
+    }
 
     @Test
     fun `loading asks only for manual marks`() = runTest {

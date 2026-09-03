@@ -4,6 +4,7 @@ import dk.perspektiva.ttsroad.desktop.data.Bookmark
 import dk.perspektiva.ttsroad.desktop.data.BookmarkCreateRequest
 import dk.perspektiva.ttsroad.desktop.data.BookmarkLimits
 import dk.perspektiva.ttsroad.desktop.data.BookmarkPatchRequest
+import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import dk.perspektiva.ttsroad.desktop.data.visibleBookmarks
@@ -57,11 +58,56 @@ data class BookmarksUiState(
 class BookmarksStateHolder(
     private val repository: TtsRoadRepository,
     dispatcher: CoroutineDispatcher = Dispatchers.Main,
+    /**
+     * Chapters this session already holds for a fiction, when it holds any.
+     *
+     * Consulted before the network so a mark on a serial that is already open plays offline, which
+     * is the case where a failed request would be most obviously unnecessary. Defaults to knowing
+     * nothing, which is correct for a test and for a screen with no library cache behind it.
+     */
+    private val cachedChapters: (Int) -> ChaptersResponse? = { null },
 ) : StateHolder(dispatcher) {
     private val _state = MutableStateFlow(BookmarksUiState())
     val state: StateFlow<BookmarksUiState> = _state.asStateFlow()
 
     private var loadJob: Job? = null
+
+    /**
+     * Loads what a mark needs in order to play, or says why it could not.
+     *
+     * The request lives here rather than in the caller because a failure needs somewhere to be
+     * *seen*: the previous version discarded the exception in the navigator, so a Play against an
+     * unreachable server produced no navigation, no notice and no error — indistinguishable from a
+     * click that never registered. The caller keeps the playback and the navigation, which are the
+     * two things a holder should not know about.
+     *
+     * Answers null having already published the reason.
+     */
+    suspend fun loadForPlayback(bookmark: Bookmark): ChaptersResponse? {
+        val fictionId = bookmark.fictionId
+        val chapterId = bookmark.chapterId
+        if (fictionId == null || chapterId == null) {
+            _state.update { it.copy(error = "That bookmark does not name a chapter to play") }
+            return null
+        }
+        cachedChapters(fictionId)?.let { cached ->
+            if (cached.chapters.any { it.id == chapterId }) return cached
+        }
+        _state.update { it.copy(error = null) }
+        return runCatching { repository.chapters(fictionId) }
+            .onFailure { failure ->
+                _state.update {
+                    it.copy(error = userFacingMessage(failure, "Could not open that bookmark"))
+                }
+            }
+            .getOrNull()
+            ?.also { loaded ->
+                if (loaded.chapters.none { it.id == chapterId }) {
+                    _state.update { it.copy(error = "That chapter is no longer in ${loaded.fiction.title}") }
+                }
+            }
+            ?.takeIf { loaded -> loaded.chapters.any { it.id == chapterId } }
+    }
 
     /** Loads once. What the bookmarks screen calls on entry; a second visit costs nothing. */
     fun ensureLoaded() {
