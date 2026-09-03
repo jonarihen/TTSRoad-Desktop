@@ -18,6 +18,24 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **New chapters announce themselves, and stay announced until they play.** Following a serial
+  decided only whether it appeared on your shelf; it now also tells you when that serial gains a
+  chapter. The notice is raised the moment the chapter is *pulled* and stays open until it is
+  actually listenable — the promise and the keeping of it are one row rather than two
+  notifications, because being told twice about one chapter is what gets a feature like this
+  muted. A converting chapter offers no Dismiss at all: the server refuses one, and that notice is
+  the only record that the chapter is on its way.
+
+  A header entry carries the count of everything still unresolved, converting chapters included,
+  and the system notification fires only when a chapter becomes playable — never on arrival, and
+  never for a chapter that was already ready when the app started, which would otherwise
+  re-announce the backlog on every launch. A failed conversion reads as stalled rather than as
+  either ready or gone. Shown only where the server advertises the `notifications` capability, and
+  the desktop needs no push credential of any kind: its notification is a rendering of state it
+  already polls. ([#105](https://github.com/jonarihen/TTSRoad-Desktop/issues/105))
+
 ## [1.2.0] - 2026-09-03
 
 The browsing and control-hierarchy pass the Android client had in its 0.14.0, plus the fiction
