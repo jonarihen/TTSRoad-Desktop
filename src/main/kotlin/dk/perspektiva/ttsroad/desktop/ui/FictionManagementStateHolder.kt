@@ -5,6 +5,7 @@ import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
+import dk.perspektiva.ttsroad.desktop.data.SyncScope
 import java.io.File
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +35,22 @@ enum class FictionManagementAccess {
 data class FictionAddDraft(
     val fictionUrl: String = "",
     val voice: String = "",
+    /** Speech rate. Blank leaves the server's default rather than sending a guess. */
+    val rate: String = "",
+    /**
+     * Whether the server keeps polling the source for new chapters. The endpoint's own default.
+     *
+     * Offered here because it is a property of *tracking* a serial, and a finished work is exactly
+     * the case where somebody wants the backlog once and no poller afterwards.
+     */
+    val autoPoll: Boolean = true,
+    /**
+     * How much of the backlog to convert.
+     *
+     * Defaults to what the web form does. The desktop previously sent nothing, which the backend
+     * reads as *every chapter* — see [SyncScope].
+     */
+    val syncScope: SyncScope = SyncScope.Default,
     /**
      * A chosen EPUB, which makes this an *upload* rather than a Royal Road add.
      *
@@ -144,13 +161,22 @@ class FictionManagementStateHolder(
         _state.update { it.copy(editor = FictionAddDraft(), error = null, notice = null) }
     }
 
-    fun updateAdd(fictionUrl: String? = null, voice: String? = null) {
+    fun updateAdd(
+        fictionUrl: String? = null,
+        voice: String? = null,
+        rate: String? = null,
+        autoPoll: Boolean? = null,
+        syncScope: SyncScope? = null,
+    ) {
         _state.update { current ->
             val editor = current.editor ?: return@update current
             current.copy(
                 editor = editor.copy(
                     fictionUrl = fictionUrl ?: editor.fictionUrl,
                     voice = voice ?: editor.voice,
+                    rate = rate ?: editor.rate,
+                    autoPoll = autoPoll ?: editor.autoPoll,
+                    syncScope = syncScope ?: editor.syncScope,
                 ),
             )
         }
@@ -209,6 +235,12 @@ class FictionManagementStateHolder(
                     FictionCreateRequest(
                         fictionUrl = editor.fictionUrl.trim(),
                         voice = editor.voice.trim().takeIf(String::isNotEmpty),
+                        rate = editor.rate.trim().takeIf(String::isNotEmpty),
+                        enabled = editor.autoPoll,
+                        // Always sent, including the null that means "everything": the field is
+                        // chosen in the form, so its absence would be this client guessing again.
+                        syncLimit = editor.syncScope.limit,
+                        syncDirection = editor.syncScope.direction,
                     ),
                 )
             }
@@ -221,7 +253,7 @@ class FictionManagementStateHolder(
                             editor = null,
                             isBusy = false,
                             error = null,
-                            notice = "Added ${fiction.title}; chapter discovery is running on the server",
+                            notice = addedNotice(fiction.title, editor.syncScope),
                         )
                     }
                 }
@@ -306,6 +338,16 @@ class FictionManagementStateHolder(
          * dialog. The extension check is not belt-and-braces: AWT's filename filter is a *hint*
          * that several Linux window managers ignore outright.
          */
+        /** Says what was actually queued, because the three scopes cost wildly different amounts. */
+        internal fun addedNotice(title: String, scope: SyncScope): String = when (scope) {
+            SyncScope.Everything ->
+                "Added $title; the whole backlog is converting on the server"
+            SyncScope.OldestTwentyFive ->
+                "Added $title; the oldest 25 chapters are converting on the server"
+            SyncScope.NewestTwentyFive ->
+                "Added $title; the newest 25 chapters are converting on the server"
+        }
+
         internal fun epubProblem(file: File, maxBytes: Long?): String? = when {
             !file.isFile -> "That file could not be read"
             !file.name.endsWith(".epub", ignoreCase = true) -> "Only .epub files can be uploaded"

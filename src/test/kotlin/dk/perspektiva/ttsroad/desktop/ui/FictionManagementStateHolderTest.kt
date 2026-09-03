@@ -4,6 +4,7 @@ import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
+import dk.perspektiva.ttsroad.desktop.data.SyncScope
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -82,6 +83,99 @@ class FictionManagementStateHolderTest {
         assertNull(repository.createdFictions.single().voice)
         assertNull(holder.state.value.editor)
         assertTrue(holder.state.value.notice.orEmpty().contains("New serial"))
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `adding sends the web form's chapter limit rather than the whole backlog`() = runTest {
+        val repository = adminRepository()
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = adminHolder(repository, cache)
+
+        holder.openAdd()
+        holder.updateAdd(fictionUrl = "424242")
+        holder.submitAdd()
+        runCurrent()
+
+        // The backend reads an absent sync_limit as *every chapter* — `if body.sync_limit:` then
+        // `poll_and_process_fiction(id, True)` — so omitting it queues a whole serial of TTS.
+        val request = repository.createdFictions.single()
+        assertEquals(25, request.syncLimit)
+        assertEquals("last", request.syncDirection)
+        assertTrue(request.enabled)
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `the whole backlog is reachable, and only when it is actually asked for`() = runTest {
+        val repository = adminRepository()
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = adminHolder(repository, cache)
+
+        holder.openAdd()
+        holder.updateAdd(fictionUrl = "424242", syncScope = SyncScope.Everything)
+        holder.submitAdd()
+        runCurrent()
+
+        assertNull(repository.createdFictions.single().syncLimit, "null is the server's own no-limit")
+        assertTrue(
+            holder.state.value.notice.orEmpty().contains("whole backlog"),
+            "the notice has to say what was actually queued: ${holder.state.value.notice}",
+        )
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `oldest first flips the direction rather than the limit`() = runTest {
+        val repository = adminRepository()
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = adminHolder(repository, cache)
+
+        holder.openAdd()
+        holder.updateAdd(fictionUrl = "424242", syncScope = SyncScope.OldestTwentyFive)
+        holder.submitAdd()
+        runCurrent()
+
+        val request = repository.createdFictions.single()
+        assertEquals(25, request.syncLimit)
+        assertEquals("first", request.syncDirection)
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `rate and the auto-poll switch reach the request`() = runTest {
+        val repository = adminRepository()
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = adminHolder(repository, cache)
+
+        holder.openAdd()
+        holder.updateAdd(fictionUrl = "424242", rate = "  +10%  ", autoPoll = false)
+        holder.submitAdd()
+        runCurrent()
+
+        val request = repository.createdFictions.single()
+        assertEquals("+10%", request.rate)
+        assertFalse(request.enabled, "a finished work does not need a poller")
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `a blank rate is omitted rather than sent as an empty string`() = runTest {
+        val repository = adminRepository()
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = adminHolder(repository, cache)
+
+        holder.openAdd()
+        holder.updateAdd(fictionUrl = "424242", rate = "   ")
+        holder.submitAdd()
+        runCurrent()
+
+        assertNull(repository.createdFictions.single().rate, "blank means leave the server's default")
         holder.clear()
         cache.close()
     }

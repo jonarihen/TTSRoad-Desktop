@@ -19,6 +19,7 @@ import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.ParsedFixtures
 import dk.perspektiva.ttsroad.desktop.testLibraryCache
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryBrowsePreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
@@ -74,6 +75,7 @@ class ScreensUiTest {
         // In-memory, so rendering a screen in a test never touches the real
         // ~/.config/TTSRoad files the production stores default to.
         playbackPreferences = InMemoryPlaybackPreferencesStore(),
+        browsePreferences = InMemoryBrowsePreferencesStore(),
         playbackHistory = InMemoryPlaybackHistoryStore(),
         readerPreferencesFactory = { _, _ -> InMemoryReaderPreferencesStore() },
         downloadCoordinatorFactory = ::testDownloads,

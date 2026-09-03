@@ -4,6 +4,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -17,7 +21,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import dk.perspektiva.ttsroad.desktop.data.SyncScope
 
 const val AddFictionDialogTestTag: String = "addFictionDialog"
 const val ChooseEpubButtonTestTag: String = "chooseEpubButton"
@@ -65,7 +71,7 @@ private fun AddFictionDialog(
     isBusy: Boolean,
     error: String?,
     epubUploadAvailable: Boolean,
-    onUpdateAdd: (String?, String?) -> Unit,
+    onUpdateAdd: (String?, String?, String?, Boolean?, SyncScope?) -> Unit,
     onChooseEpub: () -> Unit,
     onClearEpub: () -> Unit,
     onSubmit: () -> Unit,
@@ -87,7 +93,7 @@ private fun AddFictionDialog(
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = editor.fictionUrl,
-                    onValueChange = { onUpdateAdd(it, null) },
+                    onValueChange = { onUpdateAdd(it, null, null, null, null) },
                     label = { Text("ROYAL ROAD URL OR FICTION ID") },
                     supportingText = if (epub != null) {
                         { Text("Not used while an EPUB is chosen") }
@@ -125,13 +131,36 @@ private fun AddFictionDialog(
                 }
                 OutlinedTextField(
                     value = editor.voice,
-                    onValueChange = { onUpdateAdd(null, it) },
+                    onValueChange = { onUpdateAdd(null, it, null, null, null) },
                     label = { Text("VOICE (OPTIONAL)") },
                     supportingText = { Text("Blank uses the server default") },
                     enabled = !isBusy,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                OutlinedTextField(
+                    value = editor.rate,
+                    onValueChange = { onUpdateAdd(null, null, it, null, null) },
+                    label = { Text("SPEECH RATE (OPTIONAL)") },
+                    supportingText = { Text("Blank uses the server default. Nothing already converted is re-narrated.") },
+                    enabled = !isBusy,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                // Only meaningful on the Royal Road path: an EPUB has no source to poll and no
+                // backlog to bound, so offering either control there would be inventing a choice.
+                if (epub == null) {
+                    SyncScopeChoice(
+                        selected = editor.syncScope,
+                        enabled = !isBusy,
+                        onSelect = { onUpdateAdd(null, null, null, null, it) },
+                    )
+                    AutoPollChoice(
+                        enabled = !isBusy,
+                        checked = editor.autoPoll,
+                        onChange = { onUpdateAdd(null, null, null, it, null) },
+                    )
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
@@ -157,4 +186,76 @@ private fun AddFictionDialog(
             }
         },
     )
+}
+
+const val SyncScopeTestTag: String = "addFictionSyncScope"
+const val AutoPollTestTag: String = "addFictionAutoPoll"
+
+/**
+ * How much of the backlog to convert.
+ *
+ * Drawn as a choice rather than left to a default because the default the *server* applies when
+ * this is absent is "everything", and the cost of that is hours of TTS on a long serial. The
+ * whole-backlog option says what it costs before it is picked, not after.
+ */
+@Composable
+private fun SyncScopeChoice(selected: SyncScope, enabled: Boolean, onSelect: (SyncScope) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.testTag(SyncScopeTestTag)) {
+        MetaText("// Chapters to convert now")
+        Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            SyncScope.entries.forEach { scope ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .selectable(
+                            selected = scope == selected,
+                            enabled = enabled,
+                            role = Role.RadioButton,
+                            onClick = { onSelect(scope) },
+                        )
+                        .padding(vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        if (scope == selected) "· ${scope.label}" else scope.label,
+                        color = when {
+                            !enabled -> AarisColor.Dim
+                            scope == selected -> AarisColor.Accent
+                            else -> AarisColor.Muted
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    MetaText(scope.detail, color = AarisColor.Dim)
+                }
+            }
+        }
+    }
+}
+
+/** The server's `enabled` flag, named for what it does rather than for what the field is called. */
+@Composable
+private fun AutoPollChoice(enabled: Boolean, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .toggleable(value = checked, enabled = enabled, role = Role.Checkbox) { onChange(it) }
+            .testTag(AutoPollTestTag)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            if (checked) "[x]" else "[ ]",
+            color = if (checked) AarisColor.Accent else AarisColor.Muted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "Keep checking for new chapters",
+                color = if (enabled) AarisColor.Ink else AarisColor.Dim,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            MetaText("Turn off for a finished work.", color = AarisColor.Dim)
+        }
+    }
 }

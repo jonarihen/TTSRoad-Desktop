@@ -2,6 +2,8 @@ package dk.perspektiva.ttsroad.desktop.di
 
 import dk.perspektiva.ttsroad.desktop.data.AppDirectories
 import dk.perspektiva.ttsroad.desktop.data.FilePlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.BrowsePreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.FileBrowsePreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.FilePlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.FileSessionStore
 import dk.perspektiva.ttsroad.desktop.data.FileWindowPreferencesStore
@@ -102,6 +104,13 @@ class AppContainer(
      * test never writes into the user's config directory.
      */
     val playbackPreferences: PlaybackPreferencesStore = FilePlaybackPreferencesStore(),
+    /**
+     * How the shelf is arranged — order, ticked tags, browsed scope — kept across restarts.
+     *
+     * Machine-local like [playbackPreferences] and for the same reason: it is about how somebody
+     * likes to look at a shelf, not about which account they signed into.
+     */
+    val browsePreferences: BrowsePreferencesStore = FileBrowsePreferencesStore(),
     // Null selects the production local-plus-server store. Supplying a store keeps UI tests wholly
     // in memory and avoids making a fake repository call just because the library was composed.
     playbackHistory: PlaybackHistoryStore? = null,
