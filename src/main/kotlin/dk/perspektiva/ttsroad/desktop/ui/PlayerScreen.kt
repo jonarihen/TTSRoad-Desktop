@@ -687,10 +687,16 @@ fun NowPlayingBar(
             ) {
                 BarTrackInfo(s, Modifier.weight(1f), onExpand)
                 Spacer(Modifier.width(16.dp))
+                // The same interval, icon and controller path as the full player. Two surfaces that
+                // look identical and jump different distances is worse than either distance.
+                val skipSeconds = (s.skipIntervalMs / 1000).toInt()
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TransportButton(Icons.Default.Replay30, "Back 30 seconds", enabled = s.hasMedia, size = 36.dp) {
-                        playback.skipBy(-30_000)
-                    }
+                    TransportButton(
+                        rewindIconFor(skipSeconds),
+                        "Back $skipSeconds seconds",
+                        enabled = s.hasMedia,
+                        size = 36.dp,
+                    ) { playback.skipBackward() }
                     TransportButton(
                         if (s.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         if (s.isPlaying) "Pause" else "Play",
@@ -698,9 +704,12 @@ fun NowPlayingBar(
                         size = 44.dp,
                         filled = true,
                     ) { playback.togglePlayPause() }
-                    TransportButton(Icons.Default.Forward30, "Forward 30 seconds", enabled = s.hasMedia, size = 36.dp) {
-                        playback.skipBy(30_000)
-                    }
+                    TransportButton(
+                        forwardIconFor(skipSeconds),
+                        "Forward $skipSeconds seconds",
+                        enabled = s.hasMedia,
+                        size = 36.dp,
+                    ) { playback.skipForward() }
                     TransportButton(Icons.Default.SkipNext, "Next chapter", enabled = s.hasNext, size = 36.dp) {
                         playback.skipToNextChapter()
                     }

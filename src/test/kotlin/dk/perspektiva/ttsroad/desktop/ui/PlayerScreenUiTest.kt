@@ -167,6 +167,22 @@ class PlayerScreenUiTest {
     }
 
     @Test
+    fun `the now-playing bar honours the configured skip interval`() {
+        // Regression: the bar hard-coded 30 seconds while the full player and reading mode read the
+        // preference, so the same-looking control jumped twice as far depending on which surface
+        // happened to be on screen.
+        val playback = FakePlaybackController(playingState().copy(skipIntervalMs = 15_000))
+        compose.setContent { TtsRoadTheme { NowPlayingBar(playback) {} } }
+
+        compose.onNodeWithContentDescription("Back 15 seconds").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Forward 15 seconds").assertIsDisplayed().performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Back 30 seconds").assertDoesNotExist()
+        assertEquals(1, playback.calls.size, "calls were ${playback.calls}")
+    }
+
+    @Test
     fun `the now-playing bar expands to the full player`() {
         val playback = FakePlaybackController(playingState())
         var expanded = false
