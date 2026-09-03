@@ -212,6 +212,29 @@ interface TtsRoadApi {
      * The account's cross-library queue. Advertised as the `queue` capability; 404 on an older
      * server, which is the only signal available because the endpoint is additive.
      */
+    /**
+     * New-chapter notices for the serials this account follows.
+     *
+     * Dismissed rows are deliberately not requested: the surface is "what is still coming", and a
+     * list that included everything ever cleared would need paging to say the same thing.
+     */
+    @GET("api/mobile/notifications")
+    suspend fun chapterNotifications(): ChapterNotificationsResponse
+
+    /**
+     * Clears one notice.
+     *
+     * Answers **409** while the chapter is still converting. That is the contract, not an edge
+     * case: the notice is the only record that the chapter is coming, so the server refuses to let
+     * a client throw it away early regardless of what that client drew.
+     */
+    @POST("api/mobile/notifications/{notification_id}/dismiss")
+    suspend fun dismissChapterNotification(@Path("notification_id") notificationId: Int)
+
+    /** Clears everything that plays, and deliberately nothing that does not. */
+    @POST("api/mobile/notifications/dismiss-read")
+    suspend fun dismissReadChapterNotifications()
+
     @GET("api/mobile/queue")
     suspend fun queue(): ServerQueueResponse
 

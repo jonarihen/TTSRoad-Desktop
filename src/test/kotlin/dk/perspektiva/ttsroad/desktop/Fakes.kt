@@ -4,6 +4,7 @@ import dk.perspektiva.ttsroad.desktop.data.Bookmark
 import dk.perspektiva.ttsroad.desktop.data.BookmarkCreateRequest
 import dk.perspektiva.ttsroad.desktop.data.BookmarkPatchRequest
 import dk.perspektiva.ttsroad.desktop.data.AudiobookExportsResponse
+import dk.perspektiva.ttsroad.desktop.data.ChapterNotificationsResponse
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.CoverUploadResult
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
@@ -76,6 +77,8 @@ open class FakeRepository(
     var uploadCoverResult: Result<CoverUploadResult> =
         Result.success(CoverUploadResult.Saved(FictionSummary(id = 1, title = "Updated"))),
     var audiobookExportsResult: Result<AudiobookExportsResponse?> = Result.success(null),
+    /** Null models a server whose notifications route answers 404. */
+    var chapterNotificationsResult: Result<ChapterNotificationsResponse?> = Result.success(null),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -134,6 +137,10 @@ open class FakeRepository(
     val updatedFictions: MutableList<Pair<Int, FictionUpdateRequest>> = mutableListOf()
     val deletedFictions: MutableList<Int> = mutableListOf()
     val uploadedEpubs: MutableList<Pair<java.io.File, String?>> = mutableListOf()
+
+    /** Notification ids passed to [dismissChapterNotification], in order. */
+    val dismissedNotifications: MutableList<Int> = mutableListOf()
+    var dismissReadCalls: Int = 0
 
     /** `(fictionId, file)` pairs passed to [uploadFictionCover], in order. */
     val uploadedCovers: MutableList<Pair<Int, java.io.File>> = mutableListOf()
@@ -221,6 +228,19 @@ open class FakeRepository(
     override suspend fun uploadEpub(file: java.io.File, voice: String?): FictionSummary {
         uploadedEpubs += file to voice
         return uploadEpubResult.getOrThrow()
+    }
+
+    override suspend fun chapterNotifications(): ChapterNotificationsResponse? =
+        chapterNotificationsResult.getOrThrow()
+
+    override suspend fun dismissChapterNotification(notificationId: Int): Boolean {
+        dismissedNotifications += notificationId
+        return true
+    }
+
+    override suspend fun dismissReadChapterNotifications(): Boolean {
+        dismissReadCalls++
+        return true
     }
 
     override suspend fun uploadFictionCover(fictionId: Int, file: java.io.File): CoverUploadResult {

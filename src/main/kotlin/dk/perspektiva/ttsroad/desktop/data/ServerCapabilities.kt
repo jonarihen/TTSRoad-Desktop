@@ -71,6 +71,14 @@ data class ServerCapabilities(
     val queue: Boolean = false,
     /** Read-only list/download surface for finished whole-fiction M4B exports. */
     val audiobookExport: Boolean = false,
+    /**
+     * New-chapter notices for followed serials, held open until the chapter is listenable.
+     *
+     * Says nothing about push: the backend advertises this on a deployment with no FCM or VAPID
+     * credential at all, because the list is polled. The desktop needs no push credential either —
+     * its system notification is a rendering of state it already has.
+     */
+    val notifications: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -116,6 +124,7 @@ data class ServerCapabilities(
             deviceManagement = response.capabilities.flag("device_management"),
             queue = response.capabilities.flag("queue"),
             audiobookExport = response.capabilities.flag("audiobook_export"),
+            notifications = response.capabilities.flag("notifications"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             maxEpubBytes = response.limits.longLimit("max_epub_bytes"),

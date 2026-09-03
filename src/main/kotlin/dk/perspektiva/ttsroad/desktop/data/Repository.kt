@@ -282,6 +282,27 @@ interface TtsRoadRepository {
     suspend fun updateServerQueue(request: ServerQueueRequest): ServerQueueResponse?
 
     /**
+     * New-chapter notices, or **null on a server that has none of this**.
+     *
+     * Same rule as [serverQueue]: "nothing new" is an answer worth drawing, "this server cannot
+     * tell you about new chapters" is a surface to hide.
+     */
+    suspend fun chapterNotifications(): ChapterNotificationsResponse? = null
+
+    /**
+     * Clears one notice. Answers false when the server refused because the chapter cannot be
+     * played yet.
+     *
+     * The 409 is caught here rather than thrown, because it is not a failure — it is the server
+     * enforcing the rule this whole feature is built on, and it reaches a caller that already knows
+     * not to have offered the control. Everything else still propagates.
+     */
+    suspend fun dismissChapterNotification(notificationId: Int): Boolean = false
+
+    /** Clears every notice whose chapter plays, leaving the converting ones. */
+    suspend fun dismissReadChapterNotifications(): Boolean = false
+
+    /**
      * Record a listening position and try to get it to the server.
      *
      * Queued to disk with a timestamp *before* being sent. That ordering is the fix for #36: if the
@@ -625,6 +646,26 @@ class RetrofitTtsRoadRepository(
         ifEndpointExists { it.deleteBookmark(bookmarkId) } != null
 
     override suspend fun serverQueue(): ServerQueueResponse? = ifEndpointExists { it.queue() }
+
+    override suspend fun chapterNotifications(): ChapterNotificationsResponse? =
+        ifEndpointExists { it.chapterNotifications() }
+
+    override suspend fun dismissChapterNotification(notificationId: Int): Boolean = try {
+        withAuthorizedApi { it.dismissChapterNotification(notificationId) }
+        true
+    } catch (e: HttpException) {
+        // 409: still converting, which the caller should not have offered but the server refuses
+        // regardless. 404: somebody else's, or already gone. Neither is worth an error dialog —
+        // both mean "the list you are looking at is out of date", and a refresh says so.
+        if (e.code() == 409 || e.code() == 404) false else throw e
+    }
+
+    override suspend fun dismissReadChapterNotifications(): Boolean = try {
+        withAuthorizedApi { it.dismissReadChapterNotifications() }
+        true
+    } catch (e: HttpException) {
+        if (e.code() == 404) false else throw e
+    }
 
     override suspend fun updateServerQueue(request: ServerQueueRequest): ServerQueueResponse? =
         ifEndpointExists { it.updateQueue(request) }

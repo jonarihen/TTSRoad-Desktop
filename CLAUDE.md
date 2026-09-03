@@ -264,6 +264,26 @@ all a caller has to be told, and it retires the control rather than offering a r
 patch is sent *before* the image so a save that worked is kept and published even when the image is
 refused afterwards.
 
+### New-chapter notices
+
+`data/ChapterNotifications.kt` + `ui/ChapterNotificationsStateHolder.kt` model the server's
+`notifications` capability. A notice is raised when a chapter is **pulled** and stays open until
+that chapter is **listenable** — the promise and the keeping of it are one row, not two.
+
+Two rules are load-bearing. **`dismissible` and `playable` come off the wire**, never derived from
+the state name: the server answers 409 to a dismissal of a converting chapter, and a client that
+worked the rule out for itself would be a fourth opinion about something the server enforces. And
+the system notification fires **only on the pulled → ready transition** — `newlyReady` returns
+nothing on the first look of a session, because a chapter that was already ready when the app
+started is not news and announcing it would re-announce the backlog on every launch.
+
+An unknown state parses as `Pulled`, never `Ready`: guessing the latter would offer Play for audio
+that may not exist. The holder is hoisted above navigation like the bookmarks one, and for a
+sharper reason — the badge and the notification are driven by a poll that must run whether or not
+the destination was ever opened. `notify` is a `(String, String) -> Unit` supplied by `Main`, so
+nothing in the tree depends on a tray existing; the desktop needs **no push credential**, because
+its OS notification is a rendering of state it already polls.
+
 ### The server queue, which is not the player's queue
 
 `data/ServerQueue.kt` + `ui/ServerQueueStateHolder.kt` model the account's cross-library queue
