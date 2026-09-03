@@ -141,6 +141,7 @@ open class FakeRepository(
     /** Notification ids passed to [dismissChapterNotification], in order. */
     val dismissedNotifications: MutableList<Int> = mutableListOf()
     var dismissReadCalls: Int = 0
+    var chapterNotificationCalls: Int = 0
 
     /** `(fictionId, file)` pairs passed to [uploadFictionCover], in order. */
     val uploadedCovers: MutableList<Pair<Int, java.io.File>> = mutableListOf()
@@ -230,8 +231,10 @@ open class FakeRepository(
         return uploadEpubResult.getOrThrow()
     }
 
-    override suspend fun chapterNotifications(): ChapterNotificationsResponse? =
-        chapterNotificationsResult.getOrThrow()
+    override suspend fun chapterNotifications(): ChapterNotificationsResponse? {
+        chapterNotificationCalls++
+        return chapterNotificationsResult.getOrThrow()
+    }
 
     override suspend fun dismissChapterNotification(notificationId: Int): Boolean {
         dismissedNotifications += notificationId

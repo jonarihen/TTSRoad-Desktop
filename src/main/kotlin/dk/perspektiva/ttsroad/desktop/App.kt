@@ -174,9 +174,12 @@ fun App(
         ChapterNotificationsStateHolder(repository, notify = notify)
     }
     val notificationState by chapterNotifications.state.collectAsState()
-    // Started here rather than in the screen, for the same reason it is hoisted here.
-    LaunchedEffect(chapterNotifications, capabilities.notifications) {
-        if (capabilities.notifications) chapterNotifications.start()
+    // Started here rather than in the screen, for the same reason it is hoisted here — and gated on
+    // the *session*, not only on the capability. Discovery is unauthenticated, so a capable server
+    // reports `notifications: true` while the login form is still on screen; without this the poll
+    // would start there and fail every minute against a request that has no credential to send.
+    LaunchedEffect(chapterNotifications, capabilities.notifications, session.isLoggedIn) {
+        if (capabilities.notifications && session.isLoggedIn) chapterNotifications.start()
     }
 
     val fictionManagement = rememberStateHolder(repository, cache) {

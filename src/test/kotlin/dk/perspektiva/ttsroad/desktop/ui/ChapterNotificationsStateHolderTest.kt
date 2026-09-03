@@ -209,6 +209,50 @@ class ChapterNotificationsStateHolderTest {
         holder.clear()
     }
 
+    @Test
+    fun `starting twice does not double the polling`() = runTest {
+        // The screen starts it on entry and App starts it on capability discovery; both are correct
+        // and neither should mean two requests a minute.
+        val repository = FakeRepository().apply {
+            chapterNotificationsResult = Result.success(response(notice(1, "pulled")))
+        }
+        val holder = ChapterNotificationsStateHolder(
+            repository,
+            UnconfinedTestDispatcher(testScheduler),
+            pollIntervalMs = 10_000,
+        )
+
+        holder.start()
+        holder.start()
+        runCurrent()
+
+        assertEquals(1, repository.chapterNotificationCalls)
+        holder.clear()
+    }
+
+    @Test
+    fun `signing out stops the poll rather than leaving it running`() = runTest {
+        val repository = FakeRepository().apply {
+            chapterNotificationsResult = Result.success(response(notice(1, "pulled")))
+        }
+        val holder = ChapterNotificationsStateHolder(
+            repository,
+            UnconfinedTestDispatcher(testScheduler),
+            pollIntervalMs = 10_000,
+        )
+        holder.start()
+        runCurrent()
+        val whileSignedIn = repository.chapterNotificationCalls
+
+        holder.sessionEnded()
+        testScheduler.advanceTimeBy(60_000)
+        runCurrent()
+
+        // A request with no credential would fail every interval behind the login screen.
+        assertEquals(whileSignedIn, repository.chapterNotificationCalls)
+        holder.clear()
+    }
+
     // --- the pure rules -------------------------------------------------------------------------
 
     @Test
