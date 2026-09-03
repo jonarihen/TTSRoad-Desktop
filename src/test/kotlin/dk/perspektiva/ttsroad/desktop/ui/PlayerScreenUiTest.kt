@@ -3,6 +3,8 @@ package dk.perspektiva.ttsroad.desktop.ui
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -167,7 +169,7 @@ class PlayerScreenUiTest {
     }
 
     @Test
-    fun `the now-playing bar honours the configured skip interval`() {
+fun `the now-playing bar honours the configured skip interval`() {
         // Regression: the bar hard-coded 30 seconds while the full player and reading mode read the
         // preference, so the same-looking control jumped twice as far depending on which surface
         // happened to be on screen.
@@ -180,6 +182,29 @@ class PlayerScreenUiTest {
 
         compose.onNodeWithContentDescription("Back 30 seconds").assertDoesNotExist()
         assertEquals(1, playback.calls.size, "calls were ${playback.calls}")
+    }
+
+    @Test
+    fun `speed presets announce as a radio group with a selected option`() {
+        // Regression: the presets were plain `Text.clickable`, so a screen reader read them as
+        // unrelated pieces of text with nothing to say which was in force, and the only visual cue
+        // for the current one was the accent colour.
+        val playback = FakePlaybackController(playingState().copy(speed = 1.5f, canChangeSpeed = true))
+        compose.setContent { TtsRoadTheme { PlayerScreen(playback, onBack = {}) } }
+
+        compose.onNodeWithContentDescription("Speed 1.5x").assertIsSelected()
+        compose.onNodeWithContentDescription("Speed 1x").assertIsNotSelected()
+    }
+
+    @Test
+    fun `transport labels are on the node that is actually clickable`() {
+        // The description used to sit on the child Icon while the outer Box carried the click, so
+        // the node a screen reader lands on announced nothing and declared no role.
+        val playback = FakePlaybackController(playingState())
+        compose.setContent { TtsRoadTheme { PlayerScreen(playback, onBack = {}) } }
+
+        compose.onNodeWithContentDescription("Pause").assertHasClickAction()
+        compose.onNodeWithContentDescription("Next chapter").assertHasClickAction()
     }
 
     @Test

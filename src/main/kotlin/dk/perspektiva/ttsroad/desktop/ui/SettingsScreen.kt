@@ -816,9 +816,9 @@ private fun formatSpeed(speed: Float): String {
 /**
  * A labelled row of mutually exclusive choices.
  *
- * `selectableGroup` plus `Role.RadioButton` on each entry is what makes this announce as one
- * choice with N options rather than as N unrelated buttons, and it is why these are not plain
- * clickable boxes.
+ * Now a thin alias over [AarisChoiceRow]. The pattern started here and was reimplemented — badly —
+ * on the player and in the reader, where the options ended up as plain clickable text with no role
+ * and no selected state; it lives in `Components.kt` so there is one of it. See #82.
  */
 @Composable
 private fun <T> ChoiceRow(
@@ -827,59 +827,7 @@ private fun <T> ChoiceRow(
     selected: T,
     labelOf: (T) -> String,
     onSelect: (T) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        MetaText(label)
-        Row(
-            // Nine speeds do not fit a narrow settings pane; scrolling beats wrapping into a grid
-            // whose rows change height as the option list changes.
-            Modifier.horizontalScroll(rememberScrollState()).selectableGroup(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            options.forEach { option ->
-                ChoiceChip(
-                    label = labelOf(option),
-                    selected = option == selected,
-                    onClick = { onSelect(option) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    val focused by interaction.collectIsFocusedAsState()
-    Box(
-        Modifier
-            .hoverable(interaction)
-            .pointerHoverIcon(PointerIcon.Hand)
-            .background(if (selected) AarisColor.BgHover else Color.Transparent)
-            // The AARIS look has no ripple, so focus has to be drawn explicitly or a keyboard-only
-            // user cannot see where they are.
-            .border(
-                1.dp,
-                when {
-                    focused -> AarisColor.Accent
-                    selected -> AarisColor.Ink
-                    hovered -> AarisColor.Muted
-                    else -> AarisColor.Line
-                },
-            )
-            .selectable(
-                selected = selected,
-                interactionSource = interaction,
-                indication = null,
-                role = Role.RadioButton,
-                onClick = onClick,
-            )
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        MetaText(label, color = if (selected || hovered || focused) AarisColor.Ink else AarisColor.Muted)
-    }
-}
+) = AarisChoiceRow(label, options, selected, labelOf, onSelect)
 
 /**
  * Hours, chapters and a streak, computed locally from `listening.json`.
