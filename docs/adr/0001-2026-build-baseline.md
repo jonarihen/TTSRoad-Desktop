@@ -26,7 +26,7 @@ substitute an HTTP client, a clock, a dispatcher, an audio device, or the user's
 | JDK (build + bundled runtime) | **25** | via Gradle toolchains, auto-provisioned |
 | Gradle | **9.6.1** | wrapper, SHA-256 pinned |
 | Kotlin | **2.4.10** | `kotlin.jvm` + `kotlin.plugin.compose`, same version |
-| Compose Multiplatform | **1.11.1** | |
+| Compose Multiplatform | **1.12.0** | |
 | Bytecode target | **25** | `jvmToolchain(25)` + explicit `jvmTarget` / `--release` |
 
 The JDK 25 toolchain is real, not aspirational: `settings.gradle.kts` applies
@@ -55,7 +55,7 @@ which is why the single number starts at 1.0.1 rather than at the old `0.1.0`.
 ### Version catalog and repositories
 
 All plugins and libraries moved to `gradle/libs.versions.toml`. Two entries deliberately do **not**
-track the Compose Multiplatform version, because in CMP 1.11.1 the `compose.material3` and
+track the Compose Multiplatform version, because since CMP 1.11.1 the `compose.material3` and
 `compose.materialIconsExtended` accessors became **error-level** deprecations ("Specify dependency
 directly") that stop the build script from compiling:
 
@@ -83,7 +83,7 @@ an error-level "unnecessary non-null assertion"), and MockWebServer moved from
 
 ### ProGuard
 
-CMP 1.11.1 hardcodes ProGuard 7.7.0, which **cannot parse Java 25 bytecode**
+CMP hardcodes ProGuard 7.7.0, which **cannot parse Java 25 bytecode**
 (`Unsupported version number [69.0]`). `buildTypes.release.proguard.version` is pinned to
 **7.9.1**; 7.8.0 was the first release with Java 25 support. The release/minified path is not
 currently used, but the override is set so it does not surprise the first person who tries it.
@@ -102,7 +102,7 @@ reached only through reflection, SPI or TLS negotiation.
 ### Configuration cache
 
 **Enabled** (`org.gradle.configuration-cache=true`). Verified storing and reusing across
-`compileKotlin`, `test`, `check` and `createDistributable` with Compose Multiplatform 1.11.1.
+`compileKotlin`, `test`, `check` and `createDistributable` with Compose Multiplatform 1.12.0.
 
 ### Architecture seams
 
