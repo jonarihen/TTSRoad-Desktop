@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.desktop.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -20,6 +21,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -154,6 +158,115 @@ private fun RowIconActionAnchor(
             },
             modifier = Modifier.size(18.dp),
         )
+    }
+}
+
+/**
+ * One option in a group of mutually exclusive choices.
+ *
+ * Extracted from Settings, which is where the pattern was already right, because the player's speed
+ * presets and the reader's theme and highlight choices were plain `Text.clickable`: announced as
+ * generic clickable text, with the current choice carried by colour alone and no visible focus at
+ * all. Three things are load-bearing here and none of them survive being reimplemented per screen:
+ *
+ * - **[Role.RadioButton] and `selected`** — so a screen reader says "radio button, selected" rather
+ *   than reading four labels with nothing to say which one is in force.
+ * - **A focus border drawn explicitly** — the AARIS look has no ripple, so a keyboard-only user has
+ *   nothing else to tell them where they are.
+ * - **Selection shown by more than colour** — the background and the border both move, because
+ *   colour alone fails anyone who cannot separate accent from muted.
+ *
+ * The caller is responsible for wrapping the group in [selectableGroup]; see [AarisChoiceRow] for
+ * the ordinary case where the options sit in a row together.
+ */
+@Composable
+fun AarisChoiceChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    /** Overrides what a screen reader announces, where the visible label is an abbreviation. */
+    contentDescription: String? = null,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    val description = contentDescription
+    Box(
+        modifier
+            .hoverable(interaction, enabled = enabled)
+            .let { if (enabled) it.pointerHoverIcon(PointerIcon.Hand) else it }
+            .background(if (selected) AarisColor.BgHover else Color.Transparent)
+            .border(
+                1.dp,
+                when {
+                    !enabled -> AarisColor.Line
+                    focused -> AarisColor.Accent
+                    selected -> AarisColor.Ink
+                    hovered -> AarisColor.Muted
+                    else -> AarisColor.Line
+                },
+            )
+            .selectable(
+                selected = selected,
+                enabled = enabled,
+                interactionSource = interaction,
+                indication = null,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
+            .let { base ->
+                if (description == null) base else base.semantics { this.contentDescription = description }
+            }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        MetaText(
+            label,
+            color = when {
+                !enabled -> AarisColor.Dim
+                selected -> AarisColor.Accent
+                hovered || focused -> AarisColor.Ink
+                else -> AarisColor.Muted
+            },
+        )
+    }
+}
+
+/**
+ * A labelled row of mutually exclusive choices.
+ *
+ * [selectableGroup] is what makes this announce as one choice with N options rather than as N
+ * unrelated buttons, which is the whole reason these are not plain clickable boxes.
+ */
+@Composable
+fun <T> AarisChoiceRow(
+    label: String?,
+    options: List<T>,
+    selected: T,
+    labelOf: (T) -> String,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    isSelected: (T, T) -> Boolean = { option, current -> option == current },
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (label != null) MetaText(label)
+        Row(
+            // Nine speeds do not fit a narrow pane; scrolling beats wrapping into a grid whose rows
+            // change height as the option list changes.
+            Modifier.horizontalScroll(rememberScrollState()).selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            options.forEach { option ->
+                AarisChoiceChip(
+                    label = labelOf(option),
+                    selected = isSelected(option, selected),
+                    onClick = { onSelect(option) },
+                    enabled = enabled,
+                )
+            }
+        }
     }
 }
 

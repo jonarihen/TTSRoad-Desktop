@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -898,13 +899,15 @@ private fun ReaderSettingsDialog(
                     onIncrease = { onChange { it.copy(lineHeight = it.lineHeight + 0.1) } },
                 )
                 MetaText("// Theme", color = AarisColor.Accent)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // `selectableGroup` on the row, not on each option: it is what makes three themes
+                // announce as one choice with three answers rather than as three loose buttons.
+                Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ReaderTheme.entries.forEach { theme ->
                         ReaderChoice(theme.label, theme == prefs.theme) { onChange { it.copy(theme = theme) } }
                     }
                 }
                 MetaText("// Highlight", color = AarisColor.Accent)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ReaderHighlight.entries.forEach { mode ->
                         ReaderChoice(mode.label, mode == prefs.highlight) { onChange { it.copy(highlight = mode) } }
                     }
@@ -935,16 +938,14 @@ private fun ReaderNumberControl(
     }
 }
 
+/**
+ * One reader theme or highlight option.
+ *
+ * Was a plain `Text.clickable` conveying its state through colour alone: announced as generic
+ * clickable text, with no role, no selected state and no focus ring. It is now the same primitive
+ * Settings and the player's speed presets use — the caller wraps the group in `selectableGroup`.
+ */
 @Composable
 private fun ReaderChoice(label: String, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        label.uppercase(),
-        color = if (selected) AarisColor.Accent else AarisColor.Muted,
-        modifier = Modifier
-            .border(1.dp, if (selected) AarisColor.Accent else AarisColor.Line)
-            .clickable(onClick = onClick)
-            .pointerHoverIcon(PointerIcon.Hand)
-            .padding(horizontal = 9.dp, vertical = 7.dp),
-        style = MaterialTheme.typography.labelLarge,
-    )
+    AarisChoiceChip(label = label.uppercase(), selected = selected, onClick = onClick)
 }

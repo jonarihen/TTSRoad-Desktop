@@ -27,6 +27,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.FastForward
@@ -360,23 +361,27 @@ private fun SpeedControl(
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         MetaText("Speed", color = AarisColor.Dim)
-        SpeedPresets.forEach { preset ->
-            // Compared with a tolerance, not ==: the value shown is the one the engine accepted,
-            // which can be a clamped float rather than the exact preset that was asked for.
-            val isCurrent = kotlin.math.abs(current - preset) < 0.01f
-            Text(
-                text = formatSpeed(preset),
-                color = when {
-                    !enabled -> AarisColor.Dim
-                    isCurrent -> AarisColor.Accent
-                    else -> AarisColor.Muted
-                },
-                modifier = Modifier
-                    .testTag(SpeedChipTestTag)
-                    .clickable(enabled = enabled) { onSelect(preset) }
-                    .pointerHoverIcon(PointerIcon.Hand)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-            )
+        // One `selectableGroup`, so this announces as one choice with N options rather than as N
+        // unrelated pieces of clickable text — the same treatment Settings already gave its panes.
+        Row(
+            Modifier.selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SpeedPresets.forEach { preset ->
+                // Compared with a tolerance, not ==: the value shown is the one the engine accepted,
+                // which can be a clamped float rather than the exact preset that was asked for.
+                val isCurrent = kotlin.math.abs(current - preset) < 0.01f
+                AarisChoiceChip(
+                    label = formatSpeed(preset),
+                    selected = isCurrent,
+                    onClick = { onSelect(preset) },
+                    modifier = Modifier.testTag(SpeedChipTestTag),
+                    enabled = enabled,
+                    // "1.5×" is an abbreviation; a screen reader should not have to guess the unit.
+                    contentDescription = "Speed ${formatSpeed(preset)}",
+                )
+            }
         }
         if (perFiction) {
             Text(
@@ -769,6 +774,9 @@ private fun TransportButton(
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
+    // Bound before entering the semantics lambda: inside it the bare name resolves to the
+    // write-only semantics property rather than to this parameter.
+    val description = contentDescription
     val hovered by interaction.collectIsHoveredAsState()
     // Transport controls are the most likely thing to be driven from the keyboard, so focus has
     // to be as visible here as hover is with a mouse.
@@ -802,9 +810,21 @@ private fun TransportButton(
             )
             .hoverable(interaction)
             .let { if (enabled) it.pointerHoverIcon(PointerIcon.Hand) else it }
-            .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick),
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            // On the clickable node rather than on the child Icon: that is the node a screen reader
+            // lands on and the node that carries the role, and a description on the child leaves
+            // the actionable node announcing nothing. Same rule as RowIconAction.
+            .let { base ->
+                if (description == null) base else base.semantics { this.contentDescription = description }
+            },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription, tint = tint, modifier = Modifier.size(size / 2))
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size / 2))
     }
 }
