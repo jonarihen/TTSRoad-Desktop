@@ -139,15 +139,111 @@ data class FictionSummary(
      * chapters arrived. Null means *ask someone else*, and false would have meant "not followed".
      */
     val following: Boolean? = null,
+    /**
+     * When the fiction row was created and last touched, as the server serialised them.
+     *
+     * ISO-8601 strings rather than parsed instants: they are only ever compared with each other and
+     * sorted, which the lexicographic order of a UTC ISO stamp already gives, and parsing would
+     * turn a server sending a shape this build has not seen into a failed library load.
+     *
+     * Null on a server that does not send them. Null is **not** "a long time ago" — it means *we
+     * were not told* — so every order built on these sorts nulls last. See [FictionSort].
+     */
+    @param:Json(name = "created_at") val createdAt: String? = null,
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+    /**
+     * This caller's progress through the fiction, computed by the server in one grouped query.
+     *
+     * Nested rather than flattened alongside [totalChapters] and [doneChapters], exactly as the
+     * backend nests it, and for the backend's own stated reason: those are properties of the
+     * fiction and the same for everybody, while every field in here is scoped to the account
+     * asking. A shared-looking object holding per-user numbers is how a cache serves one listener
+     * another's progress.
+     *
+     * Null on `/api/mobile/fictions/{id}/chapters`, which builds its `fiction` with
+     * `_fiction_payload()` and does not add the key, and on any server predating the aggregate.
+     */
+    val progress: FictionProgress? = null,
 ) {
     val readyFraction: Float
         get() = if (totalChapters > 0) (doneChapters.toFloat() / totalChapters).coerceIn(0f, 1f) else 0f
 }
 
-/** Admin-only `POST /api/mobile/fictions`. A bare Royal Road id is accepted by the server. */
+/**
+ * What one account has left of one fiction, as the server counts it.
+ *
+ * The labels are the server's own rendering and are preferred over anything computed here, so the
+ * desktop and the web shelf cannot disagree about the same book by rounding differently.
+ */
+data class FictionProgress(
+    @param:Json(name = "chapters_total") val chaptersTotal: Int = 0,
+    /** Chapters with audio — the ones that can actually be listened to. */
+    @param:Json(name = "chapters_ready") val chaptersReady: Int = 0,
+    @param:Json(name = "chapters_played") val chaptersPlayed: Int = 0,
+    @param:Json(name = "chapters_unplayed") val chaptersUnplayed: Int = 0,
+    @param:Json(name = "duration_seconds") val durationSeconds: Double = 0.0,
+    @param:Json(name = "duration_label") val durationLabel: String? = null,
+    @param:Json(name = "remaining_seconds") val remainingSeconds: Double = 0.0,
+    @param:Json(name = "remaining_label") val remainingLabel: String? = null,
+) {
+    /**
+     * How much of what can be heard has been heard, or null when nothing can be yet.
+     *
+     * Null rather than zero for an unconverted book: "0% listened" and "there is nothing to listen
+     * to" are different sentences, and only one of them is about the reader.
+     */
+    val listenedFraction: Float?
+        get() = if (chaptersReady > 0) {
+            (chaptersPlayed.toFloat() / chaptersReady).coerceIn(0f, 1f)
+        } else {
+            null
+        }
+
+    /** True where the server actually had something to say, as opposed to filling in the shape. */
+    val isMeaningful: Boolean get() = chaptersTotal > 0 || chaptersReady > 0
+}
+
+/**
+ * How much of a serial's backlog to convert when it is first tracked.
+ *
+ * The whole point of naming this is that **the server's default is everything**: `add_fiction`
+ * branches on `if body.sync_limit:` and otherwise calls `poll_and_process_fiction(id, True)`. A
+ * client that omits the field is not accepting a sensible default, it is queueing four hundred
+ * chapters of TTS. The web form has posted 25 since it existed.
+ */
+enum class SyncScope(val label: String, val detail: String) {
+    NewestTwentyFive("Newest 25", "What the web console does. Older chapters can be filled in later."),
+    OldestTwentyFive("Oldest 25", "Start at the beginning of the serial."),
+    Everything("Everything", "Converts the entire backlog now. On a long serial this is hours of audio."),
+    ;
+
+    /** Null for [Everything], which is the server's own "no limit" sentinel. */
+    val limit: Int? get() = if (this == Everything) null else DefaultBatch
+
+    /** The server's vocabulary: `last` counts back from the newest chapter, `first` forward. */
+    val direction: String get() = if (this == OldestTwentyFive) "first" else "last"
+
+    companion object {
+        /** Matches the web form, which is the behaviour everyone adding a fiction already expects. */
+        val Default: SyncScope = NewestTwentyFive
+        private const val DefaultBatch: Int = 25
+    }
+}
+
+/**
+ * Admin-only `POST /api/mobile/fictions`. A bare Royal Road id is accepted by the server.
+ *
+ * [syncLimit] is deliberately **not** nullable-by-omission in the caller's mind: see [SyncScope].
+ * `enabled` is the auto-poll switch and defaults to the server's own `True`.
+ */
 data class FictionCreateRequest(
     @param:Json(name = "fiction_url") val fictionUrl: String,
     val voice: String? = null,
+    /** Speech rate, in the same vocabulary `FictionUpdate.rate` uses. Null leaves the default. */
+    val rate: String? = null,
+    val enabled: Boolean = true,
+    @param:Json(name = "sync_limit") val syncLimit: Int? = null,
+    @param:Json(name = "sync_direction") val syncDirection: String = "last",
 )
 
 /**

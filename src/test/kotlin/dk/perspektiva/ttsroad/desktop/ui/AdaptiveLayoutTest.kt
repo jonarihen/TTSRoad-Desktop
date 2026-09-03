@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.desktop.ui
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.ListeningTotals
+import dk.perspektiva.ttsroad.desktop.data.filterFictionsByText
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -43,19 +44,19 @@ class AdaptiveLayoutTest {
 
     @Test
     fun `search matches title, author and tags, case-insensitively`() {
-        assertEquals(listOf(1), filterFictions(fictions, "test serial").map { it.id })
-        assertEquals(listOf(2), filterFictions(fictions, "WRITER").map { it.id })
-        assertEquals(listOf(1), filterFictions(fictions, "litrpg").map { it.id })
+        assertEquals(listOf(1), filterFictionsByText(fictions, "test serial").map { it.id })
+        assertEquals(listOf(2), filterFictionsByText(fictions, "WRITER").map { it.id })
+        assertEquals(listOf(1), filterFictionsByText(fictions, "litrpg").map { it.id })
     }
 
     @Test
     fun `a blank query is not a filter`() {
-        assertEquals(fictions, filterFictions(fictions, "   "))
+        assertEquals(fictions, filterFictionsByText(fictions, "   "))
     }
 
     @Test
     fun `surrounding whitespace is ignored`() {
-        assertEquals(listOf(1), filterFictions(fictions, "  serial  ").map { it.id })
+        assertEquals(listOf(1), filterFictionsByText(fictions, "  serial  ").map { it.id })
     }
 
     // --- "how old is this" ---------------------------------------------------------------------

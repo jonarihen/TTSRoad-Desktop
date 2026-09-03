@@ -61,6 +61,43 @@ class ModelParsingTest {
         assertEquals(1, fiction.errorChapters)
         assertEquals(1, fiction.processingChapters)
         assertEquals(0.6f, fiction.readyFraction)
+        // The 1.4.0 fixture predates the aggregate, which is exactly the older-server case: null,
+        // never a zeroed shape, because `0 left` would be a claim about the reader.
+        assertNull(fiction.progress)
+        assertEquals("2026-01-02T03:04:05Z", fiction.createdAt)
+        assertEquals("2026-08-01T03:04:05Z", fiction.updatedAt)
+    }
+
+    @Test
+    fun `a newer server's per-caller progress aggregate is decoded`() {
+        val fiction = parse<FictionSummary>(
+            """
+            {
+              "id": 7,
+              "title": "A Test Serial",
+              "total_chapters": 40,
+              "done_chapters": 30,
+              "progress": {
+                "chapters_total": 40,
+                "chapters_ready": 30,
+                "chapters_played": 12,
+                "chapters_unplayed": 18,
+                "duration_seconds": 54000.0,
+                "duration_label": "15h",
+                "remaining_seconds": 32400.0,
+                "remaining_label": "9h",
+                "some_key_this_build_has_never_seen": 1
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val progress = assertNotNull(fiction.progress)
+        assertEquals(30, progress.chaptersReady)
+        assertEquals(18, progress.chaptersUnplayed)
+        assertEquals("9h", progress.remainingLabel)
+        assertEquals(0.4f, progress.listenedFraction)
+        assertTrue(progress.isMeaningful)
     }
 
     @Test

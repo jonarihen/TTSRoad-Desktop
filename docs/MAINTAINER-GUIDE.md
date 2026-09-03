@@ -76,7 +76,7 @@ whole response fail. Limits are server policy, not suggestions; honor them when 
 | Data | Location class | Lifetime |
 | --- | --- | --- |
 | bearer token | OS credential store only | removed on sign-out/revocation |
-| server/account hints, window/listening/reader settings, history | platform config | retained across sign-out; no secrets |
+| server/account hints, window/listening/reader/browse settings, history | platform config | retained across sign-out; no secrets |
 | requested chapter downloads | platform data, server/account identity namespace | user-managed, never automatically evicted |
 | streamed audio, library metadata, read-along text | platform cache, identity namespace | rebuildable and bounded |
 | logs | platform state | redacted, owner-only, 1 MiB + three backups |

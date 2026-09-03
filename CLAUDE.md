@@ -100,6 +100,39 @@ Chapter MP3s are bearer-protected and pushed *into* GStreamer (`appsrc`) rather 
 via `HttpMediaSource` on the shared client — that is how the auth interceptor and its origin rule
 apply to audio.
 
+### Browsing the shelf
+
+`data/FictionBrowse.kt` is the whole pipeline — scope, tags, text, order — as pure functions, and
+`browseFictions` applies them in that sequence so a screen cannot reorder the stages and change what
+"N of M" counts. **Nulls sort last in every order, without exception**: a missing `updated_at`, an
+absent rating and a row with no `progress` all mean *we were not told*, which is not "a long time
+ago" or "zero", and letting an absent answer read as the smallest one buries the book that just
+arrived. Ties break on title so the order is total; a lazy grid whose items swap places between two
+recompositions of the same data is a scroll position that will not stay still.
+
+Tag filtering is an **intersection** — two ticked tags mean both — matching `ttsroadApplyLibrary` in
+the web client, because a filter that widens the list as you add to it is one nobody uses twice. The
+vocabulary is the union of tags on the loaded shelf, not a fixed list; a ticked tag nothing carries
+any more is dropped rather than left emptying the grid with no box on screen to un-tick.
+
+`FictionSummary.progress` is the server's **per-caller** aggregate, decoded nested exactly as the
+backend nests it and for the backend's stated reason: the flat counters are properties of the
+fiction and the same for everybody, while every key inside `progress` is scoped to the account
+asking. Its labels are preferred over anything formatted locally so the desktop and the web shelf
+cannot disagree about the same book by rounding. It is null on `/chapters`, which builds its
+`fiction` without the key.
+
+`data/BrowsePreferences.kt` keeps order, tags and scope in `browse.json` — OS-profile-local like
+`playback.json`, fully nullable on disk, sort stored as a string so an order a newer build added
+degrades to the default rather than failing the parse. **The search text is deliberately not
+persisted**: a search is a question being asked now, and restoring last week's would open the shelf
+onto a near-empty grid with no visible cause.
+
+`SyncScope` exists because the server's default is the dangerous one: `add_fiction` branches on
+`if body.sync_limit:` and otherwise converts *every chapter*, so a client that omits the field
+queues a whole backlog. The dialog defaults to the web form's newest 25 and the whole-backlog option
+states its cost before it is picked.
+
 ### Listening preferences, the sleep timer and history
 
 - `data/PlaybackPreferences.kt` — speed, skip interval, skip silence, volume boost, in

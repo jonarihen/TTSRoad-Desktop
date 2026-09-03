@@ -35,6 +35,7 @@ import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryBrowsePreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
@@ -74,6 +75,14 @@ class NavigationUiTest {
         },
     )
 
+    /** Two tags, deliberately carried by different fictions, so "both" and "either" differ. */
+    private fun taggedLibrary() = LibraryResponse(
+        fictions = listOf(
+            FictionSummary(id = 1, title = "Serial 01", tags = listOf("LitRPG"), totalChapters = 3),
+            FictionSummary(id = 2, title = "Serial 02", tags = listOf("Romance"), totalChapters = 3),
+        ),
+    )
+
     private val chapters = ChaptersResponse(
         fiction = FictionSummary(id = 50, title = "Serial 50"),
         total = 1,
@@ -100,6 +109,7 @@ class NavigationUiTest {
         // In-memory, so rendering a screen in a test never touches the real
         // ~/.config/TTSRoad files the production stores default to.
         playbackPreferences = InMemoryPlaybackPreferencesStore(),
+        browsePreferences = InMemoryBrowsePreferencesStore(),
         playbackHistory = InMemoryPlaybackHistoryStore(),
         readerPreferencesFactory = { _, _ -> InMemoryReaderPreferencesStore() },
         // See `testLibraryCache`: immediate main dispatch is what makes `waitForIdle` sufficient.
@@ -200,6 +210,83 @@ class NavigationUiTest {
         // One announcement for a screen reader: the failure *and* how old what is on screen is.
         compose.onNode(hasContentDescription("connection reset", substring = true)).assertIsDisplayed()
         compose.onNode(hasContentDescription("Showing content from", substring = true)).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a failed refresh stays visible even when the grid is scrollable`() {
+        // Regression: both notices used to be items *inside* the lazy grid. A lazy list anchors its
+        // scroll position on the key of whatever is at the top, so inserting a banner above that
+        // anchor scrolled by exactly the banner's height and the notice arrived already out of
+        // view — on precisely the screens with enough content to scroll, which is most of them.
+        val repository = FakeRepository(libraryResult = Result.success(bigLibrary(40)))
+        compose.setContent { TtsRoadTheme { App(container(repository)) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag(LibraryGridTestTag).performScrollToIndex(20)
+        compose.waitForIdle()
+
+        repository.libraryResult = Result.failure(IllegalStateException("connection reset"))
+        compose.onNodeWithContentDescription("Refresh").performClick()
+        compose.waitForIdle()
+
+        compose.onNode(hasContentDescription("connection reset", substring = true)).assertIsDisplayed()
+    }
+
+    @Test
+    fun `the shelf can be reordered and the control says which order is in force`() {
+        val repository = FakeRepository(libraryResult = Result.success(bigLibrary(3)))
+        compose.setContent { TtsRoadTheme { App(container(repository)) } }
+        compose.waitForIdle()
+
+        // The label is the order itself: a grid should never have to be read to work out how it is
+        // arranged.
+        compose.onNodeWithTag(BrowseSortTestTag).assertIsDisplayed().performClick()
+        compose.waitForIdle()
+        // Picking an order closes the sheet: there is exactly one answer, so there is nothing
+        // left to confirm.
+        compose.onNodeWithText("Title").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("ORDER: TITLE").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a tag filter states itself and can be cleared`() {
+        val repository = FakeRepository(libraryResult = Result.success(taggedLibrary()))
+        compose.setContent { TtsRoadTheme { App(container(repository)) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag(BrowseTagTestTag).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Romance").performClick()
+        compose.onNodeWithText("DONE").performClick()
+        compose.waitForIdle()
+
+        // A filter that hides rows without saying it is on is indistinguishable from a server that
+        // has lost the shelf.
+        compose.onNodeWithTag(BrowseFilterSummaryTestTag).assertIsDisplayed()
+        compose.onNodeWithText("Serial 01").assertDoesNotExist()
+
+        compose.onNodeWithText("CLEAR TAGS").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Serial 01").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a tag that excludes everything says so rather than blaming the server`() {
+        val repository = FakeRepository(libraryResult = Result.success(taggedLibrary()))
+        compose.setContent { TtsRoadTheme { App(container(repository)) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag(BrowseTagTestTag).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Romance").performClick()
+        compose.onNodeWithText("LitRPG").performClick()
+        compose.onNodeWithText("DONE").performClick()
+        compose.waitForIdle()
+
+        // Two ticked tags mean both, and no fiction here carries both.
+        compose.onNode(hasText("NO FICTIONS CARRY ALL 2 OF THOSE TAGS", substring = true))
+            .assertIsDisplayed()
     }
 
     @Test

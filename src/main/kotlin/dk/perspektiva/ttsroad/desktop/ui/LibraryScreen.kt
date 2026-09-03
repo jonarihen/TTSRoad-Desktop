@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +25,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -40,11 +43,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -72,6 +77,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.staleTags
+import dk.perspektiva.ttsroad.desktop.data.emptyBrowseReason
+import dk.perspektiva.ttsroad.desktop.data.browseFictions
+import dk.perspektiva.ttsroad.desktop.data.availableTags
+import dk.perspektiva.ttsroad.desktop.data.InMemoryBrowsePreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.EmptyBrowseReason
+import dk.perspektiva.ttsroad.desktop.data.FictionSort
+import dk.perspektiva.ttsroad.desktop.data.FictionProgress
+import dk.perspektiva.ttsroad.desktop.data.BrowsePreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.PlaybackHistory
@@ -134,6 +148,13 @@ fun LibraryScreen(
      */
     history: PlaybackHistoryStore = remember { InMemoryPlaybackHistoryStore() },
     /**
+     * Order, ticked tags and browsed scope, kept across restarts.
+     *
+     * Defaulted to an in-memory store so a screen test never reads or writes the real config
+     * directory, exactly like [history].
+     */
+    browsePreferences: BrowsePreferencesStore = remember { InMemoryBrowsePreferencesStore() },
+    /**
      * Which account's snapshots may be shown. Blank means "nobody's", which is what a signed-out
      * screen and a history file from an older build both get — see [PlaybackHistory.jumpBackChoices].
      */
@@ -143,10 +164,10 @@ fun LibraryScreen(
     val scope = rememberCoroutineScope()
     // Retained per destination, so walking into a fiction from browse-all and back lands where the
     // user left rather than snapping to the shelf.
-    var browsing by rememberSaveable { mutableStateOf(false) }
+    val browse by browsePreferences.preferences.collectAsState()
     // Browse-all is unreachable on a server without follows, and staying in it after a downgrade
     // would leave the user in a mode the server no longer honours.
-    val browseAll = browsing && followsAvailable
+    val browseAll = browse.browsingAll && followsAvailable
     val shelf by cache.library.collectAsState()
     val everything by cache.browseAll.collectAsState()
     val state = if (browseAll) everything else shelf
@@ -186,32 +207,48 @@ fun LibraryScreen(
         rails == null && shelf.error != null -> InitialErrorState(shelf.error.orEmpty()) { cache.refreshLibrary() }
         rails == null -> CenterProgress()
         else -> {
-            val filtered = remember(library?.fictions, query) {
-                filterFictions(library?.fictions.orEmpty(), query)
+            val loaded = library?.fictions.orEmpty()
+            // One call rather than four steps inline: the screen must apply scope, tags, text and
+            // order in the same sequence the tests do, or "14 of 200" counts a different stage.
+            val result = remember(loaded, query, browse.tags, browse.sort) {
+                browseFictions(loaded, query, browse.tags, browse.sort)
+            }
+            val filtered = result.fictions
+            val tags = remember(loaded) { availableTags(loaded) }
+            // A ticked tag whose last fiction was deleted would otherwise empty the grid with no
+            // box left on screen to un-tick, so it is dropped rather than left in force.
+            val stale = remember(loaded, browse.tags) { staleTags(loaded, browse.tags) }
+            LaunchedEffect(stale) {
+                if (stale.isNotEmpty()) {
+                    browsePreferences.update { it.copy(tags = it.tags - stale) }
+                }
             }
             val keys = remember(filtered) { fictionKeys(filtered) }
             Box(Modifier.fillMaxSize()) {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(MinCardWidth),
-                    state = gridState,
-                    modifier = Modifier
+                Column(
+                    Modifier
                         .align(Alignment.TopCenter)
                         .widthIn(max = ContentMaxWidth)
-                        .fillMaxSize()
-                        .testTag(LibraryGridTestTag),
-                    contentPadding = PaddingValues(PageGutter),
-                    horizontalArrangement = Arrangement.spacedBy(GridGap),
-                    verticalArrangement = Arrangement.spacedBy(GridGap),
+                        .fillMaxSize(),
                 ) {
-                    openError?.let { message ->
-                        fullWidthItem("open-error") {
+                    // Pinned above the grid rather than scrolling inside it.
+                    //
+                    // Both of these are announcements about the *screen*, and a lazy list anchors
+                    // its scroll position on the key of whatever is at the top: inserting a banner
+                    // above that anchor scrolls by exactly the banner's height, so a notice about a
+                    // failed refresh could appear already out of view. Keeping them outside the
+                    // scroller is the only way "we told you" and "you could see it" stay the same
+                    // statement.
+                    Column(
+                        Modifier.padding(horizontal = PageGutter),
+                        verticalArrangement = Arrangement.spacedBy(GridGap),
+                    ) {
+                        openError?.let { message ->
+                            Spacer(Modifier.height(PageGutter))
                             InlineNotice(message) { openError = null }
                         }
-                    }
-
-                    // A refresh that failed reports itself here, above content it did not replace.
-                    if (state.isStale) {
-                        fullWidthItem("stale") {
+                        if (state.isStale) {
+                            Spacer(Modifier.height(PageGutter))
                             StaleContentBanner(
                                 message = error.orEmpty(),
                                 lastSuccessMillis = state.lastSuccessMillis,
@@ -220,7 +257,17 @@ fun LibraryScreen(
                             )
                         }
                     }
-
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(MinCardWidth),
+                    state = gridState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .testTag(LibraryGridTestTag),
+                    contentPadding = PaddingValues(PageGutter),
+                    horizontalArrangement = Arrangement.spacedBy(GridGap),
+                    verticalArrangement = Arrangement.spacedBy(GridGap),
+                ) {
                     val continueList = rails.continueListening
                     if (continueList.isNotEmpty()) {
                         val hero = continueList.first()
@@ -313,7 +360,9 @@ fun LibraryScreen(
                                 Spacer(Modifier.height(10.dp))
                             }
                             if (followsAvailable) {
-                                LibraryScopeTabs(browseAll) { browsing = it }
+                                LibraryScopeTabs(browseAll) { wanted ->
+                                    browsePreferences.update { it.copy(browsingAll = wanted) }
+                                }
                                 Spacer(Modifier.height(14.dp))
                             }
                             if (library != null && library.fictions.isNotEmpty()) {
@@ -341,6 +390,31 @@ fun LibraryScreen(
                                         onSearch = { onSearchServer(query) },
                                     )
                                 }
+                                Spacer(Modifier.height(14.dp))
+                                BrowseControls(
+                                    sort = browse.sort,
+                                    onSort = { picked ->
+                                        browsePreferences.update { it.copy(sort = picked) }
+                                    },
+                                    tags = tags,
+                                    selectedTags = browse.tags,
+                                    onToggleTag = { tag ->
+                                        browsePreferences.update { current ->
+                                            current.copy(
+                                                tags = if (tag in current.tags) {
+                                                    current.tags - tag
+                                                } else {
+                                                    current.tags + tag
+                                                },
+                                            )
+                                        }
+                                    },
+                                    onClearTags = {
+                                        browsePreferences.update { it.copy(tags = emptySet()) }
+                                    },
+                                    shown = filtered.size,
+                                    total = result.totalCount,
+                                )
                             }
                         }
                     }
@@ -360,9 +434,12 @@ fun LibraryScreen(
                             }
                         }
 
-                        library.fictions.isEmpty() -> fullWidthItem("no-fictions") {
-                            if (browseAll) {
-                                EmptyState(
+                        // Every empty grid names the thing that emptied it. "No fictions found"
+                        // is a lie with a tag ticked or on an empty shelf: it reads as the server
+                        // having lost the library rather than as something one click undoes.
+                        filtered.isEmpty() -> fullWidthItem("no-matches") {
+                            when (emptyBrowseReason(result, query, browse.tags, browseAll)) {
+                                EmptyBrowseReason.NothingOnServer -> EmptyState(
                                     "The server has no fictions",
                                     if (fictionManagement.canManage) {
                                         "Use Add fiction to start tracking one."
@@ -370,16 +447,24 @@ fun LibraryScreen(
                                         "An administrator can add one from a supported client."
                                     },
                                 )
-                            } else {
-                                EmptyState(
+
+                                EmptyBrowseReason.NothingFollowed -> EmptyState(
                                     "Your shelf is empty",
                                     "Switch to Everything to find something to follow.",
                                 )
-                            }
-                        }
 
-                        filtered.isEmpty() -> fullWidthItem("no-matches") {
-                            EmptyState("No matches for \"$query\"", "Try a different title, author or tag.")
+                                EmptyBrowseReason.TagFilter -> EmptyState(
+                                    "No fictions carry all ${browse.tags.size} of those tags",
+                                    "Ticking more tags narrows the list. Clear them to see everything again.",
+                                )
+
+                                EmptyBrowseReason.TextQuery -> EmptyState(
+                                    "No matches for \"$query\"",
+                                    "Try a different title, author or tag.",
+                                )
+
+                                null -> Unit
+                            }
                         }
 
                         else -> itemsIndexed(
@@ -405,6 +490,7 @@ fun LibraryScreen(
                             }
                         }
                     }
+                }
                 }
                 RefreshingStrip(state.isRefreshing && !state.isStale)
             }
@@ -573,22 +659,203 @@ private fun InlineRetry(message: String, onRetry: () -> Unit) {
     }
 }
 
+const val BrowseSortTestTag: String = "browseSort"
+const val BrowseTagTestTag: String = "browseTag"
+const val BrowseFilterSummaryTestTag: String = "browseFilterSummary"
+
+/**
+ * "3 chapters · 4h 12m left", from the server's own aggregate, or null when there is nothing to say.
+ *
+ * The server's [FictionProgress.remainingLabel] is preferred over anything formatted here so the
+ * desktop and the web shelf cannot disagree about the same book purely by rounding. A row with no
+ * aggregate renders **nothing** rather than an invented `0 left`: an older server that omits the
+ * key is saying "we were not told", and a zero would be a claim about the reader.
+ */
+internal fun remainingLabel(progress: FictionProgress?): String? {
+    if (progress == null || !progress.isMeaningful) return null
+    if (progress.chaptersUnplayed <= 0) return "Finished"
+    val chapters = "${progress.chaptersUnplayed} left"
+    val time = progress.remainingLabel?.takeIf { it.isNotBlank() && progress.remainingSeconds > 0 }
+    return listOfNotNull(chapters, time).joinToString("  ·  ")
+}
+
+/**
+ * The order, the tag filter, and what they are currently hiding.
+ *
+ * The order control's label is the order *in force*, not the word "Sort": a grid should never have
+ * to be read to work out how it is arranged. The filter summary appears only while something is
+ * actually filtering, because a filter that hides rows without saying it is on is indistinguishable
+ * from a server that has lost the shelf.
+ */
+@Composable
+private fun BrowseControls(
+    sort: FictionSort,
+    onSort: (FictionSort) -> Unit,
+    tags: List<String>,
+    selectedTags: Set<String>,
+    onToggleTag: (String) -> Unit,
+    onClearTags: () -> Unit,
+    shown: Int,
+    total: Int,
+) {
+    var sortOpen by remember { mutableStateOf(false) }
+    var tagsOpen by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                onClick = { sortOpen = true },
+                shape = RectangleShape,
+                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag(BrowseSortTestTag),
+            ) { Text("ORDER: ${sort.label.uppercase()}") }
+            if (tags.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = { tagsOpen = true },
+                    shape = RectangleShape,
+                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag(BrowseTagTestTag),
+                ) {
+                    Text(
+                        if (selectedTags.isEmpty()) "TAGS" else "TAGS (${selectedTags.size})",
+                    )
+                }
+            }
+        }
+        if (selectedTags.isNotEmpty()) {
+            Column(
+                Modifier.testTag(BrowseFilterSummaryTestTag),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                MetaText(
+                    "Showing $shown of $total  ·  ${selectedTags.sorted().joinToString(", ")}",
+                    color = AarisColor.Accent,
+                )
+                OutlinedButton(
+                    onClick = onClearTags,
+                    shape = RectangleShape,
+                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                ) { Text("CLEAR TAGS") }
+            }
+        }
+    }
+
+    if (sortOpen) {
+        ChoiceDialog(
+            title = "Order",
+            onDismiss = { sortOpen = false },
+        ) {
+            FictionSort.entries.forEach { option ->
+                DialogChoiceRow(
+                    label = option.label,
+                    detail = option.detail,
+                    selected = option == sort,
+                ) {
+                    onSort(option)
+                    sortOpen = false
+                }
+            }
+        }
+    }
+
+    if (tagsOpen) {
+        ChoiceDialog(
+            title = "Tags",
+            // Said once, above the list, rather than left to be discovered by ticking a second one
+            // and watching the grid shrink.
+            subtitle = "A fiction has to carry every ticked tag",
+            onDismiss = { tagsOpen = false },
+        ) {
+            tags.forEach { tag ->
+                DialogChoiceRow(
+                    label = tag,
+                    detail = null,
+                    selected = tag in selectedTags,
+                    toggle = true,
+                ) { onToggleTag(tag) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChoiceDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    subtitle: String? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title.uppercase(), style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()).selectableGroup(),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (subtitle != null) {
+                    MetaText(subtitle, color = AarisColor.Dim)
+                    Spacer(Modifier.height(4.dp))
+                }
+                content()
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("DONE") } },
+        shape = RectangleShape,
+        containerColor = AarisColor.BgRaise,
+    )
+}
+
+/**
+ * One row in [ChoiceDialog].
+ *
+ * [toggle] picks the role: tags are independent checkboxes, orders are one radio group. Announcing
+ * a multi-select list as radio buttons would tell a screen reader that ticking the second untocks
+ * the first, which is exactly the misunderstanding the "both tags" rule already invites.
+ */
+@Composable
+private fun DialogChoiceRow(
+    label: String,
+    detail: String?,
+    selected: Boolean,
+    toggle: Boolean = false,
+    onSelect: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val hovered by interaction.collectIsHoveredAsState()
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .background(if (selected) AarisColor.BgHover else Color.Transparent)
+            .border(1.dp, if (focused) AarisColor.Accent else Color.Transparent)
+            .selectable(
+                selected = selected,
+                interactionSource = interaction,
+                indication = null,
+                role = if (toggle) Role.Checkbox else Role.RadioButton,
+                onClick = onSelect,
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            if (selected) "· $label" else label,
+            color = when {
+                selected -> AarisColor.Accent
+                hovered || focused -> AarisColor.Ink
+                else -> AarisColor.Muted
+            },
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (detail != null) MetaText(detail, color = AarisColor.Dim)
+    }
+}
+
 /** Full-width row inside the grid, for heroes, shelves and section headers. */
 private fun LazyGridScope.fullWidthItem(
     key: String,
     content: @Composable () -> Unit,
 ) = item(key = key, span = { GridItemSpan(maxLineSpan) }, contentType = "span") { content() }
-
-/** Case-insensitive across title, author and tags — the same three fields as the mobile client. */
-internal fun filterFictions(fictions: List<FictionSummary>, query: String): List<FictionSummary> {
-    val q = query.trim().lowercase()
-    if (q.isBlank()) return fictions
-    return fictions.filter { fiction ->
-        fiction.title.lowercase().contains(q) ||
-            fiction.author?.lowercase()?.contains(q) == true ||
-            fiction.tags.any { it.lowercase().contains(q) }
-    }
-}
 
 /** Fraction of the chapter already listened to, for progress-on-artwork. */
 private fun listenedFraction(chapter: ChapterSummary): Float {
@@ -762,6 +1029,10 @@ private fun FictionCard(
                     ).joinToString("  ·  "),
                     color = AarisColor.Dim,
                 )
+                // The server already worked this out for this account, in one grouped query. The
+                // alternative is opening every book and downloading its whole chapter list, which
+                // is why the shelf never used to say it.
+                remainingLabel(fiction.progress)?.let { MetaText(it, color = AarisColor.Muted) }
             }
         }
     }
