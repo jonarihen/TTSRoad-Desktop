@@ -313,7 +313,19 @@ class ScreensUiTest {
 
         compose.onAllNodesWithTag(FictionCardTestTag).onFirst().performClick()
         compose.waitForIdle()
+
+        // Both admin actions live behind a disclosure rather than in the header: each needs a
+        // sentence to be safe to press, which is the test for a housekeeping row over a button.
+        compose.onNodeWithTag(EditFictionButtonTestTag).assertDoesNotExist()
+        compose.onNodeWithTag(ManageFictionTestTag).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("MANAGE THIS FICTION").performClick()
+        compose.waitForIdle()
+
         compose.onNodeWithTag(EditFictionButtonTestTag).assertIsDisplayed()
+        compose.onNodeWithText(
+            "DESTROYS THE SHARED CHAPTERS AND EVERY ACCOUNT'S PROGRESS",
+            substring = true,
+        ).assertIsDisplayed()
         compose.onNodeWithTag(DeleteFictionButtonTestTag).performClick()
         compose.onNodeWithText(
             "This permanently deletes the fiction, every chapter and every user's listening progress",
