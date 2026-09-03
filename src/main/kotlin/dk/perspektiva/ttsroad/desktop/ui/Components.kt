@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
@@ -95,7 +96,9 @@ fun RowIconAction(
     enabled: Boolean = true,
 ) {
     TooltipBox(
-        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        // Above the row rather than below it: a chapter row's actions sit at the right-hand end
+        // of a list, and a label drawn downwards covers the next row's actions.
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
         tooltip = { PlainTooltip { Text(contentDescription) } },
         state = rememberTooltipState(),
         // The anchor keeps its own semantics: `TooltipBox` would otherwise describe the wrapper as

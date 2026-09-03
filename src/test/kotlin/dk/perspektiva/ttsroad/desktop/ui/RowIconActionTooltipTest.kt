@@ -3,7 +3,7 @@ package dk.perspektiva.ttsroad.desktop.ui
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.moveTo
 import androidx.compose.ui.test.onAllNodesWithText
@@ -28,7 +28,7 @@ class RowIconActionTooltipTest {
         compose.setContent {
             TtsRoadTheme {
                 Row {
-                    RowIconAction(Icons.Default.PlaylistAdd, "Add to shared queue", AarisColor.Muted, {})
+                    RowIconAction(Icons.AutoMirrored.Filled.PlaylistAdd, "Add to shared queue", AarisColor.Muted, {})
                     RowIconAction(Icons.Default.Delete, "Delete download", AarisColor.Danger, {})
                 }
             }
