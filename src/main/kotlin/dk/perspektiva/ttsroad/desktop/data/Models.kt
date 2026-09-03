@@ -115,6 +115,15 @@ data class FictionSummary(
     val tags: List<String> = emptyList(),
     val rating: Double? = null,
     @param:Json(name = "rating_count") val ratingCount: Int? = null,
+    /**
+     * Which metadata fields a person edited, and which the server therefore stops refreshing from
+     * the source. The names are the server's own — see [FictionMetadataFields].
+     *
+     * Defaults to empty rather than to null, because "this server has never heard of hand edits"
+     * and "nothing here is hand-edited" want exactly the same screen: no ownership markers, every
+     * field still the source's. A server that supports them says so by listing names.
+     */
+    @param:Json(name = "metadata_overrides") val metadataOverrides: List<String> = emptyList(),
     @param:Json(name = "total_chapters") val totalChapters: Int = 0,
     @param:Json(name = "done_chapters") val doneChapters: Int = 0,
     @param:Json(name = "pending_chapters") val pendingChapters: Int = 0,
@@ -141,12 +150,115 @@ data class FictionCreateRequest(
     val voice: String? = null,
 )
 
-/** Admin-only fields intentionally exposed by the desktop editor. */
+/**
+ * Admin-only fields intentionally exposed by the desktop editor.
+ *
+ * Every field is nullable and Moshi omits a null rather than writing one, which is what makes the
+ * server's "absent means leave this alone" reachable from here. That distinction is load-bearing
+ * now that editing a metadata field also *claims* it: sending a title the user never touched would
+ * quietly freeze it against every future refresh of the source. The editor therefore sends the
+ * fields somebody actually changed, and nothing else.
+ */
 data class FictionUpdateRequest(
     val title: String? = null,
+    /** Empty string clears the author. */
     val author: String? = null,
+    /** Empty string clears the description. Ignored by a server that predates hand-edited metadata. */
+    val description: String? = null,
+    /** Empty list clears the tags. The server trims, de-duplicates and caps whatever it is sent. */
+    val tags: List<String>? = null,
     val voice: String? = null,
+    /**
+     * Metadata field names to hand back to the source, so the next poll may overwrite them again.
+     *
+     * It does **not** restore the value the source last had — nothing keeps a copy of it — and the
+     * server applies this after the field assignments above, so releasing a field wins over having
+     * just set it in the same request. Unknown names are ignored rather than rejected.
+     */
+    @param:Json(name = "clear_overrides") val clearOverrides: List<String>? = null,
 )
+
+/**
+ * The metadata fields a person can take ownership of, named exactly as the server names them.
+ *
+ * String constants rather than an enum because these names travel on the wire in both directions:
+ * a server newer than this build may protect a field this client has never heard of, and an
+ * unknown name has to survive being read and echoed rather than failing to parse.
+ */
+object FictionMetadataFields {
+    const val Title: String = "title"
+    const val Author: String = "author"
+    const val Description: String = "description"
+    const val Tags: String = "tags"
+    const val CoverImage: String = "cover_image_url"
+
+    /** Ordered the way the editor lays the fields out, which is also how they are listed to a user. */
+    val All: List<String> = listOf(Title, Author, Description, Tags, CoverImage)
+
+    /** Sentence-case label for one field name, including one this build does not know. */
+    fun labelOf(field: String): String = when (field) {
+        Title -> "Title"
+        Author -> "Author"
+        Description -> "Description"
+        Tags -> "Tags"
+        CoverImage -> "Cover art"
+        else -> field.replace('_', ' ')
+    }
+}
+
+/** What the server will store for a hand-typed tag list (`_clean_tags` in `app/routers/fictions.py`). */
+object FictionTagLimits {
+    const val MaxTags: Int = 50
+    const val MaxTagChars: Int = 100
+}
+
+/**
+ * Normalise a tag list the way the server will.
+ *
+ * Mirrored rather than left to the backend so the editor can show what is actually going to be
+ * stored: a round trip that silently drops the third spelling of "LitRPG" reads as the save having
+ * failed. De-duplication is case-insensitive and keeps the first spelling, so typing "litrpg" after
+ * "LitRPG" does not restyle the tag that is already there.
+ */
+fun cleanFictionTags(values: List<String>): List<String> {
+    val cleaned = mutableListOf<String>()
+    val seen = mutableSetOf<String>()
+    for (raw in values) {
+        val tag = raw.split(WhitespaceRun).filter(String::isNotEmpty).joinToString(" ")
+            .take(FictionTagLimits.MaxTagChars)
+        if (tag.isEmpty() || !seen.add(tag.lowercase())) continue
+        cleaned += tag
+        if (cleaned.size >= FictionTagLimits.MaxTags) break
+    }
+    return cleaned
+}
+
+private val WhitespaceRun = Regex("\\s+")
+
+/**
+ * Cover art formats the server stores, and what to call an upload on the wire.
+ *
+ * The server decides from the decoded bytes rather than from the filename or the declared type, so
+ * this is a courtesy — but it is also what the native picker filters on, and telling somebody their
+ * TIFF is unsupported before it uploads is better than a 400 afterwards.
+ */
+object CoverImageFormats {
+    val Extensions: List<String> = listOf("jpg", "jpeg", "png", "webp", "gif")
+
+    /** "JPEG, PNG, WEBP or GIF", for a supporting line under the cover control. */
+    val Description: String = "JPEG, PNG, WEBP or GIF"
+
+    fun isSupported(fileName: String): Boolean = extensionOf(fileName) in Extensions
+
+    fun mediaTypeOf(fileName: String): String = when (extensionOf(fileName)) {
+        "png" -> "image/png"
+        "webp" -> "image/webp"
+        "gif" -> "image/gif"
+        else -> "image/jpeg"
+    }
+
+    private fun extensionOf(fileName: String): String = fileName.substringAfterLast('.', "").lowercase()
+}
 
 data class FictionMutationResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,

@@ -2,7 +2,6 @@ package dk.perspektiva.ttsroad.desktop.ui
 
 import dk.perspektiva.ttsroad.desktop.data.FictionCreateRequest
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
-import dk.perspektiva.ttsroad.desktop.data.FictionUpdateRequest
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
@@ -24,27 +23,26 @@ enum class FictionManagementAccess {
     Unavailable,
 }
 
-sealed interface FictionEditor {
-    data class Add(
-        val fictionUrl: String = "",
-        val voice: String = "",
-        /**
-         * A chosen EPUB, which makes this an *upload* rather than a Royal Road add.
-         *
-         * One editor with two paths rather than two dialogs: "add a fiction" is one intention, and
-         * making the user pick which kind of add they wanted before showing them either form is
-         * asking them to know the implementation.
-         */
-        val epubFile: File? = null,
-    ) : FictionEditor
-
-    data class Edit(
-        val fictionId: Int,
-        val title: String,
-        val author: String,
-        val voice: String,
-    ) : FictionEditor
-}
+/**
+ * The "add a fiction" form.
+ *
+ * Adding is the one fiction-shaped action small enough to be a dialog: a source and an optional
+ * voice. Editing an existing fiction is a screen — see [FictionMetadataStateHolder] — because the
+ * fields there are shared with every account and, on a server that tracks hand edits, saving one
+ * takes it away from the source permanently.
+ */
+data class FictionAddDraft(
+    val fictionUrl: String = "",
+    val voice: String = "",
+    /**
+     * A chosen EPUB, which makes this an *upload* rather than a Royal Road add.
+     *
+     * One form with two paths rather than two dialogs: "add a fiction" is one intention, and making
+     * the user pick which kind of add they wanted before showing them either form is asking them to
+     * know the implementation.
+     */
+    val epubFile: File? = null,
+)
 
 data class FictionDeleteConfirmation(val fictionId: Int, val title: String)
 
@@ -54,7 +52,7 @@ data class FictionManagementUiState(
     val epubUploadAvailable: Boolean = false,
     /** The server's byte ceiling, when it published one. */
     val maxEpubBytes: Long? = null,
-    val editor: FictionEditor? = null,
+    val editor: FictionAddDraft? = null,
     val deleteConfirmation: FictionDeleteConfirmation? = null,
     val isBusy: Boolean = false,
     val error: String? = null,
@@ -72,6 +70,11 @@ data class FictionManagementUiState(
  * Capability discovery says whether the stable routes exist; `/api/mobile/me` independently says
  * whether this account may use them. Neither the login-time role nor a visible button is treated
  * as authorization — the server remains the final gate for every write.
+ *
+ * This holder owns adding and deleting: the two actions that are a question and an answer. Editing
+ * an existing fiction is [FictionMetadataStateHolder]'s, and it is a screen, because its fields are
+ * shared with every account and a metadata edit takes the field away from the source for good.
+ * [canManage] is the gate for all three.
  */
 class FictionManagementStateHolder(
     private val repository: TtsRoadRepository,
@@ -138,29 +141,18 @@ class FictionManagementStateHolder(
 
     fun openAdd() {
         if (!_state.value.canManage || _state.value.isBusy) return
-        _state.update { it.copy(editor = FictionEditor.Add(), error = null, notice = null) }
-    }
-
-    fun openEdit(fiction: FictionSummary) {
-        if (!_state.value.canManage || _state.value.isBusy || fiction.id <= 0) return
-        _state.update {
-            it.copy(
-                editor = FictionEditor.Edit(
-                    fictionId = fiction.id,
-                    title = fiction.title,
-                    author = fiction.author.orEmpty(),
-                    voice = fiction.voice.orEmpty(),
-                ),
-                error = null,
-                notice = null,
-            )
-        }
+        _state.update { it.copy(editor = FictionAddDraft(), error = null, notice = null) }
     }
 
     fun updateAdd(fictionUrl: String? = null, voice: String? = null) {
         _state.update { current ->
-            val editor = current.editor as? FictionEditor.Add ?: return@update current
-            current.copy(editor = editor.copy(fictionUrl = fictionUrl ?: editor.fictionUrl, voice = voice ?: editor.voice))
+            val editor = current.editor ?: return@update current
+            current.copy(
+                editor = editor.copy(
+                    fictionUrl = fictionUrl ?: editor.fictionUrl,
+                    voice = voice ?: editor.voice,
+                ),
+            )
         }
     }
 
@@ -173,11 +165,11 @@ class FictionManagementStateHolder(
      */
     fun chooseEpub() {
         val state = _state.value
-        if (state.editor !is FictionEditor.Add || state.isBusy || !state.epubUploadAvailable) return
+        if (state.editor == null || state.isBusy || !state.epubUploadAvailable) return
         val chosen = picker.choose() ?: return
         val problem = epubProblem(chosen, state.maxEpubBytes)
         _state.update { current ->
-            val editor = current.editor as? FictionEditor.Add ?: return@update current
+            val editor = current.editor ?: return@update current
             if (problem != null) {
                 current.copy(error = problem)
             } else {
@@ -189,40 +181,19 @@ class FictionManagementStateHolder(
     /** Puts the dialog back on the Royal Road path without closing it. */
     fun clearEpub() {
         _state.update { current ->
-            val editor = current.editor as? FictionEditor.Add ?: return@update current
+            val editor = current.editor ?: return@update current
             current.copy(editor = editor.copy(epubFile = null), error = null)
         }
     }
 
-    fun updateEdit(title: String? = null, author: String? = null, voice: String? = null) {
-        _state.update { current ->
-            val editor = current.editor as? FictionEditor.Edit ?: return@update current
-            current.copy(
-                editor = editor.copy(
-                    title = title ?: editor.title,
-                    author = author ?: editor.author,
-                    voice = voice ?: editor.voice,
-                ),
-            )
-        }
-    }
-
-    fun submitEditor() {
+    fun submitAdd() {
         val editor = _state.value.editor ?: return
         if (!_state.value.canManage || _state.value.isBusy) return
-        val validation = when (editor) {
-            // A chosen EPUB *is* the answer to "which fiction", so the URL is not also required.
-            is FictionEditor.Add -> when {
-                editor.epubFile != null -> epubProblem(editor.epubFile, _state.value.maxEpubBytes)
-                editor.fictionUrl.isBlank() -> "A Royal Road URL, a fiction id, or an EPUB is required"
-                else -> null
-            }
-
-            is FictionEditor.Edit -> when {
-                editor.title.isBlank() -> "Title cannot be empty"
-                editor.voice.isBlank() -> "Voice cannot be empty"
-                else -> null
-            }
+        // A chosen EPUB *is* the answer to "which fiction", so the URL is not also required.
+        val validation = when {
+            editor.epubFile != null -> epubProblem(editor.epubFile, _state.value.maxEpubBytes)
+            editor.fictionUrl.isBlank() -> "A Royal Road URL, a fiction id, or an EPUB is required"
+            else -> null
         }
         if (validation != null) {
             _state.update { it.copy(error = validation) }
@@ -231,43 +202,26 @@ class FictionManagementStateHolder(
         mutationJob?.cancel()
         mutationJob = scope.launch {
             _state.update { it.copy(isBusy = true, error = null, notice = null) }
-            val outcome = runCatching {
-                when (editor) {
-                    is FictionEditor.Add -> editor.epubFile?.let { epub ->
-                        repository.uploadEpub(epub, editor.voice.trim().takeIf(String::isNotEmpty))
-                    } ?: repository.createFiction(
-                        FictionCreateRequest(
-                            fictionUrl = editor.fictionUrl.trim(),
-                            voice = editor.voice.trim().takeIf(String::isNotEmpty),
-                        ),
-                    )
-
-                    is FictionEditor.Edit -> repository.updateFiction(
-                        editor.fictionId,
-                        FictionUpdateRequest(
-                            title = editor.title.trim(),
-                            author = editor.author.trim(),
-                            voice = editor.voice.trim(),
-                        ),
-                    )
-                }
+            runCatching {
+                editor.epubFile?.let { epub ->
+                    repository.uploadEpub(epub, editor.voice.trim().takeIf(String::isNotEmpty))
+                } ?: repository.createFiction(
+                    FictionCreateRequest(
+                        fictionUrl = editor.fictionUrl.trim(),
+                        voice = editor.voice.trim().takeIf(String::isNotEmpty),
+                    ),
+                )
             }
-            outcome
                 .onSuccess { fiction ->
                     cache.patchFiction(fiction)
                     cache.refreshLibrary()
                     cache.refreshBrowseAll()
-                    if (editor is FictionEditor.Edit) cache.refreshChapters(editor.fictionId)
                     _state.update {
                         it.copy(
                             editor = null,
                             isBusy = false,
                             error = null,
-                            notice = if (editor is FictionEditor.Add) {
-                                "Added ${fiction.title}; chapter discovery is running on the server"
-                            } else {
-                                "Saved ${fiction.title}"
-                            },
+                            notice = "Added ${fiction.title}; chapter discovery is running on the server",
                         )
                     }
                 }
@@ -275,7 +229,7 @@ class FictionManagementStateHolder(
                     _state.update {
                         it.copy(
                             isBusy = false,
-                            error = userFacingMessage(failure, "Could not save fiction"),
+                            error = userFacingMessage(failure, "Could not add fiction"),
                         )
                     }
                 }

@@ -5,6 +5,7 @@ import dk.perspektiva.ttsroad.desktop.data.BookmarkCreateRequest
 import dk.perspektiva.ttsroad.desktop.data.BookmarkPatchRequest
 import dk.perspektiva.ttsroad.desktop.data.AudiobookExportsResponse
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+import dk.perspektiva.ttsroad.desktop.data.CoverUploadResult
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
 import dk.perspektiva.ttsroad.desktop.data.DeltaSyncResponse
@@ -71,6 +72,9 @@ open class FakeRepository(
     var updateFictionResult: Result<FictionSummary> = Result.success(FictionSummary(id = 1, title = "Updated")),
     var deleteFictionResult: Result<Boolean> = Result.success(true),
     var uploadEpubResult: Result<FictionSummary> = Result.success(FictionSummary(id = 202, title = "Uploaded")),
+    /** Defaults to the server accepting the image and answering the fiction it now holds. */
+    var uploadCoverResult: Result<CoverUploadResult> =
+        Result.success(CoverUploadResult.Saved(FictionSummary(id = 1, title = "Updated"))),
     var audiobookExportsResult: Result<AudiobookExportsResponse?> = Result.success(null),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
@@ -130,6 +134,9 @@ open class FakeRepository(
     val updatedFictions: MutableList<Pair<Int, FictionUpdateRequest>> = mutableListOf()
     val deletedFictions: MutableList<Int> = mutableListOf()
     val uploadedEpubs: MutableList<Pair<java.io.File, String?>> = mutableListOf()
+
+    /** `(fictionId, file)` pairs passed to [uploadFictionCover], in order. */
+    val uploadedCovers: MutableList<Pair<Int, java.io.File>> = mutableListOf()
 
     private val _currentCapabilities = MutableStateFlow(ServerCapabilities.Baseline)
     override val currentCapabilities: StateFlow<ServerCapabilities> = _currentCapabilities.asStateFlow()
@@ -214,6 +221,11 @@ open class FakeRepository(
     override suspend fun uploadEpub(file: java.io.File, voice: String?): FictionSummary {
         uploadedEpubs += file to voice
         return uploadEpubResult.getOrThrow()
+    }
+
+    override suspend fun uploadFictionCover(fictionId: Int, file: java.io.File): CoverUploadResult {
+        uploadedCovers += fictionId to file
+        return uploadCoverResult.getOrThrow()
     }
 
     override suspend fun currentUser(): MobileUser? {

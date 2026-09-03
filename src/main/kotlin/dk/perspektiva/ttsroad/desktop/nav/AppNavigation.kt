@@ -21,6 +21,15 @@ sealed interface Destination {
 
     data class Fiction(val fiction: FictionSummary) : Destination
 
+    /**
+     * The admin editor for one fiction's metadata.
+     *
+     * Distinct from [Fiction] with the same id, and keyed separately, because it is a form: leaving
+     * it and coming back is a different act from scrolling a chapter list, and the two must not
+     * share a retained-state slot or a place in the back stack.
+     */
+    data class FictionMetadata(val fiction: FictionSummary) : Destination
+
     data object Player : Destination
 
     /**
@@ -79,6 +88,7 @@ val Destination.key: String
     get() = when (this) {
         Destination.Library -> "Library"
         is Destination.Fiction -> "Fiction:${fiction.id}"
+        is Destination.FictionMetadata -> "FictionMetadata:${fiction.id}"
         Destination.Player -> "Player"
         is Destination.Reader -> "Reader:$chapterId"
         Destination.Search -> "Search"

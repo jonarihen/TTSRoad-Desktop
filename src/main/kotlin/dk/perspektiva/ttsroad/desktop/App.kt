@@ -78,6 +78,8 @@ import dk.perspektiva.ttsroad.desktop.ui.ContentMaxWidth
 import dk.perspektiva.ttsroad.desktop.ui.FictionDetailScreen
 import dk.perspektiva.ttsroad.desktop.ui.FictionManagementDialogs
 import dk.perspektiva.ttsroad.desktop.ui.FictionManagementStateHolder
+import dk.perspektiva.ttsroad.desktop.ui.FictionMetadataScreen
+import dk.perspektiva.ttsroad.desktop.ui.FictionMetadataStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.LibraryScreen
 import dk.perspektiva.ttsroad.desktop.ui.LoginStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.MetaText
@@ -153,6 +155,11 @@ fun App(container: AppContainer = remember { AppContainer() }) {
         FictionManagementStateHolder(repository, cache)
     }
     val fictionManagementState by fictionManagement.state.collectAsState()
+    // Hoisted for the same reason the management holder is: the editor is a form, a save is a
+    // request, and neither may be lost because the user glanced at the library mid-edit.
+    val fictionMetadata = rememberStateHolder(repository, cache) {
+        FictionMetadataStateHolder(repository, cache)
+    }
 
     // Capability discovery is the only source of the server's stable advertised identity. Feed it
     // into the download namespace as soon as it arrives; using it only for feature flags would
@@ -183,7 +190,8 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     LaunchedEffect(fictionManagementState.deletedFictionId) {
         val deleted = fictionManagementState.deletedFictionId ?: return@LaunchedEffect
         val current = nav.current
-        if (current is Destination.Fiction && current.fiction.id == deleted) nav.back()
+        val editingDeleted = current is Destination.FictionMetadata && current.fiction.id == deleted
+        if (current is Destination.Fiction && current.fiction.id == deleted || editingDeleted) nav.back()
         fictionManagement.consumeDeletedFiction()
     }
 
@@ -211,7 +219,8 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             Destination.Search -> search.refresh()
             Destination.Bookmarks -> bookmarks.refresh()
             Destination.Queue -> serverQueue.refresh()
-            Destination.Player, is Destination.Reader -> Unit
+            // A form and a player have nothing a refresh could improve; see `isRefreshable`.
+            Destination.Player, is Destination.Reader, is Destination.FictionMetadata -> Unit
         }
     }
 
@@ -370,6 +379,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             bookmarks.sessionEnded()
             serverQueue.sessionEnded()
             fictionManagement.sessionEnded()
+            fictionMetadata.sessionEnded()
         } else {
             // Cheap, and it is what makes optional UI correct after a restart, where login did
             // not run but a keyring-backed session was restored.
@@ -528,9 +538,27 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                         fictionId = destination.fiction.id,
                                     ),
                                     fictionManagement = fictionManagementState,
-                                    onEditFiction = fictionManagement::openEdit,
+                                    onEditFiction = { nav.open(Destination.FictionMetadata(it)) },
                                     onDeleteFiction = fictionManagement::askDelete,
                                 )
+
+                                is Destination.FictionMetadata -> {
+                                    // Re-pointed on every fresher copy the cache publishes, and on
+                                    // the destination's own payload before one has arrived. The
+                                    // holder keeps whatever is typed across both.
+                                    val cached by cache.chapters(destination.fiction.id).collectAsState()
+                                    LaunchedEffect(cached.value?.fiction, destination.fiction) {
+                                        fictionMetadata.load(
+                                            cached.value?.fiction ?: destination.fiction,
+                                            maxCoverBytes = capabilities.maxCoverBytes,
+                                        )
+                                    }
+                                    FictionMetadataScreen(
+                                        holder = fictionMetadata,
+                                        repository = repository,
+                                        onBack = { nav.back() },
+                                    )
+                                }
 
                                 Destination.Player -> PlayerScreen(
                                     playback = playback,
@@ -648,6 +676,9 @@ private val Destination.isRefreshable: Boolean
         Destination.Library, is Destination.Fiction, Destination.Settings, Destination.Devices,
         Destination.Bookmarks, Destination.Queue,
         -> true
+        // A form has nothing to refresh into: the fields hold what somebody is halfway through
+        // typing, and replacing them with the server's copy is the opposite of what F5 promises.
+        is Destination.FictionMetadata -> false
         // Refresh re-runs the query the results belong to; it is dead until one has been run, but
         // enabling it is cheaper to reason about than a state-dependent header button.
         Destination.Search -> true
@@ -716,7 +747,8 @@ private fun HeaderBar(
             Spacer(Modifier.weight(1f))
             NavItem(
                 "Library",
-                active = current == Destination.Library || current is Destination.Fiction,
+                active = current == Destination.Library || current is Destination.Fiction ||
+                    current is Destination.FictionMetadata,
             ) { onSelect(Destination.Library) }
             if (showBookmarks) {
                 NavItem("Bookmarks", active = current == Destination.Bookmarks) {
