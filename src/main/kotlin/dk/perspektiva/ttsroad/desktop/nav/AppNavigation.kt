@@ -71,6 +71,15 @@ sealed interface Destination {
      */
     data object Queue : Destination
 
+    /**
+     * New chapters on the serials this account follows.
+     *
+     * Carries nothing, and its holder is hoisted for a sharper reason than the queue's: the badge
+     * on the header and the system notification are both driven by state that has to keep polling
+     * whether or not this destination has ever been opened.
+     */
+    data object Notifications : Destination
+
     data object Settings : Destination
 
     data object Devices : Destination
@@ -94,6 +103,7 @@ val Destination.key: String
         Destination.Search -> "Search"
         Destination.Bookmarks -> "Bookmarks"
         Destination.Queue -> "Queue"
+        Destination.Notifications -> "Notifications"
         Destination.Settings -> "Settings"
         Destination.Devices -> "Devices"
     }

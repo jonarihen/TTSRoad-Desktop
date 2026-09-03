@@ -58,6 +58,7 @@ hours. GStreamer linkage, duration, seek, rate and failure paths run separately 
 | fresh install, in-place upgrade, uninstall on supported ABI | Pass — `verify-install-lifecycle.sh` installs two Debian revisions in Ubuntu 24.04, launches both against a mock server, preserves settings/downloads, removes app files and leaves user data |
 | 2FA login | Pass — `LoginTest`, `StateHolderTest` cover missing, wrong and accepted code states and exact wire bodies |
 | older server without capabilities | Pass — `CapabilityDiscoveryTest` maps 404 to baseline; screen/repository tests hide or explain each additive endpoint without breaking library/playback |
+| server refuses an action the client offered | Pass — `ChapterNotificationsStateHolderTest` and `NotificationsScreenUiTest` prove a still-converting chapter offers no dismiss and that the repository treats the server's 409 as a stale list rather than an error |
 | server 1.4.0 | Pass — complete `ServerFixtures` payloads cover login, capabilities, library, chapters and sessions while unknown additive fields are ignored |
 | session expiry/revocation | Pass — `RepositoryTest`, `DevicesRepositoryTest`, `AudioSessionExpiryTest`, `ScreensUiTest` end the session, stop audio, clear protected state and explain the server reason |
 | offline start | Pass — `LibraryCacheTest` restores library/chapters from identity-scoped disk while refresh fails; `DownloadCoordinatorTest` reopens the advertised namespace |

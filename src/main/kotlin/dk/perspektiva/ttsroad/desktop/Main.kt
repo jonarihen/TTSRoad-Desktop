@@ -310,7 +310,19 @@ private fun runDesktop(smokeTest: Boolean) {
             }
 
             TtsRoadTheme {
-                App(container)
+                App(
+                    container,
+                    // The desktop needs no push credential: this is a rendering of state the app
+                    // already polls, not a second delivery path. A session with no tray simply
+                    // raises nothing and keeps the badge and the list.
+                    notify = { title, body ->
+                        if (traySupported) {
+                            trayState.sendNotification(
+                                Notification(title, body, Notification.Type.Info),
+                            )
+                        }
+                    },
+                )
             }
             if (smokeTest) {
                 LaunchedEffect(Unit) {

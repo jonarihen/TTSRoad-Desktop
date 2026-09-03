@@ -62,6 +62,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.isTraySupported
 import dk.perspektiva.ttsroad.desktop.data.Bookmark
+import dk.perspektiva.ttsroad.desktop.data.ChapterNotification
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
 import dk.perspektiva.ttsroad.desktop.nav.AppShortcut
@@ -74,6 +75,8 @@ import dk.perspektiva.ttsroad.desktop.nav.shortcutFor
 import dk.perspektiva.ttsroad.desktop.ui.AarisColor
 import dk.perspektiva.ttsroad.desktop.ui.BookmarksScreen
 import dk.perspektiva.ttsroad.desktop.ui.BookmarksStateHolder
+import dk.perspektiva.ttsroad.desktop.ui.ChapterNotificationsStateHolder
+import dk.perspektiva.ttsroad.desktop.ui.NotificationsScreen
 import dk.perspektiva.ttsroad.desktop.ui.ContentMaxWidth
 import dk.perspektiva.ttsroad.desktop.ui.FictionDetailScreen
 import dk.perspektiva.ttsroad.desktop.ui.FictionManagementDialogs
@@ -111,7 +114,17 @@ import kotlinx.coroutines.launch
  * real container so it can be closed when the window closes.
  */
 @Composable
-fun App(container: AppContainer = remember { AppContainer() }) {
+fun App(
+    container: AppContainer = remember { AppContainer() },
+    /**
+     * Raises a system notification. Supplied by `Main`, which owns the tray.
+     *
+     * A `(title, body) -> Unit` rather than the tray state, so nothing in this tree depends on a
+     * tray existing — a desktop session without one still gets the badge and the list, and a
+     * Compose test raises nothing at all.
+     */
+    notify: (String, String) -> Unit = { _, _ -> },
+) {
     val sessionStore = container.sessionStore
     val repository = container.repository
     val playback = container.playback
@@ -153,6 +166,22 @@ fun App(container: AppContainer = remember { AppContainer() }) {
     val serverQueue = rememberStateHolder(repository, playback) {
         ServerQueueStateHolder(repository, playback)
     }
+    // Hoisted, and for the sharpest reason of the four: the header badge and the system
+    // notification are driven by a poll that has to keep running whether or not this destination
+    // has ever been opened. A holder owned by the screen would mean the app only found out about a
+    // new chapter while you were already looking at the list of them.
+    val chapterNotifications = rememberStateHolder(repository) {
+        ChapterNotificationsStateHolder(repository, notify = notify)
+    }
+    val notificationState by chapterNotifications.state.collectAsState()
+    // Started here rather than in the screen, for the same reason it is hoisted here — and gated on
+    // the *session*, not only on the capability. Discovery is unauthenticated, so a capable server
+    // reports `notifications: true` while the login form is still on screen; without this the poll
+    // would start there and fail every minute against a request that has no credential to send.
+    LaunchedEffect(chapterNotifications, capabilities.notifications, session.isLoggedIn) {
+        if (capabilities.notifications && session.isLoggedIn) chapterNotifications.start()
+    }
+
     val fictionManagement = rememberStateHolder(repository, cache) {
         FictionManagementStateHolder(repository, cache)
     }
@@ -220,6 +249,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             Destination.Settings, Destination.Devices -> settings.refreshCurrentSection()
             Destination.Search -> search.refresh()
             Destination.Bookmarks -> bookmarks.refresh()
+            Destination.Notifications -> chapterNotifications.refresh()
             Destination.Queue -> serverQueue.refresh()
             // A form and a player have nothing a refresh could improve; see `isRefreshable`.
             Destination.Player, is Destination.Reader, is Destination.FictionMetadata -> Unit
@@ -246,6 +276,33 @@ fun App(container: AppContainer = remember { AppContainer() }) {
      * otherwise fetches them: a bookmark can point at a serial the session has never opened, and a
      * failure has to be visible on the screen the click came from.
      */
+    /**
+     * Opens the fiction a notice points at.
+     *
+     * Resolved through the library cache rather than the notice's own payload: the notice carries
+     * enough to *draw* a row, deliberately not enough to be a fiction — one is a message, the other
+     * is the object every screen downstream expects.
+     */
+    fun openNotificationFiction(notification: ChapterNotification) {
+        scope.launch {
+            runCatching { cache.resolveFiction(notification.fiction.id) }
+                .onSuccess { nav.open(Destination.Fiction(it)) }
+        }
+    }
+
+    /** Plays the chapter a ready notice announced, straight from the list. */
+    fun playNotification(notification: ChapterNotification) {
+        scope.launch {
+            val loaded = runCatching { repository.chapters(notification.fiction.id) }.getOrNull()
+                ?: return@launch
+            // Guarded rather than assumed: the list can be a minute old, and a chapter that has
+            // since been excluded would otherwise start the queue at whatever sorted first.
+            if (loaded.chapters.none { it.id == notification.chapter.id }) return@launch
+            playback.playQueue(loaded.chapters, notification.chapter.id, loaded.fiction)
+            nav.open(Destination.Player)
+        }
+    }
+
     fun openBookmark(bookmark: Bookmark) {
         val chapterId = bookmark.chapterId ?: return
         scope.launch {
@@ -385,6 +442,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
             serverQueue.sessionEnded()
             fictionManagement.sessionEnded()
             fictionMetadata.sessionEnded()
+            chapterNotifications.sessionEnded()
         } else {
             // Cheap, and it is what makes optional UI correct after a restart, where login did
             // not run but a keyring-backed session was restored.
@@ -462,6 +520,8 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                             showBookmarks = capabilities.bookmarks,
                             compact = sizeClass == WindowSizeClass.Compact,
                             queueAvailable = capabilities.queue,
+                            showNotifications = capabilities.notifications && !notificationState.unsupported,
+                            unreadNotifications = notificationState.unread,
                             onBack = { nav.back() },
                             onRefresh = ::refreshCurrentScreen,
                             onSelect = { nav.open(it) },
@@ -579,6 +639,13 @@ fun App(container: AppContainer = remember { AppContainer() }) {
                                     onBack = { nav.back() },
                                 )
 
+                                Destination.Notifications -> NotificationsScreen(
+                                    holder = chapterNotifications,
+                                    repository = repository,
+                                    onPlay = ::playNotification,
+                                    onOpenFiction = ::openNotificationFiction,
+                                )
+
                                 Destination.Bookmarks -> BookmarksScreen(
                                     holder = bookmarks,
                                     onOpen = ::openBookmark,
@@ -680,7 +747,7 @@ fun App(container: AppContainer = remember { AppContainer() }) {
 private val Destination.isRefreshable: Boolean
     get() = when (this) {
         Destination.Library, is Destination.Fiction, Destination.Settings, Destination.Devices,
-        Destination.Bookmarks, Destination.Queue,
+        Destination.Bookmarks, Destination.Queue, Destination.Notifications,
         -> true
         // A form has nothing to refresh into: the fields hold what somebody is halfway through
         // typing, and replacing them with the server's copy is the opposite of what F5 promises.
@@ -701,6 +768,9 @@ private fun HeaderBar(
     compact: Boolean,
     /** Capability-gated: no entry at all on a server with no shared queue. */
     queueAvailable: Boolean,
+    showNotifications: Boolean,
+    /** Everything not dismissed, including chapters still converting. */
+    unreadNotifications: Int,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSelect: (Destination) -> Unit,
@@ -760,6 +830,15 @@ private fun HeaderBar(
                 NavItem("Bookmarks", active = current == Destination.Bookmarks) {
                     onSelect(Destination.Bookmarks)
                 }
+            }
+            if (showNotifications) {
+                NavItem(
+                    // The count is everything unresolved, converting chapters included: the point
+                    // of the feature is that a chapter you were told about stays counted until it
+                    // can actually be played.
+                    if (unreadNotifications > 0) "New ($unreadNotifications)" else "New",
+                    active = current == Destination.Notifications,
+                ) { onSelect(Destination.Notifications) }
             }
             if (queueAvailable) {
                 NavItem("Queue", active = current == Destination.Queue) { onSelect(Destination.Queue) }
