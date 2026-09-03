@@ -18,6 +18,87 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-03
+
+The browsing and control-hierarchy pass the Android client had in its 0.14.0, plus the fiction
+editor the desktop was missing. Everything server-dependent here was already on the wire: this
+release is mostly the client finally reading what it was being sent.
+
+### Added
+
+- **The shelf can be put in an order.** Recently updated, recently added, title, author, rating,
+  most left to hear, least finished, most chapters and % converted. The dates turned out to have
+  been on the wire the whole time — the backend has serialised `created_at` and `updated_at` on
+  every fiction since before this client existed, and the client had simply never decoded them,
+  which is why no order but the server's own was ever possible. **Recently updated** is deliberately
+  not called *new chapters*: it follows the fiction row, and the poller touches that row whether or
+  not a check found anything, so it means *recently active*. The control's label is the order in
+  force, so the grid never has to be read to work out how it is arranged.
+- **The shelf reads the progress answer the server already sends.** Every library row carries one
+  caller-scoped aggregate — chapters ready, played and left, plus total and remaining listening
+  time — computed in one grouped query. The desktop discarded it and could only recover the same
+  answer by opening every book and downloading its complete chapter list. Cards now state what is
+  left directly from that aggregate, including the server's own rounding, so this client and the web
+  shelf do not maintain separate arithmetic. An older server's missing key renders no invented
+  `0 left`.
+- **Browse filters by tag, the way the web console always has.** Multi-select, drawn from whatever
+  the server's own vocabulary happens to be, and the tags on a card filter to themselves. Ticking
+  two tags means **both** — a filter that widens the list as you add to it is one nobody uses twice.
+  An active filter states itself above the grid with its count and offers a way to clear it.
+- **The browse order, tag filter and scope survive a restart**, in `browse.json` beside the existing
+  playback and reader settings. The search text deliberately does not: a search is a question being
+  asked now, and restoring last week's would open the shelf onto a near-empty grid with no visible
+  cause.
+- **A fiction's description, tags and cover art can be corrected.** Editing is a screen rather than
+  a dialog now, because its fields are shared with every account and, on a server that tracks hand
+  edits, writing one takes it away from the source permanently. The editor sends only the fields
+  that actually changed, and offers an explicit way to hand a field back to the source. Cover art is
+  an upload rather than a URL, because the server only embeds art it holds itself.
+- **Visible tooltips on every icon-only row action.** A chapter row can show eight at once, several
+  of them near-identical glyphs in front of a state change that is awkward to undo; the label they
+  already carried for a screen reader is now the label a mouse user sees.
+
+### Changed
+
+- **Controls have a rank.** At most one primary per screen, secondaries in a row beside it, and
+  anything rare or destructive in a housekeeping row that states its consequence. The fiction header
+  was four equal-weight buttons with colour doing the only differentiating — and colour here carries
+  severity, not rank. Editing metadata and deleting a fiction have moved out of that header into a
+  disclosure, because both need a sentence to be safe to press and neither sentence fits on a button.
+- **An empty grid names the filter that emptied it.** An empty shelf, a tag that excludes
+  everything, a search with no matches and a genuinely empty server are four different messages;
+  one of them used to be shown for all four, and it read as the server having lost the library.
+- Compose Multiplatform 1.12.0.
+
+### Fixed
+
+- **Adding a fiction converted the entire backlog.** `POST /api/mobile/fictions` accepts
+  `sync_limit` and `sync_direction`; the desktop sent neither, and the backend reads their absence as
+  *every chapter*. Tracking a 400-chapter serial from here queued four hundred chapters of TTS while
+  the web form, posting the same body, has always defaulted to the newest 25. The dialog now opens on
+  that same default and offers newest, oldest or everything, with the whole-backlog choice saying
+  what it costs before it is made. Speech rate and the auto-poll switch are the other two fields the
+  endpoint accepts and the dialog did not offer.
+- **The now-playing bar ignored the configured skip interval** and always moved 30 seconds, so the
+  same-looking control jumped twice as far as the full player after choosing 15.
+- **"Jump back in" cards could be clickable no-ops.** The fiction was looked up in the followed shelf
+  only, so a moment recorded on another client — or one for a serial since unfollowed, or while
+  browsing Everything — dropped the click on a card that still said Open.
+- **Opening a bookmark failed silently.** An unreachable server, a deleted fiction and a click that
+  never registered were the same thing on screen. Marks on a serial this session already has now play
+  offline, and everything else says what went wrong.
+- **A failed refresh could report itself off-screen.** Both banners were items inside the scrolling
+  grid, and a lazy list anchors its scroll on the key of whatever is at the top — so inserting a
+  notice above that anchor scrolled by exactly its height.
+- **Fiction detail did not fit the window size it promises.** At the supported 720 dp the header's
+  fixed cover and the four bulk actions ran out of room, and the last control squeezed its own label
+  onto two lines rather than wrapping the group.
+- **Speed, reader theme and reader highlight choices had no role, no selected state and no visible
+  keyboard focus** — announced as generic clickable text, with the current choice carried by colour
+  alone. Transport buttons carried their label on the icon rather than on the node that is actually
+  clickable.
+
+
 ## [1.1.0] - 2026-08-17
 
 Three-client parity and the desktop-native features that follow from having a real filesystem, a
@@ -115,7 +196,8 @@ server.
 - A Debian package with a bundled JDK 25 runtime, desktop entry, upgrade-safe revisioning and XDG
   rotating logs, plus credential-safe `--version` and `--diagnostics` commands.
 
-[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.2.0
 [1.1.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.1.0
 [1.0.2]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.0.2
 [1.0.1]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.0.1
