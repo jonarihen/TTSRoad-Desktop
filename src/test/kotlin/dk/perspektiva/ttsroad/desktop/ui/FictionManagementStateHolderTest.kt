@@ -57,7 +57,6 @@ class FictionManagementStateHolderTest {
         holder.ensureAccess(supported = true)
         runCurrent()
         holder.openAdd()
-        holder.openEdit(FictionSummary(id = 7, title = "Serial", voice = "voice"))
         holder.askDelete(FictionSummary(id = 7, title = "Serial"))
 
         assertEquals(FictionManagementAccess.NotAdmin, holder.state.value.access)
@@ -76,43 +75,13 @@ class FictionManagementStateHolderTest {
 
         holder.openAdd()
         holder.updateAdd(fictionUrl = "  424242  ", voice = "  ")
-        holder.submitEditor()
+        holder.submitAdd()
         runCurrent()
 
         assertEquals("424242", repository.createdFictions.single().fictionUrl)
         assertNull(repository.createdFictions.single().voice)
         assertNull(holder.state.value.editor)
         assertTrue(holder.state.value.notice.orEmpty().contains("New serial"))
-        holder.clear()
-        cache.close()
-    }
-
-    @Test
-    fun `editing validates title then sends title author and voice`() = runTest {
-        val repository = adminRepository().apply {
-            updateFictionResult = Result.success(
-                FictionSummary(id = 7, title = "Better", author = null, voice = "new-voice"),
-            )
-        }
-        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
-        val holder = adminHolder(repository, cache)
-
-        holder.openEdit(FictionSummary(id = 7, title = "Old", author = "Writer", voice = "old-voice"))
-        holder.updateEdit(title = "   ")
-        holder.submitEditor()
-        assertTrue(holder.state.value.error.orEmpty().contains("Title"))
-        assertTrue(repository.updatedFictions.isEmpty())
-
-        holder.updateEdit(title = " Better ", author = "", voice = " new-voice ")
-        holder.submitEditor()
-        runCurrent()
-
-        val (fictionId, request) = repository.updatedFictions.single()
-        assertEquals(7, fictionId)
-        assertEquals("Better", request.title)
-        assertEquals("", request.author)
-        assertEquals("new-voice", request.voice)
-        assertNull(holder.state.value.editor)
         holder.clear()
         cache.close()
     }
@@ -194,7 +163,7 @@ class FictionManagementStateHolderTest {
         fixture.holder.openAdd()
         fixture.holder.chooseEpub()
         fixture.holder.updateAdd(voice = "en-US-AriaNeural")
-        fixture.holder.submitEditor()
+        fixture.holder.submitAdd()
         runCurrent()
 
         assertEquals(listOf<Pair<java.io.File, String?>>(epub to "en-US-AriaNeural"), fixture.repository.uploadedEpubs)
@@ -210,7 +179,7 @@ class FictionManagementStateHolderTest {
         fixture.holder.openAdd()
 
         // Without a file this fails validation before any request is made.
-        fixture.holder.submitEditor()
+        fixture.holder.submitAdd()
         runCurrent()
         assertEquals(
             "A Royal Road URL, a fiction id, or an EPUB is required",
@@ -218,7 +187,7 @@ class FictionManagementStateHolderTest {
         )
 
         fixture.holder.chooseEpub()
-        fixture.holder.submitEditor()
+        fixture.holder.submitAdd()
         runCurrent()
 
         assertNull(fixture.holder.state.value.error)
@@ -236,7 +205,7 @@ class FictionManagementStateHolderTest {
         fixture.holder.chooseEpub()
 
         assertEquals("Only .epub files can be uploaded", fixture.holder.state.value.error)
-        assertNull(assertIs<FictionEditor.Add>(fixture.holder.state.value.editor).epubFile)
+        assertNull(assertIs<FictionAddDraft>(fixture.holder.state.value.editor).epubFile)
         fixture.cache.close()
     }
 
@@ -283,7 +252,7 @@ class FictionManagementStateHolderTest {
 
         fixture.holder.chooseEpub()
 
-        val editor = assertIs<FictionEditor.Add>(fixture.holder.state.value.editor)
+        val editor = assertIs<FictionAddDraft>(fixture.holder.state.value.editor)
         assertNull(editor.epubFile)
         assertNull(fixture.holder.state.value.error, "cancelling is not an error")
         assertEquals("12345", editor.fictionUrl)

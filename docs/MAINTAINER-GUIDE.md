@@ -64,6 +64,7 @@ endpoint 404 becomes a concise unsupported state. Never infer a feature from `ap
 | `delta_sync` | cursor-driven library/chapter metadata refresh | ordinary full refresh of both resources |
 | `fiction_management` | admin add/edit/delete, gated *again* by `/me`'s `is_admin` | management controls hidden |
 | `epub_upload` | multipart EPUB import, **never** inferred from `fiction_management` | the upload control is hidden; add-by-URL still works |
+| *(no flag)* `POST /fictions/{id}/cover` | cover-art replacement from the metadata editor | additive route — a **404 is the only signal**, and it stops the control being offered |
 | `audiobook_export` | read-only M4B export shelf and resumable save | Audiobooks pane hidden |
 | `audio_content_hash` | reserved/parsed contract flag | no UI is promised merely by parsing |
 

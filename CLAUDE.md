@@ -211,6 +211,26 @@ arrive after the whole file went over the wire — and AWT's filename filter is 
 window managers ignore. The upload streams from the file; only the filename leaf is sent, because
 the server checks the extension and a local path is not its business.
 
+**Adding is a dialog; editing is a screen.** `FictionManagementStateHolder` owns add and delete —
+a question and an answer. `FictionMetadataStateHolder` owns editing, and it is a screen because its
+fields are shared with every account: on a server that tracks hand edits, **writing a metadata field
+takes ownership of it**, and the field stops being refreshed from the source until somebody hands it
+back. So the editor sends only fields whose value actually *changed* — a request carrying a title
+nobody touched freezes it forever — and "use source values" sends `clear_overrides` **without** the
+values, since sending one would re-claim the field the same instant it was released. The server is
+the authority on what it stored: `ignoredFields` reads the response rather than assuming the write
+landed, so an older server that drops `description`/`tags` is reported instead of reported as saved.
+Voice is deliberately outside all of this — it is a conversion setting, not metadata, and changing
+it claims nothing.
+
+Cover art is an **upload, not a URL field**: the server only embeds art it holds itself, so a pasted
+link renders in a browser and then silently fails to reach the MP3s. `POST /fictions/{id}/cover` has
+no capability flag — it is additive, so a **404 is the only signal** that a server predates it, and
+that 404 is indistinguishable from "no such fiction". Both mean the cover did not change, which is
+all a caller has to be told, and it retires the control rather than offering a retry. The metadata
+patch is sent *before* the image so a save that worked is kept and published even when the image is
+refused afterwards.
+
 ### The server queue, which is not the player's queue
 
 `data/ServerQueue.kt` + `ui/ServerQueueStateHolder.kt` model the account's cross-library queue

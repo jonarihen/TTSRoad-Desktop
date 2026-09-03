@@ -593,6 +593,13 @@ private fun resumeTarget(chapters: List<ChapterSummary>): ChapterSummary? =
 /** The follow control's whole state, or null where the server has no per-user library. */
 data class FollowUi(val following: Boolean, val busy: Boolean, val onToggle: () -> Unit)
 
+/**
+ * The two admin controls on a fiction header.
+ *
+ * `onEdit` **opens the editor screen** rather than a dialog: the fields it changes are shared with
+ * every account, and on a server that tracks hand edits saving one takes it away from the source
+ * permanently — which is more than a header button should be able to do in passing.
+ */
 data class FictionManagementActions(
     val busy: Boolean,
     val onEdit: () -> Unit,
@@ -703,7 +710,7 @@ private fun FictionHeader(
                             modifier = Modifier
                                 .pointerHoverIcon(PointerIcon.Hand)
                                 .testTag(EditFictionButtonTestTag),
-                        ) { Text("EDIT") }
+                        ) { Text("EDIT METADATA") }
                         OutlinedButton(
                             onClick = actions.onDelete,
                             enabled = !actions.busy,

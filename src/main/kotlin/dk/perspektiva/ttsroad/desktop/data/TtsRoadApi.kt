@@ -110,6 +110,22 @@ interface TtsRoadApi {
         @Body request: FictionUpdateRequest,
     ): FictionMutationResponse
 
+    /**
+     * Replaces a fiction's cover art with an uploaded image.
+     *
+     * An upload rather than a URL field because the server only embeds cover art it holds itself —
+     * a pasted link renders in a browser and then silently fails to reach the MP3s. There is no
+     * capability flag for this route: it is additive, so a **404 is the only signal** that a server
+     * predates it, and that 404 is indistinguishable from "no such fiction". Both mean the cover
+     * did not change, which is all a caller has to be told.
+     */
+    @Multipart
+    @POST("api/mobile/fictions/{fiction_id}/cover")
+    suspend fun uploadFictionCover(
+        @Path("fiction_id") fictionId: Int,
+        @Part file: MultipartBody.Part,
+    ): FictionMutationResponse
+
     /** Deletes the shared fiction and every account's dependent progress. */
     @DELETE("api/mobile/fictions/{fiction_id}")
     suspend fun deleteFiction(@Path("fiction_id") fictionId: Int): FictionDeleteResponse

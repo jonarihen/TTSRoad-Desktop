@@ -57,6 +57,37 @@ sealed interface LoginResult {
 }
 
 /**
+ * What a cover upload did.
+ *
+ * Typed rather than thrown for the same reason [LoginResult] is: "the server read this request and
+ * said no" is not a failed request, and the three answers below want three different sentences on
+ * screen. Anything else — a 500, a dropped connection, an expired session — still propagates as an
+ * exception, because none of those say anything about the image.
+ */
+sealed interface CoverUploadResult {
+    /** The server accepted it and answered the fiction as it now stands. */
+    data class Saved(val fiction: FictionSummary) : CoverUploadResult
+
+    /**
+     * The route answered 404.
+     *
+     * Deliberately one case for two causes: a server older than cover upload and a fiction that is
+     * no longer there are indistinguishable on the wire, and both mean the cover did not change.
+     */
+    data object Unsupported : CoverUploadResult
+
+    /** The server refused the image itself — too large, not an image, not this account's to change. */
+    data class Rejected(val message: String) : CoverUploadResult
+}
+
+/** Said only where the server refused without explaining itself, which older proxies manage to do. */
+private fun coverRejectionFor(code: Int): String = when (code) {
+    413 -> "That image is larger than this server accepts"
+    403 -> "This account may not change cover art"
+    else -> "The server did not accept that image"
+}
+
+/**
  * Seam for everything the UI needs from the TTSRoad server. [RetrofitTtsRoadRepository] is the
  * production implementation; tests either drive that one against a MockWebServer or substitute a
  * hand-written fake.
@@ -134,6 +165,15 @@ interface TtsRoadRepository {
     /** Uploads one EPUB and answers the fiction the server created from it. */
     suspend fun uploadEpub(file: File, voice: String? = null): FictionSummary =
         error("EPUB upload is not implemented")
+
+    /**
+     * Replaces a fiction's cover art with a local image file.
+     *
+     * Defaults to [CoverUploadResult.Unsupported] so a substituted repository that has never heard
+     * of the route behaves like a server that has never heard of it either.
+     */
+    suspend fun uploadFictionCover(fictionId: Int, file: File): CoverUploadResult =
+        CoverUploadResult.Unsupported
 
     /**
      * Follows or unfollows a fiction, answering the state **the server now holds**, or null when it
@@ -467,6 +507,30 @@ class RetrofitTtsRoadRepository(
             file.asRequestBody(EpubMediaType),
         )
         api.uploadEpub(part, voice?.takeIf(String::isNotBlank)?.toRequestBody(TextMediaType)).fiction
+    }
+
+    override suspend fun uploadFictionCover(fictionId: Int, file: File): CoverUploadResult = try {
+        // Streamed from the file like an EPUB is, and named `file` because that is the one part
+        // name the route accepts. The media type is derived from the extension as a courtesy —
+        // the server decides from the decoded bytes, not from what the client claims.
+        val part = MultipartBody.Part.createFormData(
+            "file",
+            file.name,
+            file.asRequestBody(CoverImageFormats.mediaTypeOf(file.name).toMediaType()),
+        )
+        CoverUploadResult.Saved(withAuthorizedApi { it.uploadFictionCover(fictionId, part).fiction })
+    } catch (e: HttpException) {
+        when (e.code()) {
+            404 -> CoverUploadResult.Unsupported
+            // The server's own words where it has them: "Cover too large; limit is 10 MB" is worth
+            // more to the person holding the file than any sentence this client could invent.
+            400, 403, 413, 415, 422 -> CoverUploadResult.Rejected(
+                redactSecrets(detailMessage(e.response()?.errorBody()?.string()))
+                    .takeIf { it.isNotBlank() }
+                    ?: coverRejectionFor(e.code()),
+            )
+            else -> throw e
+        }
     }
 
     override suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? =

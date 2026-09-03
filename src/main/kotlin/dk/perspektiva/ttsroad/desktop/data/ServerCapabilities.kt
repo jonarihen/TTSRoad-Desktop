@@ -82,6 +82,15 @@ data class ServerCapabilities(
     val maxPlaybackSyncItems: Int? = null,
     /** The server's EPUB ceiling. A `Long`, because a byte count is not an item count. */
     val maxEpubBytes: Long? = null,
+    /**
+     * The server's cover-art ceiling, when it publishes one.
+     *
+     * Null on every server built so far: cover upload is an additive route with no advertised
+     * limit yet, so the editor checks what it can locally (format, emptiness) and lets a 413 speak
+     * for the rest. Parsed anyway because the day a server does publish it, the pre-upload check
+     * should start working without a client release.
+     */
+    val maxCoverBytes: Long? = null,
 ) {
     /** True once discovery has actually reached a TTSRoad server (only it reports a version). */
     val isDiscovered: Boolean get() = serverVersion != null
@@ -110,6 +119,7 @@ data class ServerCapabilities(
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             maxEpubBytes = response.limits.longLimit("max_epub_bytes"),
+            maxCoverBytes = response.limits.longLimit("max_cover_bytes"),
         )
 
         /**
