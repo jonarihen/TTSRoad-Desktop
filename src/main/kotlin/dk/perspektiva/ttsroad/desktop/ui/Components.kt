@@ -23,12 +23,17 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -73,7 +78,14 @@ val PageGutter = 28.dp
  * Shared rather than per-screen so a chapter row and a queue row afford their actions identically —
  * same hit target, same focus border, same "the clickable node carries the description" rule that
  * screen readers and tests both depend on.
+ *
+ * Every one of these is icon-only, and a chapter row can show eight of them at once — download,
+ * cancel, delete, retry, play next, queue, read, mark played — several of which are near-identical
+ * glyphs guarding state changes that are awkward to undo. [contentDescription] was reaching a
+ * screen reader and a test and nobody else, so the mouse user, who is the majority on a desktop,
+ * had to click one to find out what it did. It is now also the visible hover label.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RowIconAction(
     icon: ImageVector,
@@ -81,6 +93,26 @@ fun RowIconAction(
     tint: Color,
     onClick: () -> Unit,
     enabled: Boolean = true,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(contentDescription) } },
+        state = rememberTooltipState(),
+        // The anchor keeps its own semantics: `TooltipBox` would otherwise describe the wrapper as
+        // well, and every test on this screen asks for the action by exactly one description.
+        enableUserInput = enabled,
+    ) {
+        RowIconActionAnchor(icon, contentDescription, tint, onClick, enabled)
+    }
+}
+
+@Composable
+private fun RowIconActionAnchor(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    onClick: () -> Unit,
+    enabled: Boolean,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pointerOver by interaction.collectIsHoveredAsState()
