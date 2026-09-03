@@ -860,6 +860,43 @@ class LibraryCacheTest {
     }
 
     @Test
+    fun `a fiction is resolved from either shelf before anything is fetched`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(shelf("Followed")),
+            browseAllResult = Result.success(catalogue("Followed" to true, "Only browsed" to false)),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureLibrary()
+        cache.ensureBrowseAll()
+        runCurrent()
+
+        // Id 2 is in the catalogue and not on the shelf, which is exactly the case that used to
+        // turn a jump-back card into a clickable no-op.
+        assertEquals("Only browsed", cache.resolveFiction(2).title)
+        assertEquals(0, repository.chaptersCalls, "neither answer needed a request")
+        cache.close()
+    }
+
+    @Test
+    fun `a fiction in neither shelf is fetched rather than dropped`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(shelf("Followed")),
+            chaptersResult = Result.success(
+                ChaptersResponse(fiction = FictionSummary(id = 99, title = "Unfollowed elsewhere")),
+            ),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureLibrary()
+        runCurrent()
+
+        // A moment recorded on another client can name a serial this account has since unfollowed.
+        assertEquals("Unfollowed elsewhere", cache.resolveFiction(99).title)
+        assertEquals(1, repository.chaptersCalls)
+        assertNull(cache.cachedFiction(99), "the fetch is not a silent write into either shelf")
+        cache.close()
+    }
+
+    @Test
     fun `signing out drops the catalogue as well as the shelf`() = runTest {
         val repository = FakeRepository(
             libraryResult = Result.success(shelf("Followed")),

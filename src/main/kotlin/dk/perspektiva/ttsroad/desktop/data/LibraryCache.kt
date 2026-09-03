@@ -229,6 +229,31 @@ class LibraryCache(
             .firstOrNull { it.id == fictionId }
             ?.following
 
+    /**
+     * The fiction [fictionId] names, from either shelf, or null when neither holds it.
+     *
+     * Both payloads, not just the followed one: a jump-back moment or a bookmark can point at a
+     * serial this account has since unfollowed, or at one it has only ever browsed.
+     */
+    fun cachedFiction(fictionId: Int): FictionSummary? =
+        (_library.value.value?.fictions.orEmpty() + _browseAll.value.value?.fictions.orEmpty())
+            .firstOrNull { it.id == fictionId }
+
+    /**
+     * The fiction [fictionId] names, fetching it when neither shelf has it.
+     *
+     * The fallback is the chapters endpoint, which carries a `fiction` built by the server's own
+     * `_fiction_payload`. That is deliberately the same request the caller is about to need anyway
+     * — nothing here opens a fiction without also wanting its chapters — so resolving costs no
+     * extra round trip in the case that made it necessary.
+     *
+     * Throws rather than answering null on a failed request, because "the server said there is no
+     * such fiction" and "the request never arrived" want different sentences on screen, and only
+     * the caller knows which surface is asking.
+     */
+    suspend fun resolveFiction(fictionId: Int): FictionSummary =
+        cachedFiction(fictionId) ?: repository.chapters(fictionId).fiction
+
     // --- Chapters --------------------------------------------------------------------------
 
     /** The chapter list for one fiction. Stable across navigation, so scroll and data survive. */

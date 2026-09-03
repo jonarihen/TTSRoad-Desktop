@@ -80,6 +80,7 @@ import dk.perspektiva.ttsroad.desktop.data.PlaybackSnapshot
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.chapterKeys
 import dk.perspektiva.ttsroad.desktop.data.fictionKeys
+import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import kotlinx.coroutines.launch
 
@@ -168,6 +169,9 @@ fun LibraryScreen(
     // search text must not be one of the things that disposal takes with it. `rememberSaveable`
     // then hands it to the per-destination state holder, so Back from a fiction restores it.
     var query by rememberSaveable { mutableStateOf("") }
+    // Deliberately not `rememberSaveable`: a failure to open is about a click that just happened,
+    // and restoring last session's would be a message with nothing behind it.
+    var openError by remember { mutableStateOf<String?>(null) }
     val gridState = rememberLazyGridState()
 
     // The rails — hero, jump-back, recent — always come from the shelf, in both modes. The server
@@ -199,6 +203,12 @@ fun LibraryScreen(
                     horizontalArrangement = Arrangement.spacedBy(GridGap),
                     verticalArrangement = Arrangement.spacedBy(GridGap),
                 ) {
+                    openError?.let { message ->
+                        fullWidthItem("open-error") {
+                            InlineNotice(message) { openError = null }
+                        }
+                    }
+
                     // A refresh that failed reports itself here, above content it did not replace.
                     if (state.isStale) {
                         fullWidthItem("stale") {
@@ -244,9 +254,22 @@ fun LibraryScreen(
                                 Spacer(Modifier.height(16.dp))
                                 JumpBackShelf(
                                     snapshots = jumpBack,
+                                    // Resolved outside the followed shelf on purpose: a moment
+                                    // recorded on another client can name a serial this account has
+                                    // since unfollowed, or one it has only browsed, and looking it
+                                    // up in `rails` alone turned the card into a clickable no-op.
                                     onOpen = { snapshot ->
-                                        rails.fictions.firstOrNull { it.id == snapshot.fictionId }
-                                            ?.let(onOpenFiction)
+                                        scope.launch {
+                                            openError = null
+                                            runCatching { cache.resolveFiction(snapshot.fictionId) }
+                                                .onSuccess(onOpenFiction)
+                                                .onFailure { failure ->
+                                                    openError = userFacingMessage(
+                                                        failure,
+                                                        "Could not open ${snapshot.fictionTitle}",
+                                                    )
+                                                }
+                                        }
                                     },
                                     onDismiss = { history.dismiss(it.key) },
                                 )
