@@ -60,6 +60,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.BuildInfo
 import dk.perspektiva.ttsroad.desktop.data.DeviceSession
@@ -71,6 +72,8 @@ import dk.perspektiva.ttsroad.desktop.data.ListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.desktop.data.formatListeningSpan
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.FeedLink
+import dk.perspektiva.ttsroad.desktop.data.RotateFeedConfirmation
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.AppDirectories
 import dk.perspektiva.ttsroad.desktop.update.UpdateStatus
@@ -150,13 +153,20 @@ fun SettingsScreen(
      * the About pane from claiming an update state nothing checked.
      */
     updates: UpdateStateHolder? = null,
+    /** Null where the caller has not wired it — the pane is capability-gated anyway. */
+    feeds: PodcastFeedsStateHolder? = null,
 ) {
     val ui by holder.state.collectAsState()
     val session by sessionStore.session.collectAsState()
     val capabilities by repository.currentCapabilities.collectAsState()
-    val visibleSections = remember(capabilities.audiobookExport) {
+    val visibleSections = remember(capabilities.audiobookExport, capabilities.feedUrls) {
         SettingsSection.entries.filter { section ->
-            section != SettingsSection.Audiobooks || capabilities.audiobookExport
+            when (section) {
+                SettingsSection.Audiobooks -> capabilities.audiobookExport
+                // The whole pane is copy buttons for URLs this server may not publish.
+                SettingsSection.Feeds -> capabilities.feedUrls
+                else -> true
+            }
         }
     }
 
@@ -166,6 +176,7 @@ fun SettingsScreen(
             SettingsSection.Devices -> holder.ensureDevicesLoaded()
             SettingsSection.Offline -> holder.ensureOfflineLoaded()
             SettingsSection.Audiobooks -> holder.ensureAudiobooksLoaded()
+            SettingsSection.Feeds -> feeds?.ensureLoaded()
             else -> Unit
         }
     }
@@ -204,6 +215,7 @@ fun SettingsScreen(
                         SettingsSection.Listening -> ListeningPane(listeningStats, historyOwnerKey, nowMs)
                         SettingsSection.Offline -> OfflinePane(ui.offline, holder)
                         SettingsSection.Audiobooks -> AudiobookPane(ui.audiobooks, holder)
+                        SettingsSection.Feeds -> feeds?.let { PodcastFeedsPane(it) }
                         SettingsSection.About -> AboutPane(session, capabilities, sessionStore, updates)
                     }
                 }
@@ -249,6 +261,7 @@ fun SettingsScreen(
 
 const val AudiobookDownloadButtonTestTag: String = "audiobookDownloadButton"
 const val ManageShelfButtonTestTag: String = "manageShelfButton"
+const val RotateFeedButtonTestTag: String = "rotateFeedButton"
 
 @Composable
 private fun AudiobookPane(ui: AudiobookExportsUiState, holder: SettingsStateHolder) {
@@ -1244,6 +1257,97 @@ fun describeCapabilities(capabilities: ServerCapabilities): String {
         enabled.isNotEmpty() -> enabled.joinToString(", ")
         capabilities.isDiscovered -> "None advertised"
         else -> "Not advertised by this server"
+    }
+}
+
+// --- Podcast feeds -------------------------------------------------------------------------
+
+/**
+ * The URLs a podcast app needs (#117).
+ *
+ * The entire pane is copy buttons. A URL is shown because it is the user's own screen, but it is
+ * never echoed into a notice afterwards: repeating a credential into a status line puts it somewhere
+ * a screenshot or a screen share picks it up, which is the one place it was not already.
+ */
+@Composable
+private fun PodcastFeedsPane(holder: PodcastFeedsStateHolder) {
+    val ui by holder.state.collectAsState()
+
+    PaneTitle("Podcast feeds", "URLs you can paste into a podcast app")
+    when {
+        ui.unsupported -> InfoCard("This server does not publish feed URLs over the mobile API.")
+        ui.isEmpty && ui.loading -> Box(Modifier.fillMaxWidth().height(120.dp)) { CenterProgress() }
+        ui.isEmpty && ui.error != null -> Text(ui.error.orEmpty(), color = MaterialTheme.colorScheme.error)
+        ui.isEmpty -> InfoCard("Nothing to subscribe to yet. Follow a fiction and its feed appears here.")
+        else -> {
+            InfoCard(
+                "Anyone with one of these URLs can read the feed without signing in. Treat them " +
+                    "like a password.",
+            )
+            if (ui.account.isNotEmpty()) {
+                MetaText(text = "// Your account", color = AarisColor.Accent)
+                SettingsCard {
+                    ui.account.forEachIndexed { index, link ->
+                        if (index > 0) RowDivider()
+                        FeedRow(link, holder::copy)
+                    }
+                }
+                OutlinedButton(
+                    onClick = holder::askToRotate,
+                    enabled = !ui.loading,
+                    shape = RectangleShape,
+                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
+                        .testTag(RotateFeedButtonTestTag),
+                ) { Text("ISSUE NEW URLS") }
+            }
+            if (ui.fictions.isNotEmpty()) {
+                MetaText(text = "// Per fiction", color = AarisColor.Accent)
+                SettingsCard {
+                    ui.fictions.forEachIndexed { index, link ->
+                        if (index > 0) RowDivider()
+                        FeedRow(link, holder::copy)
+                    }
+                }
+            }
+            ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            ui.notice?.let { MetaText(text = it, color = AarisColor.Ok) }
+        }
+    }
+
+    if (ui.confirmingRotate) {
+        ConfirmDialog(
+            title = "ISSUE NEW FEED URLS",
+            body = RotateFeedConfirmation,
+            confirmLabel = "ISSUE NEW URLS",
+            onConfirm = holder::confirmRotate,
+            onDismiss = holder::dismissRotate,
+        )
+    }
+}
+
+@Composable
+private fun FeedRow(link: FeedLink, onCopy: (FeedLink) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(link.label, color = AarisColor.Ink, style = MaterialTheme.typography.bodyMedium)
+            Text(link.detail, color = AarisColor.Dim, style = MaterialTheme.typography.labelSmall)
+            Text(
+                link.url,
+                color = AarisColor.Muted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        OutlinedButton(
+            onClick = { onCopy(link) },
+            shape = RectangleShape,
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+        ) { Text("COPY") }
     }
 }
 

@@ -117,6 +117,25 @@ interface TtsRoadApi {
     @POST("api/mobile/fictions/{fiction_id}/reconvert-all")
     suspend fun reconvertAllChapters(@Path("fiction_id") fictionId: Int): MaintenanceResponse
 
+    /**
+     * Every podcast URL this account can hand to a podcast app (#117).
+     *
+     * Scoped to the caller's shelf, matching `/library`. The strings that come back are
+     * **credentials** — the token is the whole authorization — so nothing that logs may see them.
+     */
+    @GET("api/mobile/feeds")
+    suspend fun feeds(): FeedsResponse
+
+    /**
+     * Invalidate this account's combined feed and OPML URLs.
+     *
+     * Every podcast app already subscribed to them stops working until it is given the new URL.
+     * Does *not* touch the per-fiction feeds, whose tokens come from the fiction rather than the
+     * account.
+     */
+    @POST("api/mobile/feeds/rotate")
+    suspend fun rotateLibraryFeed(): FeedsResponse
+
     // Both revoke calls answer with a small status object (`{"status": "ok", ...}`) whose shape is
     // not worth modelling: the client re-reads the list afterwards rather than trusting an echo,
     // because a 404 on the DELETE is ambiguous between "already gone" and "no such endpoint".

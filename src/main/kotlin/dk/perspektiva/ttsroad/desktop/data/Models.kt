@@ -576,3 +576,45 @@ data class MaintenanceResponse(
 
 /** `POST /api/mobile/chapters/{id}/exclude` — take a chapter off every feed, or put it back. */
 data class ChapterExcludeRequest(val excluded: Boolean = true)
+
+/**
+ * `GET /api/mobile/feeds` — every podcast URL this account can hand to a podcast app (#117).
+ *
+ * A private podcast feed is what this project is for, and until now the only way to get a tokenised
+ * URL into a podcast app was to open the web console and copy it from there.
+ */
+data class FeedsResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    /** `followed` or `all`, echoed back — the same scoping `/library` uses. */
+    val scope: String = "followed",
+    val library: LibraryFeedUrls? = null,
+    val fictions: List<FictionFeedUrl> = emptyList(),
+)
+
+/**
+ * This account's own feeds, which are the ones its rotate lever revokes.
+ *
+ * Both URLs carry a token derived from the user and a version number, so rotating bumps the version
+ * and every previously issued URL stops working.
+ */
+data class LibraryFeedUrls(
+    @param:Json(name = "feed_token_version") val feedTokenVersion: Int = 0,
+    @param:Json(name = "feed_url") val feedUrl: String? = null,
+    @param:Json(name = "opml_url") val opmlUrl: String? = null,
+)
+
+/**
+ * One fiction's feed.
+ *
+ * Deliberately *not* user-scoped: the token comes from the fiction, so this is the same string for
+ * every account on the server and rotating it is a separate admin action on that fiction. The
+ * account's own rotate does not touch it — which is worth saying on screen, because listing these
+ * beside the account's own URLs implies otherwise.
+ */
+data class FictionFeedUrl(
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    val title: String = "",
+    val slug: String? = null,
+    @param:Json(name = "feed_token_version") val feedTokenVersion: Int = 0,
+    @param:Json(name = "feed_url") val feedUrl: String? = null,
+)
