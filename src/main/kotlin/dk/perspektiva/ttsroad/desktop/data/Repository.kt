@@ -205,6 +205,15 @@ interface TtsRoadRepository {
     suspend fun audiobookExports(): AudiobookExportsResponse? = null
 
     /**
+     * The narrator catalogue, or null when this server has no `/voices` route.
+     *
+     * Null and empty differ here the way they do for [devices]: an empty catalogue would mean the
+     * server has no voices installed, which is a different thing to say than "this server cannot be
+     * asked", and only the second one should retire the picker.
+     */
+    suspend fun voices(): List<MobileVoice>? = null
+
+    /**
      * Revokes one session.
      *
      * False means the server answered 404, which is ambiguous by design: the endpoint may be
@@ -566,6 +575,8 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun audiobookExports(): AudiobookExportsResponse? =
         ifEndpointExists { it.audiobookExports() }
+
+    override suspend fun voices(): List<MobileVoice>? = ifEndpointExists { it.voices() }?.voices
 
     override suspend fun revokeDevice(tokenId: Int): Boolean =
         ifEndpointExists { it.revokeDevice(tokenId) } != null

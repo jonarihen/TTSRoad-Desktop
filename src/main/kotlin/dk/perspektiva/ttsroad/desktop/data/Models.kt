@@ -109,6 +109,14 @@ data class FictionSummary(
     val author: String? = null,
     /** Narration voice; present on management/detail payloads and optional on older library rows. */
     val voice: String? = null,
+    /**
+     * Speech rate for the next conversion, as `+0%` / `-10%`.
+     *
+     * `FictionResponse` has always carried it beside `voice`; this client simply never decoded it,
+     * which is why the rate of an existing fiction could not be shown or changed. Nullable for the
+     * same reason [voice] is: `/chapters` builds its `fiction` without either.
+     */
+    val rate: String? = null,
     val slug: String? = null,
     @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
     val description: String? = null,
@@ -264,6 +272,11 @@ data class FictionUpdateRequest(
     /** Empty list clears the tags. The server trims, de-duplicates and caps whatever it is sent. */
     val tags: List<String>? = null,
     val voice: String? = null,
+    /**
+     * Speech rate. Like [voice] and unlike the metadata fields, writing it claims nothing: no poll
+     * has ever set it, so there is no source ownership to take away.
+     */
+    val rate: String? = null,
     /**
      * Metadata field names to hand back to the source, so the next poll may overwrite them again.
      *
@@ -492,4 +505,33 @@ data class PlaybackMarkResponse(
     val played: Boolean = false,
     @param:Json(name = "chapter_ids") val chapterIds: List<Int> = emptyList(),
     val count: Int = 0,
+)
+
+/**
+ * `GET /api/mobile/voices` — the edge-tts catalogue, in an envelope (#109).
+ *
+ * Several hundred entries across a hundred-odd locales, which is why nothing is drawn as a flat
+ * list; see `voiceGroups`.
+ */
+data class VoicesResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val voices: List<MobileVoice> = emptyList(),
+)
+
+/**
+ * One narrator.
+ *
+ * [name] is the short form — `en-US-BrianNeural` — which is both what a fiction stores and what
+ * `FictionUpdateRequest.voice` expects; nothing here ever sends a display name. It is the one field
+ * with no meaningful default, so a row arriving without one is dropped rather than offered as a
+ * choice that cannot be applied.
+ *
+ * [locale] and [gender] are nullable on purpose. The server sends both today, and they drive
+ * grouping and one line of description — neither is worth failing a parse over, and a catalogue
+ * that would not load at all is worse than a voice filed under "Other".
+ */
+data class MobileVoice(
+    val name: String = "",
+    val locale: String? = null,
+    val gender: String? = null,
 )

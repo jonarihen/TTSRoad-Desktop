@@ -23,11 +23,13 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import dk.perspektiva.ttsroad.desktop.data.MobileVoice
 import dk.perspektiva.ttsroad.desktop.data.SyncScope
 
 const val AddFictionDialogTestTag: String = "addFictionDialog"
 const val ChooseEpubButtonTestTag: String = "chooseEpubButton"
 const val ChosenEpubNameTestTag: String = "chosenEpubName"
+const val AddRateFieldTestTag: String = "addRateField"
 
 /**
  * The holder owns the answers; this composable only renders its one active question.
@@ -46,6 +48,8 @@ fun FictionManagementDialogs(holder: FictionManagementStateHolder) {
             isBusy = state.isBusy,
             error = state.error,
             epubUploadAvailable = state.epubUploadAvailable,
+            voices = state.voices.takeIf { state.canPickVoice },
+            rateProblem = state.rateProblem,
             onUpdateAdd = holder::updateAdd,
             onChooseEpub = holder::chooseEpub,
             onClearEpub = holder::clearEpub,
@@ -71,6 +75,9 @@ private fun AddFictionDialog(
     isBusy: Boolean,
     error: String?,
     epubUploadAvailable: Boolean,
+    /** The narrator catalogue, or null on a server without it — then the voice stays typed. */
+    voices: List<MobileVoice>?,
+    rateProblem: String?,
     onUpdateAdd: (String?, String?, String?, Boolean?, SyncScope?) -> Unit,
     onChooseEpub: () -> Unit,
     onClearEpub: () -> Unit,
@@ -129,23 +136,44 @@ private fun AddFictionDialog(
                         }
                     }
                 }
-                OutlinedTextField(
-                    value = editor.voice,
-                    onValueChange = { onUpdateAdd(null, it, null, null, null) },
-                    label = { Text("VOICE (OPTIONAL)") },
-                    supportingText = { Text("Blank uses the server default") },
-                    enabled = !isBusy,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (voices != null) {
+                    VoiceField(
+                        voices = voices,
+                        selected = editor.voice,
+                        enabled = !isBusy,
+                        onSelect = { onUpdateAdd(null, it, null, null, null) },
+                        label = "VOICE (OPTIONAL)",
+                    )
+                } else {
+                    // No catalogue on this server, so the exact name still has to be typed. Worth
+                    // keeping rather than hiding: it is the only way to set a voice at all there.
+                    OutlinedTextField(
+                        value = editor.voice,
+                        onValueChange = { onUpdateAdd(null, it, null, null, null) },
+                        label = { Text("VOICE (OPTIONAL)") },
+                        supportingText = { Text("Blank uses the server default") },
+                        enabled = !isBusy,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 OutlinedTextField(
                     value = editor.rate,
                     onValueChange = { onUpdateAdd(null, null, it, null, null) },
                     label = { Text("SPEECH RATE (OPTIONAL)") },
-                    supportingText = { Text("Blank uses the server default. Nothing already converted is re-narrated.") },
+                    // The server stores this string without checking it, so a typo does not fail
+                    // here — it fails hours later as a chapter that will not narrate. This is the
+                    // only place it can be caught.
+                    isError = rateProblem != null,
+                    supportingText = {
+                        Text(
+                            rateProblem
+                                ?: "Blank uses the server default. Nothing already converted is re-narrated.",
+                        )
+                    },
                     enabled = !isBusy,
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().testTag(AddRateFieldTestTag),
                 )
                 // Only meaningful on the Royal Road path: an EPUB has no source to poll and no
                 // backlog to bound, so offering either control there would be inventing a choice.
@@ -167,7 +195,8 @@ private fun AddFictionDialog(
         confirmButton = {
             Button(
                 onClick = onSubmit,
-                enabled = !isBusy,
+                // A malformed rate is refused here rather than sent. The server would accept it.
+                enabled = !isBusy && rateProblem == null,
                 shape = RectangleShape,
             ) {
                 Text(

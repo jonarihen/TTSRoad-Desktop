@@ -54,6 +54,16 @@ interface TtsRoadApi {
     @GET("api/mobile/exports")
     suspend fun audiobookExports(): AudiobookExportsResponse
 
+    /**
+     * The narrator catalogue. Open to any signed-in account, like the web route it mirrors.
+     *
+     * There is deliberately no preview route beside it: `POST /api/voices/{voice}/preview` is
+     * admin-only and spends an outbound synthesis request to Microsoft on a cache miss, which is why
+     * the server advertises it as a separate capability.
+     */
+    @GET("api/mobile/voices")
+    suspend fun voices(): VoicesResponse
+
     // Both revoke calls answer with a small status object (`{"status": "ok", ...}`) whose shape is
     // not worth modelling: the client re-reads the list afterwards rather than trusting an echo,
     // because a 404 on the DELETE is ambiguous between "already gone" and "no such endpoint".

@@ -208,12 +208,18 @@ fun App(
 
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(session.isLoggedIn, capabilities.fictionManagement, capabilities.epubUpload) {
+    LaunchedEffect(
+        session.isLoggedIn,
+        capabilities.fictionManagement,
+        capabilities.epubUpload,
+        capabilities.voiceCatalogue,
+    ) {
         if (session.isLoggedIn) {
             fictionManagement.ensureAccess(
                 capabilities.fictionManagement,
                 epubUpload = capabilities.epubUpload,
                 maxEpubBytes = capabilities.maxEpubBytes,
+                voiceCatalogue = capabilities.voiceCatalogue,
             )
         }
     }
@@ -234,6 +240,7 @@ fun App(
                     capabilities.fictionManagement,
                     epubUpload = capabilities.epubUpload,
                     maxEpubBytes = capabilities.maxEpubBytes,
+                    voiceCatalogue = capabilities.voiceCatalogue,
                     forceRefresh = true,
                 )
             }
@@ -243,6 +250,7 @@ fun App(
                     capabilities.fictionManagement,
                     epubUpload = capabilities.epubUpload,
                     maxEpubBytes = capabilities.maxEpubBytes,
+                    voiceCatalogue = capabilities.voiceCatalogue,
                     forceRefresh = true,
                 )
             }
@@ -617,6 +625,7 @@ fun App(
                                         fictionMetadata.load(
                                             cached.value?.fiction ?: destination.fiction,
                                             maxCoverBytes = capabilities.maxCoverBytes,
+                                            voiceCatalogue = capabilities.voiceCatalogue,
                                         )
                                     }
                                     FictionMetadataScreen(

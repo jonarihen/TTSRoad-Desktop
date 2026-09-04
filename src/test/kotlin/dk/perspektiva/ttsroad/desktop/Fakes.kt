@@ -16,6 +16,7 @@ import dk.perspektiva.ttsroad.desktop.data.FictionUpdateRequest
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.LoginResult
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
+import dk.perspektiva.ttsroad.desktop.data.MobileVoice
 import dk.perspektiva.ttsroad.desktop.data.PlaybackMarkResponse
 import dk.perspektiva.ttsroad.desktop.data.PlaybackStateRow
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
@@ -77,6 +78,7 @@ open class FakeRepository(
     var uploadCoverResult: Result<CoverUploadResult> =
         Result.success(CoverUploadResult.Saved(FictionSummary(id = 1, title = "Updated"))),
     var audiobookExportsResult: Result<AudiobookExportsResponse?> = Result.success(null),
+    var voicesResult: Result<List<MobileVoice>?> = Result.success(null),
     /** Null models a server whose notifications route answers 404. */
     var chapterNotificationsResult: Result<ChapterNotificationsResponse?> = Result.success(null),
 ) : TtsRoadRepository {
@@ -98,6 +100,7 @@ open class FakeRepository(
     var currentUserCalls: Int = 0
         private set
     var audiobookExportsCalls: Int = 0
+    var voicesCalls: Int = 0
         private set
     var revokeOtherDevicesCalls: Int = 0
         private set
@@ -264,6 +267,11 @@ open class FakeRepository(
     override suspend fun audiobookExports(): AudiobookExportsResponse? {
         audiobookExportsCalls++
         return audiobookExportsResult.getOrThrow()
+    }
+
+    override suspend fun voices(): List<MobileVoice>? {
+        voicesCalls++
+        return voicesResult.getOrThrow()
     }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean {

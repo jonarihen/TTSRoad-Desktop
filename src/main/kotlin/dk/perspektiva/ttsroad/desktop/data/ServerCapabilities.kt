@@ -79,6 +79,15 @@ data class ServerCapabilities(
      * its system notification is a rendering of state it already has.
      */
     val notifications: Boolean = false,
+    /**
+     * `GET /api/mobile/voices` — the narrator catalogue.
+     *
+     * Listing is open to any signed-in account; *applying* a choice is admin-gated by the fiction
+     * `PATCH`. So this flag alone is never the gate for the picker — see `canPickVoice`, which takes
+     * both halves. Previewing a voice is a separate capability and deliberately not mirrored here:
+     * a cache miss spends an outbound synthesis request to Microsoft.
+     */
+    val voiceCatalogue: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -125,6 +134,7 @@ data class ServerCapabilities(
             queue = response.capabilities.flag("queue"),
             audiobookExport = response.capabilities.flag("audiobook_export"),
             notifications = response.capabilities.flag("notifications"),
+            voiceCatalogue = response.capabilities.flag("voice_catalogue"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             maxEpubBytes = response.limits.longLimit("max_epub_bytes"),
