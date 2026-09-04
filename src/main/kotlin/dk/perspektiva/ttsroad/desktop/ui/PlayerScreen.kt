@@ -95,6 +95,8 @@ fun PlayerScreen(
     /** Capability-gated like read-along: no control at all where the server has no bookmark API. */
     bookmarksAvailable: Boolean = false,
     onAddBookmark: () -> Unit = {},
+    pronunciationAvailable: Boolean = false,
+    onReportPronunciation: (Int, String, Long) -> Unit = { _, _, _ -> },
     onOpenReader: (chapterId: Int, title: String) -> Unit = { _, _ -> },
     onBack: () -> Unit,
 ) {
@@ -120,6 +122,8 @@ fun PlayerScreen(
                     readAlongAvailable = readAlongAvailable,
                     bookmarksAvailable = bookmarksAvailable,
                     onAddBookmark = onAddBookmark,
+                    pronunciationAvailable = pronunciationAvailable,
+                    onReportPronunciation = onReportPronunciation,
                     onOpenReader = onOpenReader,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -139,6 +143,8 @@ fun PlayerScreen(
                         readAlongAvailable = readAlongAvailable,
                         bookmarksAvailable = bookmarksAvailable,
                         onAddBookmark = onAddBookmark,
+                        pronunciationAvailable = pronunciationAvailable,
+                        onReportPronunciation = onReportPronunciation,
                         onOpenReader = onOpenReader,
                         modifier = Modifier.align(Alignment.TopCenter).widthIn(max = NarrowMaxWidth)
                             .fillMaxWidth().fillMaxHeight(),
@@ -162,6 +168,8 @@ private fun PlayerMain(
     compact: Boolean,
     readAlongAvailable: Boolean,
     bookmarksAvailable: Boolean,
+    pronunciationAvailable: Boolean,
+    onReportPronunciation: (Int, String, Long) -> Unit,
     onAddBookmark: () -> Unit,
     onOpenReader: (chapterId: Int, title: String) -> Unit,
     modifier: Modifier,
@@ -198,7 +206,7 @@ private fun PlayerMain(
             MetaText(it)
         }
         val chapterId = s.queue.getOrNull(s.currentIndex)?.chapterId ?: 0
-        if ((readAlongAvailable || bookmarksAvailable) && chapterId > 0) {
+        if ((readAlongAvailable || bookmarksAvailable || pronunciationAvailable) && chapterId > 0) {
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (readAlongAvailable) {
@@ -215,6 +223,17 @@ private fun PlayerMain(
                 // Enabled on loaded media rather than on "is playing": marking the spot you just
                 // paused at is the most ordinary reason to reach for this at all.
                 if (bookmarksAvailable) BookmarkAction(enabled = s.hasMedia, onClick = onAddBookmark)
+                // The whole point is capturing it where it is heard: the chapter and the position
+                // are already known, so the report is one field rather than a hunt for the timestamp.
+                if (pronunciationAvailable) {
+                    OutlinedButton(
+                        onClick = { onReportPronunciation(chapterId, s.title, s.positionMs) },
+                        enabled = s.hasMedia,
+                        shape = androidx.compose.ui.graphics.RectangleShape,
+                        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
+                            .testTag(ReportPronunciationTestTag),
+                    ) { Text("SOUNDS WRONG") }
+                }
             }
         }
         Spacer(Modifier.height(20.dp))
@@ -342,6 +361,7 @@ private val SpeedPresets = listOf(0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f)
 const val SpeedChipTestTag = "player-speed-chip"
 const val SpeedDefaultChipTestTag = "player-speed-default"
 const val RetryButtonTestTag = "player-retry"
+const val ReportPronunciationTestTag = "player-report-pronunciation"
 
 /**
  * The rate row, which sets the rate for *this serial* while one is loaded.

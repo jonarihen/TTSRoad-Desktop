@@ -112,6 +112,13 @@ data class ServerCapabilities(
     val feedUrls: Boolean = false,
     /** Export and re-import where this account is in everything. */
     val listeningStateBackup: Boolean = false,
+    /**
+     * "That word is pronounced wrong", captured where it is heard.
+     *
+     * The server gates this on the write route as well as the read one, because a client that can
+     * list but not create has nothing to list.
+     */
+    val pronunciationReports: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -163,6 +170,7 @@ data class ServerCapabilities(
             fictionMaintenance = response.capabilities.flag("fiction_maintenance"),
             feedUrls = response.capabilities.flag("feed_urls"),
             listeningStateBackup = response.capabilities.flag("listening_state_backup"),
+            pronunciationReports = response.capabilities.flag("pronunciation_reports"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             maxEpubBytes = response.limits.longLimit("max_epub_bytes"),

@@ -110,6 +110,8 @@ import dk.perspektiva.ttsroad.desktop.ui.ChapterMaintenanceUi
 import dk.perspektiva.ttsroad.desktop.ui.ManageShelfScreen
 import dk.perspektiva.ttsroad.desktop.ui.ListeningBackupStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.PodcastFeedsStateHolder
+import dk.perspektiva.ttsroad.desktop.ui.PronunciationReportDialog
+import dk.perspektiva.ttsroad.desktop.ui.PronunciationReportsStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.ManageShelfStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.windowSizeClassFor
@@ -177,6 +179,7 @@ fun App(
     }
     val podcastFeeds = rememberStateHolder(repository) { PodcastFeedsStateHolder(repository) }
     val listeningBackup = rememberStateHolder(repository) { ListeningBackupStateHolder(repository) }
+    val pronunciation = rememberStateHolder(repository) { PronunciationReportsStateHolder(repository) }
     // Hoisted for the same reason: "Add to queue" is pressed on a chapter list, so the queue has to
     // exist and report what happened whether or not the queue screen was ever opened.
     val serverQueue = rememberStateHolder(repository, playback) {
@@ -694,6 +697,10 @@ fun App(
                                     readAlongAvailable = capabilities.readAlong,
                                     bookmarksAvailable = capabilities.bookmarks,
                                     onAddBookmark = { addBookmark() },
+                                    pronunciationAvailable = capabilities.pronunciationReports,
+                                    onReportPronunciation = { chapterId, title, positionMs ->
+                                        pronunciation.open(chapterId, title, positionMs)
+                                    },
                                     onOpenReader = { chapterId, title ->
                                         nav.open(Destination.Reader(chapterId, title))
                                     },
@@ -804,6 +811,9 @@ fun App(
     // screen, and the list is useful there too.
     if (showShortcuts) ShortcutsDialog(onDismiss = { showShortcuts = false })
     if (session.isLoggedIn) FictionManagementDialogs(fictionManagement)
+    // Hoisted above navigation like the management dialogs: the form is opened from the player and
+    // has to survive the user walking back to the library while it is up.
+    if (session.isLoggedIn) PronunciationReportDialog(pronunciation)
 
     // The Devices destination is a deep link into the settings screen: entering it selects the
     // pane, so a future "manage sessions" link from anywhere lands on the right place.
