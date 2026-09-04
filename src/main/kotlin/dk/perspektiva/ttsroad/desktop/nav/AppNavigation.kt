@@ -80,6 +80,15 @@ sealed interface Destination {
      */
     data object Notifications : Destination
 
+    /**
+     * The followed shelf, as something to edit rather than to browse.
+     *
+     * Carries nothing: it reads the same cached library every other screen does. Reached from
+     * Settings rather than the header, because emptying a shelf is a rare, deliberate visit — the
+     * everyday way to drop one book is still the Follow control on its own screen.
+     */
+    data object ManageShelf : Destination
+
     data object Settings : Destination
 
     data object Devices : Destination
@@ -104,6 +113,7 @@ val Destination.key: String
         Destination.Bookmarks -> "Bookmarks"
         Destination.Queue -> "Queue"
         Destination.Notifications -> "Notifications"
+        Destination.ManageShelf -> "ManageShelf"
         Destination.Settings -> "Settings"
         Destination.Devices -> "Devices"
     }
