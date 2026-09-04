@@ -228,6 +228,17 @@ interface TtsRoadRepository {
     suspend fun deleteChapter(chapterId: Int): Boolean? = null
 
     /**
+     * Run one whole-fiction maintenance action.
+     *
+     * Null means the server answered 404 — it has no such route. The response is returned rather
+     * than reduced to a boolean because the counts inside it are the answer.
+     */
+    suspend fun runFictionMaintenance(
+        fictionId: Int,
+        action: FictionMaintenanceAction,
+    ): MaintenanceResponse? = null
+
+    /**
      * Revokes one session.
      *
      * False means the server answered 404, which is ambiguous by design: the endpoint may be
@@ -611,6 +622,19 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun deleteChapter(chapterId: Int): Boolean? =
         ifEndpointExists { it.deleteChapter(chapterId) }?.let { it.deleted ?: true }
+
+    override suspend fun runFictionMaintenance(
+        fictionId: Int,
+        action: FictionMaintenanceAction,
+    ): MaintenanceResponse? = ifEndpointExists { api ->
+        when (action) {
+            FictionMaintenanceAction.Poll -> api.pollFiction(fictionId)
+            FictionMaintenanceAction.RetryFailed -> api.retryFailedChapters(fictionId)
+            FictionMaintenanceAction.Retag -> api.retagFiction(fictionId)
+            FictionMaintenanceAction.ApplyFilter -> api.applyChapterFilter(fictionId)
+            FictionMaintenanceAction.ReconvertAll -> api.reconvertAllChapters(fictionId)
+        }
+    }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean =
         ifEndpointExists { it.revokeDevice(tokenId) } != null

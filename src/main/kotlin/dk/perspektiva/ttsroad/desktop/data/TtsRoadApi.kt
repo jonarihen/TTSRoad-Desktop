@@ -88,6 +88,35 @@ interface TtsRoadApi {
     @DELETE("api/mobile/chapters/{chapter_id}")
     suspend fun deleteChapter(@Path("chapter_id") chapterId: Int): MaintenanceResponse
 
+    // Fiction maintenance (#115). Same response shape and the same two-gate story as the chapter
+    // routes above: poll is open to any account (the server rate-limits it, and a fresh chapter
+    // benefits every reader), the other four are admin-only.
+
+    /** Check the source for new chapters now rather than waiting for the scheduler. */
+    @POST("api/mobile/fictions/{fiction_id}/poll")
+    suspend fun pollFiction(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+
+    /** Requeue every errored chapter of one fiction. */
+    @POST("api/mobile/fictions/{fiction_id}/retry-failed")
+    suspend fun retryFailedChapters(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+
+    /**
+     * Rewrite the ID3 tags on existing MP3s. No TTS is re-run.
+     *
+     * The other half of the metadata editor: a title changed here is only applied to the database
+     * until the files carrying it are rewritten, and a podcast client reads the files.
+     */
+    @POST("api/mobile/fictions/{fiction_id}/retag")
+    suspend fun retagFiction(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+
+    /** Re-run the title filter over existing chapters. One-way: excludes, never un-excludes. */
+    @POST("api/mobile/fictions/{fiction_id}/apply-chapter-filter")
+    suspend fun applyChapterFilter(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+
+    /** Re-narrate every chapter. Expensive — a 400-chapter serial is 400 conversions. */
+    @POST("api/mobile/fictions/{fiction_id}/reconvert-all")
+    suspend fun reconvertAllChapters(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+
     // Both revoke calls answer with a small status object (`{"status": "ok", ...}`) whose shape is
     // not worth modelling: the client re-reads the list afterwards rather than trusting an echo,
     // because a 404 on the DELETE is ambiguous between "already gone" and "no such endpoint".

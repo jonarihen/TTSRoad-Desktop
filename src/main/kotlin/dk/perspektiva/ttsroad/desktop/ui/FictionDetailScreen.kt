@@ -91,7 +91,9 @@ import dk.perspektiva.ttsroad.desktop.data.listeningTotals
 import dk.perspektiva.ttsroad.desktop.data.markableIds
 import dk.perspektiva.ttsroad.desktop.data.playbackOrder
 import dk.perspektiva.ttsroad.desktop.data.canRetry
+import dk.perspektiva.ttsroad.desktop.data.FictionMaintenanceAction
 import dk.perspektiva.ttsroad.desktop.data.chapterDeleteConfirmation
+import dk.perspektiva.ttsroad.desktop.data.reconvertConfirmation
 import dk.perspektiva.ttsroad.desktop.data.statusLabel
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
@@ -99,6 +101,7 @@ import dk.perspektiva.ttsroad.desktop.player.playingChapterIdIn
 import kotlinx.coroutines.launch
 
 /** Test handle for "how many chapter rows did the lazy list actually compose". */
+const val PollFictionButtonTestTag: String = "pollFictionButton"
 const val ChapterRowTestTag: String = "chapterRow"
 
 /** Test handle for the chapter list's scroll container. */
@@ -183,6 +186,13 @@ data class ChapterMaintenanceUi(
     val busyChapterId: Int? = null,
     val notice: String? = null,
     val error: String? = null,
+    /** Whole-fiction actions this account may run, already filtered by capability and role. */
+    val fictionActions: List<FictionMaintenanceAction> = emptyList(),
+    val busyAction: FictionMaintenanceAction? = null,
+    val confirming: FictionMaintenanceAction? = null,
+    val onFictionAction: (FictionMaintenanceAction) -> Unit = {},
+    val onConfirmAction: () -> Unit = {},
+    val onDismissConfirmation: () -> Unit = {},
     val onRetry: (ChapterSummary) -> Unit = {},
     val onSetExcluded: (ChapterSummary, Boolean) -> Unit = { _, _ -> },
     val onDelete: (ChapterSummary) -> Unit = {},
@@ -374,6 +384,22 @@ fun FictionDetailScreen(
                         compact = compact,
                     )
 
+                    // Outside the admin block on purpose: the server leaves polling open to any
+                    // account, so gating it on `canManage` would hide it from most of them.
+                    if (FictionMaintenanceAction.Poll in maintenance.fictionActions) {
+                        Spacer(Modifier.height(16.dp))
+                        AarisSecondaryAction(
+                            label = if (maintenance.busyAction == FictionMaintenanceAction.Poll) {
+                                "Checking…"
+                            } else {
+                                FictionMaintenanceAction.Poll.title
+                            },
+                            onClick = { maintenance.onFictionAction(FictionMaintenanceAction.Poll) },
+                            enabled = maintenance.busyAction == null,
+                            modifier = Modifier.testTag(PollFictionButtonTestTag),
+                        )
+                    }
+
                     if (fictionManagement.canManage) {
                         Spacer(Modifier.height(16.dp))
                         ManageFictionBlock(
@@ -382,6 +408,7 @@ fun FictionDetailScreen(
                                 onEdit = { onEditFiction(header) },
                                 onDelete = { onDeleteFiction(header) },
                             ),
+                            maintenance = maintenance,
                         )
                     }
 
@@ -528,6 +555,16 @@ fun FictionDetailScreen(
                 deletingChapter = chapter
             },
             onDismiss = { managingChapter = null },
+        )
+    }
+
+    maintenance.confirming?.let { action ->
+        ConfirmDialog(
+            title = action.title.uppercase(),
+            body = reconvertConfirmation(fiction.doneChapters),
+            confirmLabel = "RE-NARRATE EVERYTHING",
+            onConfirm = maintenance.onConfirmAction,
+            onDismiss = maintenance.onDismissConfirmation,
         )
     }
 
@@ -824,7 +861,10 @@ const val ManageFictionTestTag: String = "manageFiction"
  * progress — which is the test for rank three. A header row of four equal buttons could say neither.
  */
 @Composable
-private fun ManageFictionBlock(actions: FictionManagementActions) {
+private fun ManageFictionBlock(
+    actions: FictionManagementActions,
+    maintenance: ChapterMaintenanceUi = ChapterMaintenanceUi(),
+) {
     var open by rememberSaveable { mutableStateOf(false) }
     Column(
         Modifier.fillMaxWidth().testTag(ManageFictionTestTag),
@@ -842,6 +882,24 @@ private fun ManageFictionBlock(actions: FictionManagementActions) {
                 enabled = !actions.busy,
                 modifier = Modifier.testTag(EditFictionButtonTestTag),
             )
+            // The admin maintenance rows sit between editing and deleting: each needs its own
+            // sentence, which is the same reason Edit and Delete are rows rather than buttons.
+            maintenance.fictionActions.filter { it.adminOnly }.forEach { action ->
+                AarisActionRow(
+                    title = if (maintenance.busyAction == action) "${action.title}…" else action.title,
+                    subtitle = action.subtitle,
+                    onClick = { maintenance.onFictionAction(action) },
+                    enabled = !actions.busy && maintenance.busyAction == null,
+                    // Severity: re-narration throws away audio that exists. That does not promote
+                    // it above the others in the order anything is reached for.
+                    titleColor = if (action == FictionMaintenanceAction.ReconvertAll) {
+                        AarisColor.Warning
+                    } else {
+                        AarisColor.Ink
+                    },
+                    modifier = Modifier.testTag("maintenance:${action.name}"),
+                )
+            }
             AarisActionRow(
                 title = "Delete fiction",
                 subtitle = "Destroys the shared chapters and every account's progress. Not undoable.",

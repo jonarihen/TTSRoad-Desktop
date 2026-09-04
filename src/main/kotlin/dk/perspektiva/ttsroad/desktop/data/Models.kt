@@ -555,8 +555,23 @@ data class MaintenanceResponse(
     /** Whether the chapter is now excluded, echoed by the exclude route. */
     val excluded: Boolean? = null,
     val deleted: Boolean? = null,
-    /** Chapters requeued by a fiction-wide retry. */
+    /** Chapters requeued by `retry-failed` or `reconvert-all`. */
     @param:Json(name = "reset_count") val resetCount: Int? = null,
+    /** MP3s whose ID3 tags `retag` rewrote. */
+    @param:Json(name = "file_count") val fileCount: Int? = null,
+    /** Chapters the filter took out. Never un-excludes: a hand-excluded chapter had a reason. */
+    @param:Json(name = "excluded_count") val excludedCount: Int? = null,
+    /** True when `poll` re-ingested the whole chapter list rather than the recent tail. */
+    @param:Json(name = "full_ingest") val fullIngest: Boolean = false,
+    /** How many chapters a partial poll re-read, when it took that branch. */
+    @param:Json(name = "partial_sync") val partialSync: Int? = null,
+    /**
+     * Why nothing happened, when that is worth saying.
+     *
+     * `apply-chapter-filter` sets it when the fiction has no filter configured — which is not a
+     * failure, and is the difference between "excluded nothing" and "there was no rule to run".
+     */
+    val detail: String? = null,
 )
 
 /** `POST /api/mobile/chapters/{id}/exclude` — take a chapter off every feed, or put it back. */

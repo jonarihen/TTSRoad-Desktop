@@ -105,6 +105,7 @@ import dk.perspektiva.ttsroad.desktop.ui.rememberChapterDownloads
 import dk.perspektiva.ttsroad.desktop.ui.rememberChapterQueue
 import dk.perspektiva.ttsroad.desktop.ui.UpdateStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.ChapterMaintenanceStateHolder
+import dk.perspektiva.ttsroad.desktop.data.fictionMaintenanceActions
 import dk.perspektiva.ttsroad.desktop.ui.ChapterMaintenanceUi
 import dk.perspektiva.ttsroad.desktop.ui.ManageShelfScreen
 import dk.perspektiva.ttsroad.desktop.ui.ManageShelfStateHolder
@@ -640,6 +641,23 @@ fun App(
                                         onRetry = chapterMaintenance::retry,
                                         onSetExcluded = chapterMaintenance::setExcluded,
                                         onDelete = chapterMaintenance::delete,
+                                        fictionActions = fictionMaintenanceActions(
+                                            capabilities,
+                                            // The verified is_admin, not the role cached at login.
+                                            isAdmin = fictionManagementState.canManage,
+                                        ),
+                                        busyAction = chapterMaintenanceState.busyAction,
+                                        confirming = chapterMaintenanceState.confirming,
+                                        onFictionAction = { action ->
+                                            chapterMaintenance.startFictionAction(
+                                                destination.fiction,
+                                                action,
+                                            )
+                                        },
+                                        onConfirmAction = {
+                                            chapterMaintenance.confirmFictionAction(destination.fiction)
+                                        },
+                                        onDismissConfirmation = chapterMaintenance::dismissConfirmation,
                                     ),
                                     fictionManagement = fictionManagementState,
                                     onEditFiction = { nav.open(Destination.FictionMetadata(it)) },
