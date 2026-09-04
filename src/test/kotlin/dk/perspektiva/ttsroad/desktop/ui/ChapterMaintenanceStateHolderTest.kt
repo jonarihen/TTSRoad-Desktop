@@ -3,6 +3,9 @@ package dk.perspektiva.ttsroad.desktop.ui
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.ChapterRetryOutcome
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
+import dk.perspektiva.ttsroad.desktop.data.FictionMaintenanceAction
+import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.MaintenanceResponse
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -19,6 +22,8 @@ import org.junit.jupiter.api.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChapterMaintenanceStateHolderTest {
+
+    private val fiction = FictionSummary(id = 7, title = "Wandering Inn", doneChapters = 400)
 
     private val chapter = ChapterSummary(
         id = 42,
@@ -188,6 +193,120 @@ class ChapterMaintenanceStateHolderTest {
 
         assertNull(fixture.holder.state.value.error)
         assertNull(fixture.holder.state.value.notice)
+
+        fixture.close()
+    }
+
+
+    // --- whole-fiction actions (#115) ---------------------------------------------------------
+
+    @Test
+    fun `a cheap action runs without asking`() = runTest {
+        val fixture = fixture()
+        fixture.repository.fictionMaintenanceResult =
+            Result.success(MaintenanceResponse(fileCount = 12))
+
+        fixture.holder.startFictionAction(fiction, FictionMaintenanceAction.Retag)
+        runCurrent()
+
+        assertEquals(
+            listOf(7 to FictionMaintenanceAction.Retag),
+            fixture.repository.fictionMaintenanceCalls,
+        )
+        assertEquals("Rewrote the tags on 12 files.", fixture.holder.state.value.notice)
+        assertNull(fixture.holder.state.value.confirming)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `re-narration asks first and sends nothing until confirmed`() = runTest {
+        val fixture = fixture()
+        fixture.repository.fictionMaintenanceResult =
+            Result.success(MaintenanceResponse(resetCount = 400))
+
+        fixture.holder.startFictionAction(fiction, FictionMaintenanceAction.ReconvertAll)
+        runCurrent()
+
+        assertEquals(FictionMaintenanceAction.ReconvertAll, fixture.holder.state.value.confirming)
+        assertTrue(
+            fixture.repository.fictionMaintenanceCalls.isEmpty(),
+            "hours of outbound TTS should not start on one press",
+        )
+
+        fixture.holder.confirmFictionAction(fiction)
+        runCurrent()
+
+        assertEquals(
+            listOf(7 to FictionMaintenanceAction.ReconvertAll),
+            fixture.repository.fictionMaintenanceCalls,
+        )
+        assertNull(fixture.holder.state.value.confirming)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `dismissing the re-narration question sends nothing`() = runTest {
+        val fixture = fixture()
+
+        fixture.holder.startFictionAction(fiction, FictionMaintenanceAction.ReconvertAll)
+        fixture.holder.dismissConfirmation()
+        runCurrent()
+
+        assertNull(fixture.holder.state.value.confirming)
+        assertTrue(fixture.repository.fictionMaintenanceCalls.isEmpty())
+
+        fixture.close()
+    }
+
+    @Test
+    fun `a 404 says the server cannot rather than reporting a count`() = runTest {
+        val fixture = fixture()
+        fixture.repository.fictionMaintenanceResult = Result.success(null)
+
+        fixture.holder.startFictionAction(fiction, FictionMaintenanceAction.Poll)
+        runCurrent()
+
+        assertEquals("This server cannot do that.", fixture.holder.state.value.notice)
+        assertNull(fixture.holder.state.value.error)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `a failure sets an error and no notice`() = runTest {
+        val fixture = fixture()
+        fixture.repository.fictionMaintenanceResult = Result.failure(IllegalStateException("boom"))
+
+        fixture.holder.startFictionAction(fiction, FictionMaintenanceAction.Poll)
+        runCurrent()
+
+        assertNotNull(fixture.holder.state.value.error)
+        assertNull(
+            fixture.holder.state.value.notice,
+            "reporting both would say it worked and failed in the same breath",
+        )
+        assertNull(fixture.holder.state.value.busyAction)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `a chapter action and a fiction action cannot overlap`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val fixture = fixture(dispatcher)
+        fixture.repository.fictionMaintenanceResult = Result.success(MaintenanceResponse())
+
+        fixture.holder.startFictionAction(fiction, FictionMaintenanceAction.Poll)
+        fixture.holder.retry(chapter)
+        runCurrent()
+
+        assertTrue(
+            fixture.repository.retriedChapters.isEmpty(),
+            "both write to the same fiction; the second would race the first",
+        )
+        assertEquals(1, fixture.repository.fictionMaintenanceCalls.size)
 
         fixture.close()
     }

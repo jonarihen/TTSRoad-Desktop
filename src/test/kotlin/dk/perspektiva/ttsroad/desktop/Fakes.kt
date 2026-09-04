@@ -17,6 +17,8 @@ import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.LoginResult
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.ChapterRetryOutcome
+import dk.perspektiva.ttsroad.desktop.data.FictionMaintenanceAction
+import dk.perspektiva.ttsroad.desktop.data.MaintenanceResponse
 import dk.perspektiva.ttsroad.desktop.data.MobileVoice
 import dk.perspektiva.ttsroad.desktop.data.PlaybackMarkResponse
 import dk.perspektiva.ttsroad.desktop.data.PlaybackStateRow
@@ -90,6 +92,7 @@ open class FakeRepository(
     var retryChapterResult: Result<ChapterRetryOutcome> = Result.success(ChapterRetryOutcome.Unsupported),
     var setChapterExcludedResult: Result<Boolean?>? = null,
     var deleteChapterResult: Result<Boolean?> = Result.success(null),
+    var fictionMaintenanceResult: Result<MaintenanceResponse?> = Result.success(null),
     /** Null models a server whose notifications route answers 404. */
     var chapterNotificationsResult: Result<ChapterNotificationsResponse?> = Result.success(null),
 ) : TtsRoadRepository {
@@ -117,6 +120,7 @@ open class FakeRepository(
     val retriedChapters: MutableList<Int> = mutableListOf()
     val excludedChapters: MutableList<Pair<Int, Boolean>> = mutableListOf()
     val deletedChapters: MutableList<Int> = mutableListOf()
+    val fictionMaintenanceCalls: MutableList<Pair<Int, FictionMaintenanceAction>> = mutableListOf()
     var revokeOtherDevicesCalls: Int = 0
         private set
     var readAlongCalls: Int = 0
@@ -303,6 +307,14 @@ open class FakeRepository(
     override suspend fun deleteChapter(chapterId: Int): Boolean? {
         deletedChapters += chapterId
         return deleteChapterResult.getOrThrow()
+    }
+
+    override suspend fun runFictionMaintenance(
+        fictionId: Int,
+        action: FictionMaintenanceAction,
+    ): MaintenanceResponse? {
+        fictionMaintenanceCalls += fictionId to action
+        return fictionMaintenanceResult.getOrThrow()
     }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean {

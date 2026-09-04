@@ -4,7 +4,10 @@ import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.chapterExcludeMessage
+import dk.perspektiva.ttsroad.desktop.data.FictionMaintenanceAction
+import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.chapterRetryMessage
+import dk.perspektiva.ttsroad.desktop.data.fictionMaintenanceMessage
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -18,9 +21,15 @@ import kotlinx.coroutines.launch
 data class ChapterMaintenanceUiState(
     /** The chapter a request is in flight for, so one row can be disabled rather than the list. */
     val busyChapterId: Int? = null,
+    /** The whole-fiction action in flight, if any. */
+    val busyAction: FictionMaintenanceAction? = null,
+    /** The expensive action waiting for an answer. Only re-narration asks. */
+    val confirming: FictionMaintenanceAction? = null,
     val notice: String? = null,
     val error: String? = null,
-)
+) {
+    val isBusy: Boolean get() = busyChapterId != null || busyAction != null
+}
 
 /**
  * Repairing one chapter (#113).
@@ -68,6 +77,57 @@ class ChapterMaintenanceStateHolder(
         }
     }
 
+    /**
+     * Start a whole-fiction action, asking first when it is the expensive one.
+     *
+     * Only re-narration confirms. The rest are cheap and reversible enough that a question before
+     * each would be the kind of prompt people learn to click through — which is what makes the one
+     * real question worth anything.
+     */
+    fun startFictionAction(fiction: FictionSummary, action: FictionMaintenanceAction) {
+        if (_state.value.isBusy) return
+        if (action.confirms) {
+            _state.update { it.copy(confirming = action, notice = null, error = null) }
+        } else {
+            runFiction(fiction, action)
+        }
+    }
+
+    fun confirmFictionAction(fiction: FictionSummary) {
+        val action = _state.value.confirming ?: return
+        _state.update { it.copy(confirming = null) }
+        runFiction(fiction, action)
+    }
+
+    fun dismissConfirmation() = _state.update { it.copy(confirming = null) }
+
+    private fun runFiction(fiction: FictionSummary, action: FictionMaintenanceAction) {
+        if (_state.value.isBusy) return
+        // Busy before the launch, for the reason the chapter guard is: a body that has not run yet
+        // has written nothing for the guard to read.
+        _state.update { it.copy(busyAction = action, notice = null, error = null) }
+        job = scope.launch {
+            val outcome = runCatching { repository.runFictionMaintenance(fiction.id, action) }
+            val failure = outcome.exceptionOrNull()
+            val response = outcome.getOrNull()
+            _state.update {
+                it.copy(
+                    busyAction = null,
+                    notice = when {
+                        failure != null -> null
+                        // Null is the server's 404: it has no such route. Not a failure to raise,
+                        // but not something to report a count for either.
+                        response == null -> "This server cannot do that."
+                        else -> fictionMaintenanceMessage(action, response)
+                    },
+                    error = failure?.let { userFacingMessage(it, "Could not run that action") },
+                )
+            }
+            // Poll and retry change chapter rows; retag and the filter change what the list shows.
+            cache.refreshChapters(fiction.id)
+        }
+    }
+
     fun dismissNotice() = _state.update { it.copy(notice = null, error = null) }
 
     /**
@@ -77,7 +137,7 @@ class ChapterMaintenanceStateHolder(
      * because the chapter was already converting has still left the row out of date on screen.
      */
     private fun run(chapter: ChapterSummary, block: suspend () -> String?) {
-        if (_state.value.busyChapterId != null) return
+        if (_state.value.isBusy) return
         // Marked busy *here*, not inside the coroutine. A launched body does not run until the
         // dispatcher reaches it, so a guard that reads state the body sets lets a second press
         // through in the gap — and these are writes against one shared row, where the second one

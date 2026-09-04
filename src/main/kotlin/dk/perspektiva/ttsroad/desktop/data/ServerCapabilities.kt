@@ -96,6 +96,13 @@ data class ServerCapabilities(
      * them this account may actually use.
      */
     val chapterMaintenance: Boolean = false,
+    /**
+     * Act on a whole fiction: poll it now, requeue its failures, retag, re-filter, re-narrate.
+     *
+     * Like [chapterMaintenance], the flag says only that the routes exist, and the gate is not
+     * uniform: poll is open to any account and the other four are admin-only.
+     */
+    val fictionMaintenance: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -144,6 +151,7 @@ data class ServerCapabilities(
             notifications = response.capabilities.flag("notifications"),
             voiceCatalogue = response.capabilities.flag("voice_catalogue"),
             chapterMaintenance = response.capabilities.flag("chapter_maintenance"),
+            fictionMaintenance = response.capabilities.flag("fiction_maintenance"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             maxEpubBytes = response.limits.longLimit("max_epub_bytes"),
