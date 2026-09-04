@@ -214,6 +214,20 @@ interface TtsRoadRepository {
     suspend fun voices(): List<MobileVoice>? = null
 
     /**
+     * Queue one chapter for conversion again.
+     *
+     * Open to any signed-in account by the server's own design. The `409` is modelled rather than
+     * thrown because it is not a failure — see [ChapterRetryOutcome].
+     */
+    suspend fun retryChapter(chapterId: Int): ChapterRetryOutcome = ChapterRetryOutcome.Unsupported
+
+    /** Take a chapter off every account's feed, or put it back. Admin-only on the server. */
+    suspend fun setChapterExcluded(chapterId: Int, excluded: Boolean): Boolean? = null
+
+    /** Delete a chapter and its audio. Admin-only. Null means the server has no such route. */
+    suspend fun deleteChapter(chapterId: Int): Boolean? = null
+
+    /**
      * Revokes one session.
      *
      * False means the server answered 404, which is ambiguous by design: the endpoint may be
@@ -577,6 +591,26 @@ class RetrofitTtsRoadRepository(
         ifEndpointExists { it.audiobookExports() }
 
     override suspend fun voices(): List<MobileVoice>? = ifEndpointExists { it.voices() }?.voices
+
+    override suspend fun retryChapter(chapterId: Int): ChapterRetryOutcome = try {
+        val response = withAuthorizedApi { it.retryChapter(chapterId) }
+        ChapterRetryOutcome.Queued(response.chapterId ?: chapterId)
+    } catch (e: HttpException) {
+        when (e.code()) {
+            // Excluded, or already converting. The user's intent is either already happening or
+            // deliberately switched off, and neither is an error to raise.
+            409 -> ChapterRetryOutcome.AlreadyRunning
+            404 -> ChapterRetryOutcome.Unsupported
+            else -> throw e
+        }
+    }
+
+    override suspend fun setChapterExcluded(chapterId: Int, excluded: Boolean): Boolean? =
+        ifEndpointExists { it.setChapterExcluded(chapterId, ChapterExcludeRequest(excluded)) }
+            ?.let { it.excluded ?: excluded }
+
+    override suspend fun deleteChapter(chapterId: Int): Boolean? =
+        ifEndpointExists { it.deleteChapter(chapterId) }?.let { it.deleted ?: true }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean =
         ifEndpointExists { it.revokeDevice(tokenId) } != null

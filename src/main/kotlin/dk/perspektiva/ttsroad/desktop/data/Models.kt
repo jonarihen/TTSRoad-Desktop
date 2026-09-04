@@ -535,3 +535,29 @@ data class MobileVoice(
     val locale: String? = null,
     val gender: String? = null,
 )
+
+/**
+ * The answer every maintenance route gives (#113).
+ *
+ * One shape across all of them, and the counts are the reason it is worth modelling rather than
+ * ignoring: "requeued" and "did nothing" both come back as `status: "ok"`, and only a number
+ * separates them.
+ *
+ * Every field is nullable because each route fills a different subset. A chapter retry sets
+ * `chapterId` and nothing else; the fiction-wide routes this client does not call yet fill the
+ * counters, and they are decoded rather than dropped so adding those routes needs no model change.
+ */
+data class MaintenanceResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int? = null,
+    @param:Json(name = "chapter_id") val chapterId: Int? = null,
+    /** Whether the chapter is now excluded, echoed by the exclude route. */
+    val excluded: Boolean? = null,
+    val deleted: Boolean? = null,
+    /** Chapters requeued by a fiction-wide retry. */
+    @param:Json(name = "reset_count") val resetCount: Int? = null,
+)
+
+/** `POST /api/mobile/chapters/{id}/exclude` — take a chapter off every feed, or put it back. */
+data class ChapterExcludeRequest(val excluded: Boolean = true)
