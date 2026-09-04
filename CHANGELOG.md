@@ -18,6 +18,12 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-04
+
+One feature, shipped to all three clients at once, and nearly all of its design is about when the
+notice goes *away*. Telling somebody a chapter exists is the easy half; the half that decides
+whether a feature like this stays switched on is not saying it twice.
+
 ### Added
 
 - **New chapters announce themselves, and stay announced until they play.** Following a serial
@@ -214,7 +220,8 @@ server.
 - A Debian package with a bundled JDK 25 runtime, desktop entry, upgrade-safe revisioning and XDG
   rotating logs, plus credential-safe `--version` and `--diagnostics` commands.
 
-[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.3.0
 [1.2.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.2.0
 [1.1.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.1.0
 [1.0.2]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.0.2
