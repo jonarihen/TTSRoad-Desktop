@@ -3,8 +3,11 @@ package dk.perspektiva.ttsroad.desktop.ui
 import dk.perspektiva.ttsroad.desktop.data.FictionCreateRequest
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
+import dk.perspektiva.ttsroad.desktop.data.MobileVoice
+import dk.perspektiva.ttsroad.desktop.data.normaliseVoiceRate
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
+import dk.perspektiva.ttsroad.desktop.data.voiceRateProblem
 import dk.perspektiva.ttsroad.desktop.data.SyncScope
 import java.io.File
 import kotlinx.coroutines.CoroutineDispatcher
@@ -76,8 +79,22 @@ data class FictionManagementUiState(
     val notice: String? = null,
     /** Consumed by the root navigator after a successful delete. */
     val deletedFictionId: Int? = null,
+    /**
+     * The narrator catalogue, or null when it has not been asked for or the server has no route.
+     *
+     * Null rather than empty because the two say different things: "not available here" retires the
+     * picker and leaves the typed field, while an empty catalogue would be a server with no voices
+     * installed — which has never been seen and is not worth pretending to handle differently.
+     */
+    val voices: List<MobileVoice>? = null,
 ) {
     val canManage: Boolean get() = access == FictionManagementAccess.Admin
+
+    /** Whether a picker can be drawn: the server has the list and this account may apply a choice. */
+    val canPickVoice: Boolean get() = voices != null && canManage
+
+    /** Why the typed rate cannot be sent, or null. Nothing else between here and the database checks. */
+    val rateProblem: String? get() = voiceRateProblem(editor?.rate)
     val hasOpenOverlay: Boolean get() = editor != null || deleteConfirmation != null
 }
 
@@ -104,6 +121,8 @@ class FictionManagementStateHolder(
     val state: StateFlow<FictionManagementUiState> = _state.asStateFlow()
 
     private var accessJob: Job? = null
+    private var voicesJob: Job? = null
+    private var voiceCatalogueAdvertised: Boolean = false
     private var mutationJob: Job? = null
     private var lastSupported: Boolean? = null
 
@@ -111,6 +130,7 @@ class FictionManagementStateHolder(
         supported: Boolean,
         epubUpload: Boolean = false,
         maxEpubBytes: Long? = null,
+        voiceCatalogue: Boolean = false,
         forceRefresh: Boolean = false,
     ) {
         if (!supported) {
@@ -125,6 +145,8 @@ class FictionManagementStateHolder(
         // after the first access check, and a server upgraded under a running desktop is noticed
         // the same day.
         _state.update { it.copy(epubUploadAvailable = epubUpload, maxEpubBytes = maxEpubBytes) }
+        voiceCatalogueAdvertised = voiceCatalogue
+        if (!voiceCatalogue) _state.update { it.copy(voices = null) }
         val newlySupported = lastSupported != true
         lastSupported = true
         if (accessJob?.isActive == true || (!forceRefresh && !newlySupported && _state.value.access in VerifiedAccess)) {
@@ -144,6 +166,7 @@ class FictionManagementStateHolder(
                             error = null,
                         )
                     }
+                    if (user?.isAdmin == true) loadVoices()
                 }
                 .onFailure { failure ->
                     _state.update {
@@ -153,6 +176,21 @@ class FictionManagementStateHolder(
                         )
                     }
                 }
+        }
+    }
+
+    /**
+     * Fetch the narrator catalogue, once, in the background.
+     *
+     * Deliberately silent on failure. The picker is an improvement on a text field that still works;
+     * an error banner over the add form for a list nobody asked for would report a problem the user
+     * did not have. A null catalogue simply leaves the field typed.
+     */
+    private fun loadVoices() {
+        if (!voiceCatalogueAdvertised || _state.value.voices != null || voicesJob?.isActive == true) return
+        voicesJob = scope.launch {
+            runCatching { repository.voices() }
+                .onSuccess { voices -> _state.update { it.copy(voices = voices) } }
         }
     }
 
@@ -219,7 +257,9 @@ class FictionManagementStateHolder(
         val validation = when {
             editor.epubFile != null -> epubProblem(editor.epubFile, _state.value.maxEpubBytes)
             editor.fictionUrl.isBlank() -> "A Royal Road URL, a fiction id, or an EPUB is required"
-            else -> null
+            // Checked here and not only on the button: a disabled control is a courtesy, not a
+            // guarantee, and nothing downstream — including the server — checks this string.
+            else -> voiceRateProblem(editor.rate)
         }
         if (validation != null) {
             _state.update { it.copy(error = validation) }
@@ -235,7 +275,9 @@ class FictionManagementStateHolder(
                     FictionCreateRequest(
                         fictionUrl = editor.fictionUrl.trim(),
                         voice = editor.voice.trim().takeIf(String::isNotEmpty),
-                        rate = editor.rate.trim().takeIf(String::isNotEmpty),
+                        // Normalised, not sent as typed: "10" means +10% and the server would
+                        // store the bare string and fail on it at conversion time.
+                        rate = normaliseVoiceRate(editor.rate),
                         enabled = editor.autoPoll,
                         // Always sent, including the null that means "everything": the field is
                         // chosen in the form, so its absence would be this client guessing again.

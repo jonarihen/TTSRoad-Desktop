@@ -7,9 +7,13 @@ import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionTagLimits
 import dk.perspektiva.ttsroad.desktop.data.FictionUpdateRequest
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
+import dk.perspektiva.ttsroad.desktop.data.MobileVoice
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.cleanFictionTags
+import dk.perspektiva.ttsroad.desktop.data.normaliseVoiceRate
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
+import dk.perspektiva.ttsroad.desktop.data.voiceChangeConsequence
+import dk.perspektiva.ttsroad.desktop.data.voiceRateProblem
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CoroutineDispatcher
@@ -30,6 +34,8 @@ data class FictionMetadataDraft(
     /** The half-typed tag in the "add a tag" field, which is not a tag until it is committed. */
     val tagDraft: String = "",
     val voice: String = "",
+    /** Speech rate for the next conversion. Blank means the fiction had none to show. */
+    val rate: String = "",
 )
 
 data class FictionMetadataUiState(
@@ -45,6 +51,8 @@ data class FictionMetadataUiState(
     val notice: String? = null,
     /** Cleared once this server has answered 404 to a cover upload — it predates the route. */
     val coverUploadSupported: Boolean = true,
+    /** The narrator catalogue, or null when the server has no `/voices` route. */
+    val voices: List<MobileVoice>? = null,
 ) {
     /** Which fields a person owns, as the server reports them. Empty on a server without the idea. */
     val overrides: Set<String> get() = fiction?.metadataOverrides?.toSet().orEmpty()
@@ -68,11 +76,33 @@ data class FictionMetadataUiState(
     /** Narration voice is a conversion setting, not metadata: changing it claims nothing. */
     val voiceChanged: Boolean get() = fiction != null && draft.voice.trim() != fiction.voice.orEmpty().trim()
 
+    /**
+     * Compared *normalised*, so re-typing `10` over a stored `+10%` is not a change.
+     * Otherwise every visit to the screen would offer to save the same rate back.
+     */
+    val rateChanged: Boolean
+        get() = fiction != null &&
+            normaliseVoiceRate(draft.rate) != normaliseVoiceRate(fiction.rate)
+
+    /** Why the typed rate cannot be sent, or null. Nothing downstream of here checks it. */
+    val rateProblem: String? get() = voiceRateProblem(draft.rate)
+
+    /** Whether a picker can be drawn: the server published a catalogue for this screen. */
+    val canPickVoice: Boolean get() = voices != null
+
+    /** What the narration change will and will not do, at the point of making it. */
+    val narrationConsequence: String?
+        get() = voiceChangeConsequence(
+            doneChapters = fiction?.doneChapters ?: 0,
+            voiceChanged = voiceChanged,
+            rateChanged = rateChanged,
+        )
+
     val hasChanges: Boolean
-        get() = changedFields.isNotEmpty() || voiceChanged || chosenCover != null ||
+        get() = changedFields.isNotEmpty() || voiceChanged || rateChanged || chosenCover != null ||
             draft.tagDraft.isNotBlank()
 
-    val canSave: Boolean get() = fiction != null && !isBusy && hasChanges
+    val canSave: Boolean get() = fiction != null && !isBusy && hasChanges && rateProblem == null
 }
 
 /**
@@ -100,6 +130,7 @@ class FictionMetadataStateHolder(
     val state: StateFlow<FictionMetadataUiState> = _state.asStateFlow()
 
     private var saveJob: Job? = null
+    private var voicesJob: Job? = null
 
     /**
      * Points the form at [fiction], or refreshes the baseline of the one already open.
@@ -108,18 +139,37 @@ class FictionMetadataStateHolder(
      * a fresher copy arrives from the library cache, and a form that reset itself under a poll
      * would lose an edit somebody was halfway through.
      */
-    fun load(fiction: FictionSummary, maxCoverBytes: Long? = null) {
+    fun load(fiction: FictionSummary, maxCoverBytes: Long? = null, voiceCatalogue: Boolean = false) {
         if (fiction.id <= 0) return
         _state.update { current ->
             if (current.fiction?.id == fiction.id) {
                 current.copy(fiction = fiction, maxCoverBytes = maxCoverBytes)
             } else {
+                // A different fiction resets the form, but the catalogue is a property of the
+                // server rather than of the book, so it is carried across rather than re-fetched.
                 FictionMetadataUiState(
                     fiction = fiction,
                     draft = draftOf(fiction),
                     maxCoverBytes = maxCoverBytes,
+                    voices = current.voices,
                 )
             }
+        }
+        if (voiceCatalogue) loadVoices()
+    }
+
+    /**
+     * Fetch the narrator catalogue, once, in the background.
+     *
+     * Silent on failure by design: the picker is an improvement on a field that still works, and an
+     * error banner for a list nobody asked for would report a problem the user does not have. A null
+     * catalogue simply leaves the voice typed.
+     */
+    private fun loadVoices() {
+        if (_state.value.voices != null || voicesJob?.isActive == true) return
+        voicesJob = scope.launch {
+            runCatching { repository.voices() }
+                .onSuccess { voices -> _state.update { it.copy(voices = voices) } }
         }
     }
 
@@ -130,6 +180,8 @@ class FictionMetadataStateHolder(
     fun setDescription(value: String) = editDraft { it.copy(description = value) }
 
     fun setVoice(value: String) = editDraft { it.copy(voice = value) }
+
+    fun setRate(value: String) = editDraft { it.copy(rate = value) }
 
     fun setTagDraft(value: String) = editDraft { it.copy(tagDraft = value) }
 
@@ -182,7 +234,9 @@ class FictionMetadataStateHolder(
         val validation = when {
             start.draft.title.isBlank() -> "Title cannot be empty"
             start.draft.voice.isBlank() -> "Voice cannot be empty"
-            else -> null
+            // Checked here and not only on the button: a disabled control is a courtesy, not a
+            // guarantee, and this is the last point before a string the server never validates.
+            else -> voiceRateProblem(start.draft.rate)
         }
         if (validation != null) {
             _state.value = start.copy(error = validation, notice = null)
@@ -373,7 +427,7 @@ class FictionMetadataStateHolder(
         /** The request for what changed, or null when nothing did. */
         internal fun patchOf(state: FictionMetadataUiState): FictionUpdateRequest? {
             val changed = state.changedFields
-            if (changed.isEmpty() && !state.voiceChanged) return null
+            if (changed.isEmpty() && !state.voiceChanged && !state.rateChanged) return null
             return FictionUpdateRequest(
                 title = state.draft.title.trim().takeIf { FictionMetadataFields.Title in changed },
                 author = state.draft.author.trim().takeIf { FictionMetadataFields.Author in changed },
@@ -381,6 +435,9 @@ class FictionMetadataStateHolder(
                     .takeIf { FictionMetadataFields.Description in changed },
                 tags = cleanFictionTags(state.draft.tags).takeIf { FictionMetadataFields.Tags in changed },
                 voice = state.draft.voice.trim().takeIf { state.voiceChanged },
+                // Normalised rather than sent as typed: the server stores this string without
+                // checking it, so "10" would be saved and then fail at the next conversion.
+                rate = normaliseVoiceRate(state.draft.rate).takeIf { state.rateChanged },
             )
         }
 
@@ -390,6 +447,7 @@ class FictionMetadataStateHolder(
             description = fiction.description.orEmpty(),
             tags = fiction.tags,
             voice = fiction.voice.orEmpty(),
+            rate = fiction.rate.orEmpty(),
         )
 
         /** Folds a tag typed but never committed into the list, so Save does not silently drop it. */

@@ -5,10 +5,12 @@ import dk.perspektiva.ttsroad.desktop.data.CoverUploadResult
 import dk.perspektiva.ttsroad.desktop.data.FictionMetadataFields
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
+import dk.perspektiva.ttsroad.desktop.data.MobileVoice
 import java.io.File
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -341,6 +343,120 @@ class FictionMetadataStateHolderTest {
 
         assertNull(fixture.holder.state.value.fiction)
         assertEquals("", fixture.holder.state.value.draft.title)
+        fixture.close()
+    }
+
+
+    @Test
+    fun `the rate is sent normalised, so a typo cannot reach the next conversion`() = runTest {
+        val fixture = fixture()
+        val withRate = serial.copy(rate = "+0%")
+        fixture.repository.updateFictionResult = Result.success(withRate)
+        fixture.holder.load(withRate)
+
+        // The server stores this string unchecked, so "25" would save and then fail hours later.
+        fixture.holder.setRate("25")
+        fixture.holder.save()
+        runCurrent()
+
+        val sent = fixture.repository.updatedFictions.single().second
+        assertEquals("+25%", sent.rate)
+        assertNull(sent.title, "changing a rate claims no metadata field")
+        assertNull(sent.voice)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `a rate that only differs in spelling is not a change`() = runTest {
+        val fixture = fixture()
+        fixture.holder.load(serial.copy(rate = "+10%"))
+
+        fixture.holder.setRate("10")
+
+        assertFalse(
+            fixture.holder.state.value.rateChanged,
+            "re-typing the same rate differently would otherwise offer to save it back forever",
+        )
+        assertFalse(fixture.holder.state.value.hasChanges)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `a malformed rate blocks the save rather than being sent`() = runTest {
+        val fixture = fixture()
+        fixture.holder.load(serial.copy(rate = "+0%"))
+
+        fixture.holder.setRate("very fast")
+
+        assertNotNull(fixture.holder.state.value.rateProblem)
+        assertFalse(fixture.holder.state.value.canSave)
+
+        // The disabled button is a courtesy; the holder is what has to refuse.
+        fixture.holder.save()
+        runCurrent()
+        assertTrue(fixture.repository.updatedFictions.isEmpty())
+        assertNotNull(fixture.holder.state.value.error, "refusing silently would look like a dead button")
+
+        fixture.close()
+    }
+
+    @Test
+    fun `the consequence appears only while narration is actually changing`() = runTest {
+        val fixture = fixture()
+        fixture.holder.load(serial.copy(rate = "+0%", doneChapters = 12))
+
+        assertNull(fixture.holder.state.value.narrationConsequence)
+
+        fixture.holder.setVoice("en-GB-SoniaNeural")
+        val consequence = fixture.holder.state.value.narrationConsequence
+        assertNotNull(consequence)
+        assertTrue(consequence.contains("12 chapters already converted"))
+        assertTrue(consequence.contains("nothing is re-narrated"))
+
+        fixture.holder.setVoice(serial.voice.orEmpty())
+        assertNull(fixture.holder.state.value.narrationConsequence)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `the catalogue is fetched only when the server advertises it`() = runTest {
+        val fixture = fixture()
+        fixture.repository.voicesResult = Result.success(listOf(MobileVoice("en-US-BrianNeural", "en-US", "Male")))
+
+        fixture.holder.load(serial, voiceCatalogue = false)
+        runCurrent()
+        assertEquals(0, fixture.repository.voicesCalls)
+        assertFalse(fixture.holder.state.value.canPickVoice)
+
+        fixture.holder.load(serial, voiceCatalogue = true)
+        runCurrent()
+        assertEquals(1, fixture.repository.voicesCalls)
+        assertTrue(fixture.holder.state.value.canPickVoice)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `switching fiction keeps the catalogue but resets the form`() = runTest {
+        val fixture = fixture()
+        fixture.repository.voicesResult = Result.success(listOf(MobileVoice("en-US-BrianNeural", "en-US", "Male")))
+        fixture.holder.load(serial, voiceCatalogue = true)
+        runCurrent()
+
+        fixture.holder.load(serial.copy(id = 9, title = "Another"), voiceCatalogue = true)
+        runCurrent()
+
+        assertEquals("Another", fixture.holder.state.value.draft.title)
+        assertEquals(
+            1,
+            fixture.repository.voicesCalls,
+            "the catalogue belongs to the server, not to the book, so it survives the reset",
+        )
+        assertTrue(fixture.holder.state.value.canPickVoice)
+
         fixture.close()
     }
 

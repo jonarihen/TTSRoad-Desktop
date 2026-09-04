@@ -53,6 +53,8 @@ const val ChosenCoverNameTestTag: String = "chosenCoverName"
 const val SaveMetadataButtonTestTag: String = "saveMetadataButton"
 const val UseSourceValuesButtonTestTag: String = "useSourceValuesButton"
 const val TagDraftFieldTestTag: String = "tagDraftField"
+const val MetadataRateFieldTestTag: String = "metadataRateField"
+const val NarrationConsequenceTestTag: String = "narrationConsequence"
 
 /** How many characters of tag text fit on one row before the next chip wraps. */
 private const val TagRowBudget = 46
@@ -244,15 +246,51 @@ private fun MetadataForm(
         MetaText("Narration")
         // Deliberately outside the metadata block above: the voice is a conversion setting, not a
         // description of the book, so changing it claims nothing and no refresh would overwrite it.
+        val voices = state.voices
+        if (voices != null) {
+            VoiceField(
+                voices = voices,
+                selected = draft.voice,
+                enabled = !state.isBusy,
+                onSelect = holder::setVoice,
+                emptyLabel = "Not set — the server default is used",
+            )
+        } else {
+            // No catalogue route on this server, so the exact edge-tts name still has to be typed.
+            OutlinedTextField(
+                value = draft.voice,
+                onValueChange = holder::setVoice,
+                label = { Text("VOICE") },
+                supportingText = { Text("The edge-tts voice new chapters are narrated with") },
+                enabled = !state.isBusy,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         OutlinedTextField(
-            value = draft.voice,
-            onValueChange = holder::setVoice,
-            label = { Text("VOICE") },
-            supportingText = { Text("The edge-tts voice new chapters are narrated with") },
+            value = draft.rate,
+            onValueChange = holder::setRate,
+            label = { Text("SPEECH RATE") },
+            // Nothing downstream checks this. `FictionUpdate.rate` is a bare string on the server,
+            // so a malformed value saves cleanly and then fails at the next conversion, hours later.
+            isError = state.rateProblem != null,
+            supportingText = {
+                Text(state.rateProblem ?: "How much faster or slower than the voice's own pace, like +10%.")
+            },
             enabled = !state.isBusy,
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().testTag(MetadataRateFieldTestTag),
         )
+        // The half a picker silently implies is included. Shown only while something is actually
+        // changing, so it reads as a consequence rather than as standing documentation.
+        state.narrationConsequence?.let { consequence ->
+            Text(
+                consequence,
+                color = AarisColor.Dim,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag(NarrationConsequenceTestTag),
+            )
+        }
     }
 }
 

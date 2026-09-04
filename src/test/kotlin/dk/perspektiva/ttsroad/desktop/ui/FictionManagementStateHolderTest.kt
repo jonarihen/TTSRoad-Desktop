@@ -4,10 +4,12 @@ import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
+import dk.perspektiva.ttsroad.desktop.data.MobileVoice
 import dk.perspektiva.ttsroad.desktop.data.SyncScope
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -42,6 +44,146 @@ class FictionManagementStateHolderTest {
         runCurrent()
         assertEquals(FictionManagementAccess.NotAdmin, holder.state.value.access)
         assertEquals(2, repository.currentUserCalls)
+
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `the catalogue is fetched only for an admin on a server that advertises it`() = runTest {
+        val voices = listOf(MobileVoice("en-US-BrianNeural", "en-US", "Male"))
+        val repository = FakeRepository(
+            currentUserResult = Result.success(MobileUser(1, "reader", isAdmin = false)),
+            voicesResult = Result.success(voices),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = FictionManagementStateHolder(repository, cache, dispatcher = UnconfinedTestDispatcher(testScheduler))
+
+        // Advertised, but this account cannot apply a choice — listing it would draw a picker whose
+        // save is a 403.
+        holder.ensureAccess(supported = true, voiceCatalogue = true)
+        runCurrent()
+        assertEquals(0, repository.voicesCalls)
+        assertFalse(holder.state.value.canPickVoice)
+
+        repository.currentUserResult = Result.success(MobileUser(1, "boss", isAdmin = true))
+        holder.ensureAccess(supported = true, voiceCatalogue = true, forceRefresh = true)
+        runCurrent()
+        assertEquals(1, repository.voicesCalls)
+        assertTrue(holder.state.value.canPickVoice)
+        assertEquals(voices, holder.state.value.voices)
+
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `a server that does not advertise the catalogue is never asked for it`() = runTest {
+        val repository = FakeRepository(
+            currentUserResult = Result.success(MobileUser(1, "boss", isAdmin = true)),
+            voicesResult = Result.success(listOf(MobileVoice("en-US-BrianNeural", "en-US", "Male"))),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = FictionManagementStateHolder(repository, cache, dispatcher = UnconfinedTestDispatcher(testScheduler))
+
+        holder.ensureAccess(supported = true, voiceCatalogue = false)
+        runCurrent()
+
+        assertEquals(0, repository.voicesCalls)
+        assertNull(holder.state.value.voices)
+        assertFalse(holder.state.value.canPickVoice)
+
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `a catalogue that will not load leaves the field typed rather than raising an error`() = runTest {
+        val repository = FakeRepository(
+            currentUserResult = Result.success(MobileUser(1, "boss", isAdmin = true)),
+            voicesResult = Result.failure(IllegalStateException("no route")),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = FictionManagementStateHolder(repository, cache, dispatcher = UnconfinedTestDispatcher(testScheduler))
+
+        holder.ensureAccess(supported = true, voiceCatalogue = true)
+        runCurrent()
+
+        assertEquals(1, repository.voicesCalls)
+        assertNull(holder.state.value.voices)
+        assertNull(
+            holder.state.value.error,
+            "the picker is an improvement on a field that still works; its failure is not the user's problem",
+        )
+        assertEquals(FictionManagementAccess.Admin, holder.state.value.access)
+
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `a malformed rate is reported on the add form before anything is sent`() = runTest {
+        val repository = FakeRepository(
+            currentUserResult = Result.success(MobileUser(1, "boss", isAdmin = true)),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = FictionManagementStateHolder(repository, cache, dispatcher = UnconfinedTestDispatcher(testScheduler))
+
+        holder.ensureAccess(supported = true)
+        runCurrent()
+        holder.openAdd()
+
+        assertNull(holder.state.value.rateProblem, "a blank rate means leave the default alone")
+
+        holder.updateAdd(rate = "quickly")
+        assertNotNull(holder.state.value.rateProblem)
+
+        holder.updateAdd(rate = "+10%")
+        assertNull(holder.state.value.rateProblem)
+
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `a malformed rate is refused by the holder, not only by the button`() = runTest {
+        val repository = FakeRepository(
+            currentUserResult = Result.success(MobileUser(1, "boss", isAdmin = true)),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = FictionManagementStateHolder(repository, cache, dispatcher = UnconfinedTestDispatcher(testScheduler))
+
+        holder.ensureAccess(supported = true)
+        runCurrent()
+        holder.openAdd()
+        holder.updateAdd(fictionUrl = "https://www.royalroad.com/fiction/21220", rate = "quickly")
+
+        holder.submitAdd()
+        runCurrent()
+
+        assertTrue(repository.createdFictions.isEmpty())
+        assertNotNull(holder.state.value.error)
+
+        holder.clear()
+        cache.close()
+    }
+
+    @Test
+    fun `a bare rate is signed before it is sent`() = runTest {
+        val repository = FakeRepository(
+            currentUserResult = Result.success(MobileUser(1, "boss", isAdmin = true)),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        val holder = FictionManagementStateHolder(repository, cache, dispatcher = UnconfinedTestDispatcher(testScheduler))
+
+        holder.ensureAccess(supported = true)
+        runCurrent()
+        holder.openAdd()
+        holder.updateAdd(fictionUrl = "https://www.royalroad.com/fiction/21220", rate = "10")
+        holder.submitAdd()
+        runCurrent()
+
+        assertEquals("+10%", repository.createdFictions.single().rate)
 
         holder.clear()
         cache.close()
