@@ -108,6 +108,7 @@ import dk.perspektiva.ttsroad.desktop.ui.ChapterMaintenanceStateHolder
 import dk.perspektiva.ttsroad.desktop.data.fictionMaintenanceActions
 import dk.perspektiva.ttsroad.desktop.ui.ChapterMaintenanceUi
 import dk.perspektiva.ttsroad.desktop.ui.ManageShelfScreen
+import dk.perspektiva.ttsroad.desktop.ui.ListeningBackupStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.PodcastFeedsStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.ManageShelfStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
@@ -175,6 +176,7 @@ fun App(
         ChapterMaintenanceStateHolder(repository, cache)
     }
     val podcastFeeds = rememberStateHolder(repository) { PodcastFeedsStateHolder(repository) }
+    val listeningBackup = rememberStateHolder(repository) { ListeningBackupStateHolder(repository) }
     // Hoisted for the same reason: "Add to queue" is pressed on a chapter list, so the queue has to
     // exist and report what happened whether or not the queue screen was ever opened.
     val serverQueue = rememberStateHolder(repository, playback) {
@@ -737,6 +739,7 @@ fun App(
                                     // thing rather than two competing notions of "where am I".
                                     onOpenShelf = { nav.open(Destination.ManageShelf) },
                                     feeds = podcastFeeds,
+                                    backup = listeningBackup,
                                     onSectionSelected = { section ->
                                         nav.replaceTop(
                                             if (section == SettingsSection.Devices) {

@@ -618,3 +618,41 @@ data class FictionFeedUrl(
     @param:Json(name = "feed_token_version") val feedTokenVersion: Int = 0,
     @param:Json(name = "feed_url") val feedUrl: String? = null,
 )
+
+/**
+ * `GET /api/mobile/account/listening-state` — where this account is in everything (#119).
+ *
+ * The document is deliberately opaque here: it is the server's own shape, written to a file and
+ * posted back unchanged. Modelling its interior would mean a client that had to be updated whenever
+ * the server added a field, for no gain — nothing here reads it.
+ */
+data class ListeningStateExport(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val document: Map<String, Any?>? = null,
+)
+
+/** `POST /api/mobile/account/listening-state` — what the merge did. */
+data class ListeningStateImport(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    val report: ListeningStateReport? = null,
+)
+
+/**
+ * The merge, counted.
+ *
+ * Every field matters to somebody, and reducing this to "imported" throws away the only answer to
+ * *did it actually do anything*. [playbackSkippedOlder] especially: it is what explains a restore
+ * that looks like it did nothing, because the server only ever moves a position forward.
+ */
+data class ListeningStateReport(
+    @param:Json(name = "fictions_matched") val fictionsMatched: Int = 0,
+    /** Titles the document named that this server does not have. Expected across servers. */
+    @param:Json(name = "fictions_missing") val fictionsMissing: List<String> = emptyList(),
+    @param:Json(name = "chapters_missing") val chaptersMissing: Int = 0,
+    @param:Json(name = "playback_restored") val playbackRestored: Int = 0,
+    @param:Json(name = "playback_skipped_older") val playbackSkippedOlder: Int = 0,
+    @param:Json(name = "bookmarks_restored") val bookmarksRestored: Int = 0,
+    @param:Json(name = "bookmarks_already_present") val bookmarksAlreadyPresent: Int = 0,
+    @param:Json(name = "bookmarks_skipped_full") val bookmarksSkippedFull: Int = 0,
+)

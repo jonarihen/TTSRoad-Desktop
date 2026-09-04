@@ -136,6 +136,22 @@ interface TtsRoadApi {
     @POST("api/mobile/feeds/rotate")
     suspend fun rotateLibraryFeed(): FeedsResponse
 
+    /** This account's positions and chosen marks, as a portable document (#119). */
+    @GET("api/mobile/listening-state")
+    suspend fun exportListeningState(): ListeningStateExport
+
+    /**
+     * Merge a previously exported document back in.
+     *
+     * Never destructive: a position only moves forward and bookmarks are added rather than
+     * reconciled. The document is posted bare — the server accepts it either way, and sending what
+     * was read from the file unchanged is one fewer shape to get wrong.
+     */
+    @POST("api/mobile/listening-state")
+    suspend fun importListeningState(
+        @Body document: Map<String, @JvmSuppressWildcards Any?>,
+    ): ListeningStateImport
+
     // Both revoke calls answer with a small status object (`{"status": "ok", ...}`) whose shape is
     // not worth modelling: the client re-reads the list afterwards rather than trusting an echo,
     // because a 404 on the DELETE is ambiguous between "already gone" and "no such endpoint".

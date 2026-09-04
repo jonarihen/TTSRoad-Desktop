@@ -110,6 +110,8 @@ data class ServerCapabilities(
      * cannot have that control drawn at all.
      */
     val feedUrls: Boolean = false,
+    /** Export and re-import where this account is in everything. */
+    val listeningStateBackup: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -160,6 +162,7 @@ data class ServerCapabilities(
             chapterMaintenance = response.capabilities.flag("chapter_maintenance"),
             fictionMaintenance = response.capabilities.flag("fiction_maintenance"),
             feedUrls = response.capabilities.flag("feed_urls"),
+            listeningStateBackup = response.capabilities.flag("listening_state_backup"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             maxEpubBytes = response.limits.longLimit("max_epub_bytes"),

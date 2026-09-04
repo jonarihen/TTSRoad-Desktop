@@ -18,6 +18,7 @@ import dk.perspektiva.ttsroad.desktop.data.LoginResult
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.ChapterRetryOutcome
 import dk.perspektiva.ttsroad.desktop.data.FeedsResponse
+import dk.perspektiva.ttsroad.desktop.data.ListeningStateReport
 import dk.perspektiva.ttsroad.desktop.data.FictionMaintenanceAction
 import dk.perspektiva.ttsroad.desktop.data.MaintenanceResponse
 import dk.perspektiva.ttsroad.desktop.data.MobileVoice
@@ -96,6 +97,8 @@ open class FakeRepository(
     var fictionMaintenanceResult: Result<MaintenanceResponse?> = Result.success(null),
     var feedsResult: Result<FeedsResponse?> = Result.success(null),
     var rotateFeedResult: Result<FeedsResponse?> = Result.success(null),
+    var exportListeningStateResult: Result<Map<String, Any?>?> = Result.success(null),
+    var importListeningStateResult: Result<ListeningStateReport?> = Result.success(null),
     /** Null models a server whose notifications route answers 404. */
     var chapterNotificationsResult: Result<ChapterNotificationsResponse?> = Result.success(null),
 ) : TtsRoadRepository {
@@ -128,6 +131,7 @@ open class FakeRepository(
         private set
     var rotateFeedCalls: Int = 0
         private set
+    val importedDocuments: MutableList<Map<String, Any?>> = mutableListOf()
     var revokeOtherDevicesCalls: Int = 0
         private set
     var readAlongCalls: Int = 0
@@ -332,6 +336,14 @@ open class FakeRepository(
     override suspend fun rotateLibraryFeed(): FeedsResponse? {
         rotateFeedCalls++
         return rotateFeedResult.getOrThrow()
+    }
+
+    override suspend fun exportListeningState(): Map<String, Any?>? =
+        exportListeningStateResult.getOrThrow()
+
+    override suspend fun importListeningState(document: Map<String, Any?>): ListeningStateReport? {
+        importedDocuments += document
+        return importListeningStateResult.getOrThrow()
     }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean {
