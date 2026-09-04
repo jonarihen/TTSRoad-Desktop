@@ -238,6 +238,12 @@ interface TtsRoadRepository {
         action: FictionMaintenanceAction,
     ): MaintenanceResponse? = null
 
+    /** Podcast URLs for this account, or null on a server without the route. */
+    suspend fun feeds(): FeedsResponse? = null
+
+    /** Revoke and reissue this account's combined feed and OPML URLs. */
+    suspend fun rotateLibraryFeed(): FeedsResponse? = null
+
     /**
      * Revokes one session.
      *
@@ -635,6 +641,11 @@ class RetrofitTtsRoadRepository(
             FictionMaintenanceAction.ReconvertAll -> api.reconvertAllChapters(fictionId)
         }
     }
+
+    override suspend fun feeds(): FeedsResponse? = ifEndpointExists { it.feeds() }
+
+    override suspend fun rotateLibraryFeed(): FeedsResponse? =
+        ifEndpointExists { it.rotateLibraryFeed() }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean =
         ifEndpointExists { it.revokeDevice(tokenId) } != null

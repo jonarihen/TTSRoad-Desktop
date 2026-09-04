@@ -103,6 +103,13 @@ data class ServerCapabilities(
      * uniform: poll is open to any account and the other four are admin-only.
      */
     val fictionMaintenance: Boolean = false,
+    /**
+     * The podcast URLs this account can hand to a podcast app, and the lever that revokes them.
+     *
+     * Worth its own flag because the whole use is a copy button: a server that cannot list the URLs
+     * cannot have that control drawn at all.
+     */
+    val feedUrls: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -152,6 +159,7 @@ data class ServerCapabilities(
             voiceCatalogue = response.capabilities.flag("voice_catalogue"),
             chapterMaintenance = response.capabilities.flag("chapter_maintenance"),
             fictionMaintenance = response.capabilities.flag("fiction_maintenance"),
+            feedUrls = response.capabilities.flag("feed_urls"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             maxEpubBytes = response.limits.longLimit("max_epub_bytes"),

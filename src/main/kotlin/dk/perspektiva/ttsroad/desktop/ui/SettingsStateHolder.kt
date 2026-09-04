@@ -33,6 +33,7 @@ enum class SettingsSection(val label: String) {
     Listening("Listening"),
     Offline("Offline"),
     Audiobooks("Audiobooks"),
+    Feeds("Podcast feeds"),
     About("Updates & About"),
 }
 
