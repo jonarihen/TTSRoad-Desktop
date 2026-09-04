@@ -64,6 +64,30 @@ interface TtsRoadApi {
     @GET("api/mobile/voices")
     suspend fun voices(): VoicesResponse
 
+    // Chapter maintenance (#113). Three routes, one response shape, and deliberately *not* one
+    // gate: retry is open to any signed-in account because it repairs one chapter and harms
+    // nobody, while exclude and delete are admin-only because a chapter is a shared object — an
+    // exclusion changes what every account's podcast feed contains.
+
+    /** Queue one chapter for conversion again. A 409 means it is excluded or already processing. */
+    @POST("api/mobile/chapters/{chapter_id}/retry")
+    suspend fun retryChapter(@Path("chapter_id") chapterId: Int): MaintenanceResponse
+
+    @POST("api/mobile/chapters/{chapter_id}/exclude")
+    suspend fun setChapterExcluded(
+        @Path("chapter_id") chapterId: Int,
+        @Body request: ChapterExcludeRequest,
+    ): MaintenanceResponse
+
+    /**
+     * Delete one chapter and its audio.
+     *
+     * Answers with a body rather than the web route's `204`, deliberately: over a flaky connection
+     * an empty response is indistinguishable from a request that never arrived.
+     */
+    @DELETE("api/mobile/chapters/{chapter_id}")
+    suspend fun deleteChapter(@Path("chapter_id") chapterId: Int): MaintenanceResponse
+
     // Both revoke calls answer with a small status object (`{"status": "ok", ...}`) whose shape is
     // not worth modelling: the client re-reads the list afterwards rather than trusting an echo,
     // because a 404 on the DELETE is ambiguous between "already gone" and "no such endpoint".

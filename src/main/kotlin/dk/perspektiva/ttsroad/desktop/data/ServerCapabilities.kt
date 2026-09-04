@@ -88,6 +88,14 @@ data class ServerCapabilities(
      * a cache miss spends an outbound synthesis request to Microsoft.
      */
     val voiceCatalogue: Boolean = false,
+    /**
+     * Repair one chapter: retry, exclude, delete.
+     *
+     * Says only that the routes exist. The three do not share a gate — retry is open to any
+     * signed-in account, and the destructive pair is admin-only — so `me.is_admin` decides which of
+     * them this account may actually use.
+     */
+    val chapterMaintenance: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -135,6 +143,7 @@ data class ServerCapabilities(
             audiobookExport = response.capabilities.flag("audiobook_export"),
             notifications = response.capabilities.flag("notifications"),
             voiceCatalogue = response.capabilities.flag("voice_catalogue"),
+            chapterMaintenance = response.capabilities.flag("chapter_maintenance"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             maxEpubBytes = response.limits.longLimit("max_epub_bytes"),

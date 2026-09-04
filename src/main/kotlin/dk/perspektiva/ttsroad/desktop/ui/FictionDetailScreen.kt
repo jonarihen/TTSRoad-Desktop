@@ -31,6 +31,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Check
@@ -88,6 +90,8 @@ import dk.perspektiva.ttsroad.desktop.data.indexOfChapter
 import dk.perspektiva.ttsroad.desktop.data.listeningTotals
 import dk.perspektiva.ttsroad.desktop.data.markableIds
 import dk.perspektiva.ttsroad.desktop.data.playbackOrder
+import dk.perspektiva.ttsroad.desktop.data.canRetry
+import dk.perspektiva.ttsroad.desktop.data.chapterDeleteConfirmation
 import dk.perspektiva.ttsroad.desktop.data.statusLabel
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
@@ -165,6 +169,25 @@ data class ChapterDownloadsUi(
  * this screen's: the queue is hoisted above navigation, so "Added 2 chapters to the queue" is the
  * same message whether the user is looking at the chapter list or the queue when it arrives.
  */
+/**
+ * Repairing one chapter, as the row draws it (#113).
+ *
+ * Two flags rather than one, because the three routes do not share a gate. [retryAvailable] is the
+ * capability alone — retry is open to any signed-in account — while [canModerate] additionally
+ * requires `is_admin`, because excluding a chapter changes what *every* account's podcast feed
+ * contains and deleting it destroys the audio for everybody.
+ */
+data class ChapterMaintenanceUi(
+    val retryAvailable: Boolean = false,
+    val canModerate: Boolean = false,
+    val busyChapterId: Int? = null,
+    val notice: String? = null,
+    val error: String? = null,
+    val onRetry: (ChapterSummary) -> Unit = {},
+    val onSetExcluded: (ChapterSummary, Boolean) -> Unit = { _, _ -> },
+    val onDelete: (ChapterSummary) -> Unit = {},
+)
+
 data class ChapterQueueUi(
     val available: Boolean = false,
     val busy: Boolean = false,
@@ -194,6 +217,7 @@ fun FictionDetailScreen(
     onOpenReader: (ChapterSummary) -> Unit = {},
     downloads: ChapterDownloadsUi = ChapterDownloadsUi(),
     queue: ChapterQueueUi = ChapterQueueUi(),
+    maintenance: ChapterMaintenanceUi = ChapterMaintenanceUi(),
     fictionManagement: FictionManagementUiState = FictionManagementUiState(),
     onEditFiction: (FictionSummary) -> Unit = {},
     onDeleteFiction: (FictionSummary) -> Unit = {},
@@ -207,6 +231,9 @@ fun FictionDetailScreen(
     LaunchedEffect(fiction.id) { cache.ensureChapters(fiction.id) }
 
     var actionError by remember { mutableStateOf<String?>(null) }
+    // Which chapter's admin disclosure is open, and which delete is awaiting a second answer.
+    var managingChapter by remember { mutableStateOf<ChapterSummary?>(null) }
+    var deletingChapter by remember { mutableStateOf<ChapterSummary?>(null) }
     val listState = rememberLazyListState()
 
     val loaded = state.value
@@ -380,6 +407,16 @@ fun FictionDetailScreen(
                         Spacer(Modifier.height(12.dp))
                         MetaText(message, color = AarisColor.Ok)
                     }
+                    // Beside the queue's, not inside the chapter list: a delete removes the row
+                    // the notice would have hung off, and a retry changes its status.
+                    maintenance.error?.let { message ->
+                        Spacer(Modifier.height(12.dp))
+                        Text(message, color = MaterialTheme.colorScheme.error)
+                    }
+                    maintenance.notice?.let { message ->
+                        Spacer(Modifier.height(12.dp))
+                        MetaText(message, color = AarisColor.Ok)
+                    }
 
                     when {
                         loaded == null && error != null -> {
@@ -445,6 +482,8 @@ fun FictionDetailScreen(
                         readAlongTimed = chapter.hasTimings,
                         download = downloads.stateFor(chapter),
                         queue = queue,
+                        maintenance = maintenance,
+                        onManage = { managingChapter = chapter },
                         onPlay = { play(chapter) },
                         onMarkPlayed = { played -> mark(listOf(chapter.resolvedChapterId), played) },
                         onMarkPrevious = {
@@ -472,6 +511,37 @@ fun FictionDetailScreen(
             }
         }
         RefreshingStrip(state.isRefreshing && !state.isStale)
+    }
+
+    managingChapter?.let { chapter ->
+        ChapterMaintenanceDialog(
+            chapter = chapter,
+            busy = maintenance.busyChapterId == chapter.resolvedChapterId,
+            onSetExcluded = { excluded ->
+                maintenance.onSetExcluded(chapter, excluded)
+                managingChapter = null
+            },
+            // Closes the disclosure and raises the confirmation: two dialogs stacked would leave
+            // the consequence text behind the question about it.
+            onDelete = {
+                managingChapter = null
+                deletingChapter = chapter
+            },
+            onDismiss = { managingChapter = null },
+        )
+    }
+
+    deletingChapter?.let { chapter ->
+        ConfirmDialog(
+            title = "DELETE ${chapter.resolvedTitle.uppercase()}",
+            body = chapterDeleteConfirmation(chapter.resolvedTitle),
+            confirmLabel = "DELETE FOR EVERYONE",
+            onConfirm = {
+                maintenance.onDelete(chapter)
+                deletingChapter = null
+            },
+            onDismiss = { deletingChapter = null },
+        )
     }
 }
 
@@ -834,6 +904,8 @@ private fun ChapterListRow(
     readAlongTimed: Boolean,
     download: ChapterDownloadUi,
     queue: ChapterQueueUi,
+    maintenance: ChapterMaintenanceUi,
+    onManage: () -> Unit,
     onPlay: () -> Unit,
     onMarkPlayed: (Boolean) -> Unit,
     onMarkPrevious: () -> Unit,
@@ -935,7 +1007,32 @@ private fun ChapterListRow(
             )
             Spacer(Modifier.width(4.dp))
         }
-        if (readAlongAvailable) {
+        // Only on a failed chapter, and for any account: the server leaves retry ungated because it
+        // repairs one row and harms nobody. A converting chapter is already doing this and answers
+        // 409; an excluded one has to be put back first.
+        // Admin-only, and a disclosure rather than two more icons: excluding changes every
+        // account's feed and deleting destroys the audio for everybody. Neither fits on a label.
+        if (maintenance.canModerate) {
+            RowIconAction(
+                icon = Icons.Default.Tune,
+                contentDescription = "Manage ${chapter.resolvedTitle}",
+                tint = if (active) AarisColor.Ink else AarisColor.Dim,
+                enabled = maintenance.busyChapterId != chapter.resolvedChapterId,
+                onClick = { onManage() },
+            )
+            Spacer(Modifier.width(4.dp))
+        }
+        if (maintenance.retryAvailable && chapter.canRetry()) {
+            RowIconAction(
+                icon = Icons.Default.Refresh,
+                contentDescription = "Convert ${chapter.resolvedTitle} again",
+                tint = if (active) AarisColor.Warning else AarisColor.Dim,
+                enabled = maintenance.busyChapterId != chapter.resolvedChapterId,
+                onClick = { maintenance.onRetry(chapter) },
+            )
+            Spacer(Modifier.width(4.dp))
+        }
+                if (readAlongAvailable) {
             RowIconAction(
                 icon = Icons.AutoMirrored.Filled.MenuBook,
                 contentDescription = if (readAlongTimed) "Read along" else "Read chapter text",

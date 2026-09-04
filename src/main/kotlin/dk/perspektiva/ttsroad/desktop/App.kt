@@ -104,6 +104,8 @@ import dk.perspektiva.ttsroad.desktop.ui.hasSession
 import dk.perspektiva.ttsroad.desktop.ui.rememberChapterDownloads
 import dk.perspektiva.ttsroad.desktop.ui.rememberChapterQueue
 import dk.perspektiva.ttsroad.desktop.ui.UpdateStateHolder
+import dk.perspektiva.ttsroad.desktop.ui.ChapterMaintenanceStateHolder
+import dk.perspektiva.ttsroad.desktop.ui.ChapterMaintenanceUi
 import dk.perspektiva.ttsroad.desktop.ui.ManageShelfScreen
 import dk.perspektiva.ttsroad.desktop.ui.ManageShelfStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
@@ -167,6 +169,9 @@ fun App(
     // a shelf in bulk. It lives here so the selection survives a trip into a fiction and back,
     // which is exactly what somebody deciding what to drop will do.
     val manageShelf = rememberStateHolder(cache) { ManageShelfStateHolder(cache) }
+    val chapterMaintenance = rememberStateHolder(repository, cache) {
+        ChapterMaintenanceStateHolder(repository, cache)
+    }
     // Hoisted for the same reason: "Add to queue" is pressed on a chapter list, so the queue has to
     // exist and report what happened whether or not the queue screen was ever opened.
     val serverQueue = rememberStateHolder(repository, playback) {
@@ -192,6 +197,7 @@ fun App(
         FictionManagementStateHolder(repository, cache)
     }
     val fictionManagementState by fictionManagement.state.collectAsState()
+    val chapterMaintenanceState by chapterMaintenance.state.collectAsState()
     // Hoisted for the same reason the management holder is: the editor is a form, a save is a
     // request, and neither may be lost because the user glanced at the library mid-edit.
     val fictionMetadata = rememberStateHolder(repository, cache) {
@@ -617,6 +623,23 @@ fun App(
                                         holder = serverQueue,
                                         available = capabilities.queue,
                                         fictionId = destination.fiction.id,
+                                    ),
+                                    maintenance = ChapterMaintenanceUi(
+                                        // Retry needs only the capability: the server leaves it
+                                        // open to any account on purpose.
+                                        retryAvailable = capabilities.chapterMaintenance,
+                                        // Exclude and delete change a shared object, so they take
+                                        // the same two gates the fiction controls do — and
+                                        // `fictionManagementState.canManage` is the *verified*
+                                        // is_admin, not the role cached at login.
+                                        canModerate = capabilities.chapterMaintenance &&
+                                            fictionManagementState.canManage,
+                                        busyChapterId = chapterMaintenanceState.busyChapterId,
+                                        notice = chapterMaintenanceState.notice,
+                                        error = chapterMaintenanceState.error,
+                                        onRetry = chapterMaintenance::retry,
+                                        onSetExcluded = chapterMaintenance::setExcluded,
+                                        onDelete = chapterMaintenance::delete,
                                     ),
                                     fictionManagement = fictionManagementState,
                                     onEditFiction = { nav.open(Destination.FictionMetadata(it)) },

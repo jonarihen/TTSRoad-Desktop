@@ -16,6 +16,7 @@ import dk.perspektiva.ttsroad.desktop.data.FictionUpdateRequest
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
 import dk.perspektiva.ttsroad.desktop.data.LoginResult
 import dk.perspektiva.ttsroad.desktop.data.MobileUser
+import dk.perspektiva.ttsroad.desktop.data.ChapterRetryOutcome
 import dk.perspektiva.ttsroad.desktop.data.MobileVoice
 import dk.perspektiva.ttsroad.desktop.data.PlaybackMarkResponse
 import dk.perspektiva.ttsroad.desktop.data.PlaybackStateRow
@@ -86,6 +87,9 @@ open class FakeRepository(
         Result.success(CoverUploadResult.Saved(FictionSummary(id = 1, title = "Updated"))),
     var audiobookExportsResult: Result<AudiobookExportsResponse?> = Result.success(null),
     var voicesResult: Result<List<MobileVoice>?> = Result.success(null),
+    var retryChapterResult: Result<ChapterRetryOutcome> = Result.success(ChapterRetryOutcome.Unsupported),
+    var setChapterExcludedResult: Result<Boolean?>? = null,
+    var deleteChapterResult: Result<Boolean?> = Result.success(null),
     /** Null models a server whose notifications route answers 404. */
     var chapterNotificationsResult: Result<ChapterNotificationsResponse?> = Result.success(null),
 ) : TtsRoadRepository {
@@ -107,8 +111,12 @@ open class FakeRepository(
     var currentUserCalls: Int = 0
         private set
     var audiobookExportsCalls: Int = 0
+        private set
     var voicesCalls: Int = 0
         private set
+    val retriedChapters: MutableList<Int> = mutableListOf()
+    val excludedChapters: MutableList<Pair<Int, Boolean>> = mutableListOf()
+    val deletedChapters: MutableList<Int> = mutableListOf()
     var revokeOtherDevicesCalls: Int = 0
         private set
     var readAlongCalls: Int = 0
@@ -279,6 +287,22 @@ open class FakeRepository(
     override suspend fun voices(): List<MobileVoice>? {
         voicesCalls++
         return voicesResult.getOrThrow()
+    }
+
+    override suspend fun retryChapter(chapterId: Int): ChapterRetryOutcome {
+        retriedChapters += chapterId
+        return retryChapterResult.getOrThrow()
+    }
+
+    override suspend fun setChapterExcluded(chapterId: Int, excluded: Boolean): Boolean? {
+        excludedChapters += chapterId to excluded
+        // Unset echoes what was asked, like `setFollowing`. A set one is used as-is, null included.
+        return (setChapterExcludedResult ?: return excluded).getOrThrow()
+    }
+
+    override suspend fun deleteChapter(chapterId: Int): Boolean? {
+        deletedChapters += chapterId
+        return deleteChapterResult.getOrThrow()
     }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean {
