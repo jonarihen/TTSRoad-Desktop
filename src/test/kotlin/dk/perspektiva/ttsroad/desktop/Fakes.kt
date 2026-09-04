@@ -19,6 +19,9 @@ import dk.perspektiva.ttsroad.desktop.data.MobileUser
 import dk.perspektiva.ttsroad.desktop.data.ChapterRetryOutcome
 import dk.perspektiva.ttsroad.desktop.data.FeedsResponse
 import dk.perspektiva.ttsroad.desktop.data.ListeningStateReport
+import dk.perspektiva.ttsroad.desktop.data.PronunciationReport
+import dk.perspektiva.ttsroad.desktop.data.PronunciationReportRequest
+import dk.perspektiva.ttsroad.desktop.data.ReportOutcome
 import dk.perspektiva.ttsroad.desktop.data.FictionMaintenanceAction
 import dk.perspektiva.ttsroad.desktop.data.MaintenanceResponse
 import dk.perspektiva.ttsroad.desktop.data.MobileVoice
@@ -99,6 +102,9 @@ open class FakeRepository(
     var rotateFeedResult: Result<FeedsResponse?> = Result.success(null),
     var exportListeningStateResult: Result<Map<String, Any?>?> = Result.success(null),
     var importListeningStateResult: Result<ListeningStateReport?> = Result.success(null),
+    var pronunciationReportsResult: Result<List<PronunciationReport>?> = Result.success(null),
+    var createPronunciationReportResult: Result<ReportOutcome> = Result.success(ReportOutcome.Unsupported),
+    var deletePronunciationReportResult: Result<Boolean> = Result.success(false),
     /** Null models a server whose notifications route answers 404. */
     var chapterNotificationsResult: Result<ChapterNotificationsResponse?> = Result.success(null),
 ) : TtsRoadRepository {
@@ -132,6 +138,8 @@ open class FakeRepository(
     var rotateFeedCalls: Int = 0
         private set
     val importedDocuments: MutableList<Map<String, Any?>> = mutableListOf()
+    val filedReports: MutableList<PronunciationReportRequest> = mutableListOf()
+    val deletedReports: MutableList<Int> = mutableListOf()
     var revokeOtherDevicesCalls: Int = 0
         private set
     var readAlongCalls: Int = 0
@@ -344,6 +352,19 @@ open class FakeRepository(
     override suspend fun importListeningState(document: Map<String, Any?>): ListeningStateReport? {
         importedDocuments += document
         return importListeningStateResult.getOrThrow()
+    }
+
+    override suspend fun pronunciationReports(): List<PronunciationReport>? =
+        pronunciationReportsResult.getOrThrow()
+
+    override suspend fun createPronunciationReport(request: PronunciationReportRequest): ReportOutcome {
+        filedReports += request
+        return createPronunciationReportResult.getOrThrow()
+    }
+
+    override suspend fun deletePronunciationReport(reportId: Int): Boolean {
+        deletedReports += reportId
+        return deletePronunciationReportResult.getOrThrow()
     }
 
     override suspend fun revokeDevice(tokenId: Int): Boolean {

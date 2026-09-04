@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.desktop.data
 
 import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -249,6 +250,21 @@ interface TtsRoadRepository {
 
     /** Merge a document back in, returning what the merge did. */
     suspend fun importListeningState(document: Map<String, Any?>): ListeningStateReport? = null
+
+    /** This account's pronunciation reports, or null on a server without the routes. */
+    suspend fun pronunciationReports(): List<PronunciationReport>? = null
+
+    /**
+     * File a report.
+     *
+     * A `409` is the account's open-report cap and comes back as [ReportOutcome.AtCapacity] with
+     * the server's own sentence, because the number in it is the only actionable part.
+     */
+    suspend fun createPronunciationReport(request: PronunciationReportRequest): ReportOutcome =
+        ReportOutcome.Unsupported
+
+    /** Delete one of your own. False means the server answered 404. */
+    suspend fun deletePronunciationReport(reportId: Int): Boolean = false
 
     /**
      * Revokes one session.
@@ -659,6 +675,25 @@ class RetrofitTtsRoadRepository(
     override suspend fun importListeningState(document: Map<String, Any?>): ListeningStateReport? =
         ifEndpointExists { it.importListeningState(document) }?.report
 
+    override suspend fun pronunciationReports(): List<PronunciationReport>? =
+        ifEndpointExists { it.pronunciationReports() }?.reports
+
+    override suspend fun createPronunciationReport(request: PronunciationReportRequest): ReportOutcome =
+        try {
+            val stored = withAuthorizedApi { it.createPronunciationReport(request) }.report
+            stored?.let(ReportOutcome::Filed) ?: ReportOutcome.Unsupported
+        } catch (e: HttpException) {
+            when (e.code()) {
+                // The server's message names the cap, which is the only part worth showing.
+                409 -> ReportOutcome.AtCapacity(serverDetail(e) ?: "You have too many open reports.")
+                404 -> ReportOutcome.Unsupported
+                else -> throw e
+            }
+        }
+
+    override suspend fun deletePronunciationReport(reportId: Int): Boolean =
+        ifEndpointExists { it.deletePronunciationReport(reportId) } != null
+
     override suspend fun revokeDevice(tokenId: Int): Boolean =
         ifEndpointExists { it.revokeDevice(tokenId) } != null
 
@@ -883,6 +918,24 @@ class RetrofitTtsRoadRepository(
      * it. Everything else keeps its normal meaning — in particular a 401 still ends the session,
      * because "this server is old" and "this token is dead" must not be confused.
      */
+    /**
+     * The server's own `detail` from an error body, or null.
+     *
+     * Only worth reading where the sentence carries something the client cannot know — the
+     * pronunciation cap names its own number, which may differ per deployment. Deliberately total:
+     * an unparseable body on an error path must not turn one failure into two.
+     */
+    private fun serverDetail(error: HttpException): String? = runCatching {
+        val body = error.response()?.errorBody()?.string().orEmpty()
+        if (body.isBlank()) return@runCatching null
+        val parsed = moshi
+            .adapter<Map<String, Any?>>(
+                Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java),
+            )
+            .fromJson(body)
+        (parsed?.get("detail") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+    }.getOrNull()
+
     private suspend fun <T> ifEndpointExists(block: suspend (TtsRoadApi) -> T): T? = try {
         withAuthorizedApi(block)
     } catch (e: HttpException) {

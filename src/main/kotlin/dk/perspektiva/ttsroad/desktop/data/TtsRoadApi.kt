@@ -152,6 +152,20 @@ interface TtsRoadApi {
         @Body document: Map<String, @JvmSuppressWildcards Any?>,
     ): ListeningStateImport
 
+    /** This account's pronunciation reports (#121). */
+    @GET("api/mobile/pronunciation-reports")
+    suspend fun pronunciationReports(): PronunciationReportsResponse
+
+    /** File one. A 409 means this account is at its open-report cap, and the body says so. */
+    @POST("api/mobile/pronunciation-reports")
+    suspend fun createPronunciationReport(
+        @Body request: PronunciationReportRequest,
+    ): PronunciationReportResponse
+
+    /** Delete one of your own. */
+    @DELETE("api/mobile/pronunciation-reports/{report_id}")
+    suspend fun deletePronunciationReport(@Path("report_id") reportId: Int)
+
     // Both revoke calls answer with a small status object (`{"status": "ok", ...}`) whose shape is
     // not worth modelling: the client re-reads the list afterwards rather than trusting an echo,
     // because a 404 on the DELETE is ambiguous between "already gone" and "no such endpoint".

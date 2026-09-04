@@ -656,3 +656,50 @@ data class ListeningStateReport(
     @param:Json(name = "bookmarks_already_present") val bookmarksAlreadyPresent: Int = 0,
     @param:Json(name = "bookmarks_skipped_full") val bookmarksSkippedFull: Int = 0,
 )
+
+/** `GET /api/mobile/pronunciation-reports` — this account's reports (#121). */
+data class PronunciationReportsResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val reports: List<PronunciationReport> = emptyList(),
+)
+
+/** The envelope a create returns: the report the server actually stored. */
+data class PronunciationReportResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val report: PronunciationReport? = null,
+)
+
+/**
+ * One "that word is pronounced wrong".
+ *
+ * Fiction and chapter titles are joined in by the server rather than left to the client, because
+ * every consumer needs them and a report whose book cannot be named is not actionable.
+ */
+data class PronunciationReport(
+    val id: Int = 0,
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "chapter_number") val chapterNumber: Int? = null,
+    @param:Json(name = "chapter_title") val chapterTitle: String? = null,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    val word: String? = null,
+    val note: String? = null,
+    @param:Json(name = "reported_by") val reportedBy: String? = null,
+    val resolved: Boolean = false,
+    @param:Json(name = "created_at") val createdAt: String? = null,
+)
+
+/**
+ * The body of a new report.
+ *
+ * `fiction_id` is deliberately **not** sent. The server derives it from the chapter rather than
+ * trusting a client, so sending one is at best redundant and at worst a mismatched pair that files
+ * a report the fiction's own panel never shows.
+ */
+data class PronunciationReportRequest(
+    @param:Json(name = "chapter_id") val chapterId: Int,
+    @param:Json(name = "position_seconds") val positionSeconds: Double? = null,
+    val word: String? = null,
+    val note: String? = null,
+)
