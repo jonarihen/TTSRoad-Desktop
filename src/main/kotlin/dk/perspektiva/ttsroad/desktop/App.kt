@@ -104,6 +104,8 @@ import dk.perspektiva.ttsroad.desktop.ui.hasSession
 import dk.perspektiva.ttsroad.desktop.ui.rememberChapterDownloads
 import dk.perspektiva.ttsroad.desktop.ui.rememberChapterQueue
 import dk.perspektiva.ttsroad.desktop.ui.UpdateStateHolder
+import dk.perspektiva.ttsroad.desktop.ui.ManageShelfScreen
+import dk.perspektiva.ttsroad.desktop.ui.ManageShelfStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.rememberStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.windowSizeClassFor
 import kotlinx.coroutines.launch
@@ -161,6 +163,10 @@ fun App(
     val bookmarks = rememberStateHolder(repository, cache) {
         BookmarksStateHolder(repository, cachedChapters = { cache.chapters(it).value.value })
     }
+    // Not hoisted for a writer elsewhere, unlike the three below: nothing outside this screen edits
+    // a shelf in bulk. It lives here so the selection survives a trip into a fiction and back,
+    // which is exactly what somebody deciding what to drop will do.
+    val manageShelf = rememberStateHolder(cache) { ManageShelfStateHolder(cache) }
     // Hoisted for the same reason: "Add to queue" is pressed on a chapter list, so the queue has to
     // exist and report what happened whether or not the queue screen was ever opened.
     val serverQueue = rememberStateHolder(repository, playback) {
@@ -257,6 +263,7 @@ fun App(
             Destination.Settings, Destination.Devices -> settings.refreshCurrentSection()
             Destination.Search -> search.refresh()
             Destination.Bookmarks -> bookmarks.refresh()
+            Destination.ManageShelf -> manageShelf.refresh()
             Destination.Notifications -> chapterNotifications.refresh()
             Destination.Queue -> serverQueue.refresh()
             // A form and a player have nothing a refresh could improve; see `isRefreshable`.
@@ -661,6 +668,11 @@ fun App(
                                     onBack = { nav.back() },
                                 )
 
+                                Destination.ManageShelf -> ManageShelfScreen(
+                                    holder = manageShelf,
+                                    onBack = { nav.back() },
+                                )
+
                                 Destination.Settings, Destination.Devices -> SettingsScreen(
                                     sessionStore = sessionStore,
                                     repository = repository,
@@ -680,6 +692,7 @@ fun App(
                                     // Keeps the destination and the open pane in step, so the
                                     // Devices deep link and the in-screen pane list are the same
                                     // thing rather than two competing notions of "where am I".
+                                    onOpenShelf = { nav.open(Destination.ManageShelf) },
                                     onSectionSelected = { section ->
                                         nav.replaceTop(
                                             if (section == SettingsSection.Devices) {
@@ -756,7 +769,7 @@ fun App(
 private val Destination.isRefreshable: Boolean
     get() = when (this) {
         Destination.Library, is Destination.Fiction, Destination.Settings, Destination.Devices,
-        Destination.Bookmarks, Destination.Queue, Destination.Notifications,
+        Destination.Bookmarks, Destination.Queue, Destination.Notifications, Destination.ManageShelf,
         -> true
         // A form has nothing to refresh into: the fields hold what somebody is halfway through
         // typing, and replacing them with the server's copy is the opposite of what F5 promises.

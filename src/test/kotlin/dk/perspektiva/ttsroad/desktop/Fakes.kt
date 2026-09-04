@@ -63,6 +63,13 @@ open class FakeRepository(
     var browseAllResult: Result<LibraryResponse> = Result.success(LibraryResponse()),
     /** Null means "echo what was asked". `success(null)` is the server's 404. */
     var followResult: Result<Boolean?>? = null,
+    /**
+     * Per-fiction override, consulted before [followResult].
+     *
+     * A bulk unfollow's interesting case is the *partial* one — some ids succeed and one does not —
+     * which a single shared answer cannot express.
+     */
+    var followResultFor: ((Int) -> Result<Boolean?>?)? = null,
     /** `success(null)` is the server saying it has no bookmark API — not "no bookmarks". */
     var bookmarksResult: Result<List<Bookmark>?> = Result.success(emptyList()),
     var createBookmarkResult: Result<Bookmark?> = Result.success(Bookmark(id = 1)),
@@ -210,7 +217,7 @@ open class FakeRepository(
         // An *unset* `followResult` echoes what was asked, which is what a healthy server does.
         // A set one is used as-is, null included — `success(null)` is the server's 404 and must not
         // fall through to the echo.
-        val configured = followResult ?: return following
+        val configured = followResultFor?.invoke(fictionId) ?: followResult ?: return following
         return configured.getOrThrow()
     }
 

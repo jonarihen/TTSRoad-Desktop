@@ -108,6 +108,8 @@ fun SettingsScreen(
      * in step — the app uses it to swap the top back-stack entry between Settings and Devices.
      */
     onSectionSelected: (SettingsSection) -> Unit = {},
+    /** Opens the shelf editor. A destination rather than a pane: it is a list, not a form. */
+    onOpenShelf: () -> Unit = {},
     /**
      * Listening settings. Defaulted to an in-memory store so a screen test — and a preview — never
      * writes to the real config directory just by rendering the Playback pane.
@@ -188,7 +190,8 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     when (ui.section) {
-                        SettingsSection.Account -> AccountPane(ui, session, capabilities, sessionStore, holder, selectSection, nowMs)
+                        SettingsSection.Account ->
+                            AccountPane(ui, session, capabilities, sessionStore, holder, selectSection, onOpenShelf, nowMs)
                         SettingsSection.Devices -> DevicesPane(ui, session, holder, nowMs)
                         SettingsSection.Playback -> PlaybackPane(
                             preferences,
@@ -245,6 +248,7 @@ fun SettingsScreen(
 }
 
 const val AudiobookDownloadButtonTestTag: String = "audiobookDownloadButton"
+const val ManageShelfButtonTestTag: String = "manageShelfButton"
 
 @Composable
 private fun AudiobookPane(ui: AudiobookExportsUiState, holder: SettingsStateHolder) {
@@ -463,6 +467,7 @@ private fun AccountPane(
     sessionStore: SessionStore,
     holder: SettingsStateHolder,
     onSelectSection: (SettingsSection) -> Unit,
+    onOpenShelf: () -> Unit,
     nowMs: () -> Long,
 ) {
     PaneTitle("Account", "Server, sign-in and this device")
@@ -511,6 +516,15 @@ private fun AccountPane(
             shape = RectangleShape,
             modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
         ) { Text("MANAGE DEVICE SESSIONS") }
+        // Only where the server has per-user shelves at all: without `follows`, the library is one
+        // shared list and there is no membership to edit.
+        if (capabilities.follows) {
+            OutlinedButton(
+                onClick = onOpenShelf,
+                shape = RectangleShape,
+                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag(ManageShelfButtonTestTag),
+            ) { Text("MANAGE SHELF") }
+        }
         Button(
             onClick = holder::askSignOut,
             enabled = !ui.signingOut,
