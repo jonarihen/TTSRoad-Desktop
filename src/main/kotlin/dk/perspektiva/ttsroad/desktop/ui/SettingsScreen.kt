@@ -73,6 +73,7 @@ import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.desktop.data.formatListeningSpan
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.FeedLink
+import dk.perspektiva.ttsroad.desktop.data.ImportMergeExplanation
 import dk.perspektiva.ttsroad.desktop.data.RotateFeedConfirmation
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.AppDirectories
@@ -155,6 +156,7 @@ fun SettingsScreen(
     updates: UpdateStateHolder? = null,
     /** Null where the caller has not wired it — the pane is capability-gated anyway. */
     feeds: PodcastFeedsStateHolder? = null,
+    backup: ListeningBackupStateHolder? = null,
 ) {
     val ui by holder.state.collectAsState()
     val session by sessionStore.session.collectAsState()
@@ -202,7 +204,10 @@ fun SettingsScreen(
                 ) {
                     when (ui.section) {
                         SettingsSection.Account ->
-                            AccountPane(ui, session, capabilities, sessionStore, holder, selectSection, onOpenShelf, nowMs)
+                            AccountPane(
+                                ui, session, capabilities, sessionStore, holder,
+                                selectSection, onOpenShelf, backup, nowMs,
+                            )
                         SettingsSection.Devices -> DevicesPane(ui, session, holder, nowMs)
                         SettingsSection.Playback -> PlaybackPane(
                             preferences,
@@ -262,6 +267,8 @@ fun SettingsScreen(
 const val AudiobookDownloadButtonTestTag: String = "audiobookDownloadButton"
 const val ManageShelfButtonTestTag: String = "manageShelfButton"
 const val RotateFeedButtonTestTag: String = "rotateFeedButton"
+const val ExportBackupButtonTestTag: String = "exportBackupButton"
+const val ImportBackupButtonTestTag: String = "importBackupButton"
 
 @Composable
 private fun AudiobookPane(ui: AudiobookExportsUiState, holder: SettingsStateHolder) {
@@ -481,6 +488,7 @@ private fun AccountPane(
     holder: SettingsStateHolder,
     onSelectSection: (SettingsSection) -> Unit,
     onOpenShelf: () -> Unit,
+    backup: ListeningBackupStateHolder?,
     nowMs: () -> Long,
 ) {
     PaneTitle("Account", "Server, sign-in and this device")
@@ -521,6 +529,10 @@ private fun AccountPane(
                 formatExpiresIn(session.expiresAt, nowMs()),
             ).joinToString(" · ").ifBlank { "Unknown" },
         )
+    }
+
+    backup?.takeIf { capabilities.listeningStateBackup }?.let { holder2 ->
+        ListeningBackupBlock(holder2)
     }
 
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1258,6 +1270,44 @@ fun describeCapabilities(capabilities: ServerCapabilities): String {
         capabilities.isDiscovered -> "None advertised"
         else -> "Not advertised by this server"
     }
+}
+
+// --- Listening backup ----------------------------------------------------------------------
+
+/**
+ * Keeping a copy of where you are in everything (#119).
+ *
+ * The merge sentence is above the buttons rather than in a confirmation, because it is the thing
+ * that makes Import safe to press at all — a confirmation would only be read by someone who had
+ * already decided, and the people this reassures are the ones who never press it.
+ */
+@Composable
+private fun ListeningBackupBlock(holder: ListeningBackupStateHolder) {
+    val ui by holder.state.collectAsState()
+
+    MetaText(text = "// Listening backup", color = AarisColor.Accent)
+    Text(
+        ImportMergeExplanation,
+        style = MaterialTheme.typography.bodyMedium,
+        color = AarisColor.Muted,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutlinedButton(
+            onClick = holder::export,
+            enabled = !ui.busy,
+            shape = RectangleShape,
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag(ExportBackupButtonTestTag),
+        ) { Text(if (ui.busy) "WORKING…" else "SAVE A BACKUP") }
+        OutlinedButton(
+            onClick = holder::import,
+            enabled = !ui.busy,
+            shape = RectangleShape,
+            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag(ImportBackupButtonTestTag),
+        ) { Text("RESTORE FROM A BACKUP") }
+    }
+    ui.savedTo?.let { MetaText(text = "Saved to $it", color = AarisColor.Ok) }
+    ui.importLines.forEach { MetaText(text = it, color = AarisColor.Ok) }
+    ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 }
 
 // --- Podcast feeds -------------------------------------------------------------------------

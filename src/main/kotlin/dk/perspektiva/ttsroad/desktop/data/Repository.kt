@@ -244,6 +244,12 @@ interface TtsRoadRepository {
     /** Revoke and reissue this account's combined feed and OPML URLs. */
     suspend fun rotateLibraryFeed(): FeedsResponse? = null
 
+    /** The listening-state document, or null on a server without the route. */
+    suspend fun exportListeningState(): Map<String, Any?>? = null
+
+    /** Merge a document back in, returning what the merge did. */
+    suspend fun importListeningState(document: Map<String, Any?>): ListeningStateReport? = null
+
     /**
      * Revokes one session.
      *
@@ -646,6 +652,12 @@ class RetrofitTtsRoadRepository(
 
     override suspend fun rotateLibraryFeed(): FeedsResponse? =
         ifEndpointExists { it.rotateLibraryFeed() }
+
+    override suspend fun exportListeningState(): Map<String, Any?>? =
+        ifEndpointExists { it.exportListeningState() }?.document
+
+    override suspend fun importListeningState(document: Map<String, Any?>): ListeningStateReport? =
+        ifEndpointExists { it.importListeningState(document) }?.report
 
     override suspend fun revokeDevice(tokenId: Int): Boolean =
         ifEndpointExists { it.revokeDevice(tokenId) } != null
