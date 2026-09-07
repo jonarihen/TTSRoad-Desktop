@@ -140,8 +140,22 @@ states its cost before it is picked.
   reset them. Accounts under the same OS login intentionally share the machine's output settings;
   different OS users get different config roots. Do not synchronize the server's later
   `player_preferences` keys: speed/skip/silence/gain are output-shaped, and a sleep default merely
-  highlights a choice rather than arming the safety action. The on-disk type is separate and fully
+  highlights a choice rather than arming the safety action. `skipAdSegments` is the one exception
+  and is argued for below rather than being a hole in this rule — it is not output-shaped. The on-disk type is separate and fully
   nullable, out-of-range values are snapped, and the offered speed list preserves a custom value.
+- **Skipping adverts** (`data/PlaybackSkips.kt`, capability `playback_skips`). The server says
+  which *seconds* of a chapter are a Patreon plug or a fan-work disclaimer rather than the book —
+  matched against the text it was already narrated from and timed through the read-along cues, so
+  the audio is untouched and a downloaded chapter is still the right download. `ChapterSkips` is
+  pure and holds every decision; the controller checks it on the same 250 ms tick as the sleep
+  timer and the progress save, so there is one clock and no scheduler of its own. A plug that runs
+  to the end of the chapter returns `AttemptResult.Completed` rather than seeking, which is not a
+  shortcut: marking played, the finished-chapter tally, the end-of-chapter sleep timer and
+  auto-advance all already hang off that outcome, and a second path to the same place is how two
+  paths drift. `skipAdSegments` is the **one** field in `playback.json` that follows the account
+  instead of the machine — it is about the books, not the speakers — and `SkipAdSegmentsSync` is
+  where that exception lives, with its own one-key PATCH so the reader patch keeps its "only the
+  four reader keys" guarantee.
 - **The controller applies preferences, not the player screen.** `QueuePlaybackController` collects
   the store and pushes rate/gain/skip-silence to the engine, so an auto-advanced chapter and a
   media-key start use the same values as one the user pressed play on. `setSpeed` writes the

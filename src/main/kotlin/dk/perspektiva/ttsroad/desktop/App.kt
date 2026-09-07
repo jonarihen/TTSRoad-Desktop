@@ -484,6 +484,9 @@ fun App(
             // Local values are already usable; a capable server can now replace them with this
             // account's cross-device reader settings. Older/offline servers leave them alone.
             container.readerPreferences.refreshFromServer()
+            // Same shape, same moment, different file: whether adverts are skipped follows the
+            // account too, and the stored value is what plays until this answer arrives.
+            container.skipAdSegments.refreshFromServer()
             // Relaunching is the reconnect that matters: positions recorded while the last run was
             // offline have been on disk since, and this is the first chance to send them. After
             // discovery, so the flush knows whether the server can order writes. Failure is fine —
@@ -737,6 +740,7 @@ fun App(
                                     canSkipSilence = playerState.canSkipSilence,
                                     closeToTray = closeToTray,
                                     onCloseToTrayChange = container::setCloseToTray,
+                                    onSkipAdSegmentsChange = container.skipAdSegments::set,
                                     traySupported = traySupported,
                                     listeningStats = container.listeningStats,
                                     historyOwnerKey = container.historyOwnerKey(),

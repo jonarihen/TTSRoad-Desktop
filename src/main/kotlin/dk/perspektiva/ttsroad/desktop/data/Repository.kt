@@ -302,6 +302,21 @@ interface TtsRoadRepository {
     /** Conditional reader document request; 404 is a normal [ReadAlongFetchResult.NotFound]. */
     suspend fun readAlong(chapterId: Int, ifNoneMatch: String? = null): ReadAlongFetchResult
 
+    /**
+     * Which seconds of [chapterId] are an advert rather than the book.
+     *
+     * Answers [ChapterSkips.None] for anything short of a signed-out session. The failure mode of
+     * this feature is hearing a Patreon plug, and taking a chapter's playback down to avoid that
+     * would be a far worse trade.
+     */
+    suspend fun chapterSkips(chapterId: Int): ChapterSkips
+
+    /** The account's advert-skipping setting, or null when it has never held one. */
+    suspend fun skipAdSegmentsPreference(): Boolean?
+
+    /** Stores the advert-skipping setting; null when this server cannot hold it. */
+    suspend fun updateSkipAdSegments(enabled: Boolean): Boolean?
+
     /** Null means this older server has no account-preferences endpoint. */
     suspend fun readerPreferences(): ReaderPreferencesResponse?
 
@@ -730,6 +745,27 @@ class RetrofitTtsRoadRepository(
                 else -> throw HttpException(response)
             }
         }
+
+    override suspend fun chapterSkips(chapterId: Int): ChapterSkips {
+        if (!_currentCapabilities.value.playbackSkips) return ChapterSkips.None
+        return runCatching {
+            ChapterSkips.from(withAuthorizedApi { it.chapterSkips(chapterId) }, chapterId)
+        }.getOrElse { error ->
+            // A 401 has already ended the session inside withAuthorizedApi; everything else — an
+            // outage, a 404 from a version skew the flag did not predict — means the chapter plays
+            // exactly as it was narrated, which is the safe direction to fail in.
+            AppLog.warn("could not read the skip segments for chapter $chapterId", error)
+            ChapterSkips.None
+        }
+    }
+
+    override suspend fun skipAdSegmentsPreference(): Boolean? =
+        ifEndpointExists { it.skipAdSegmentsPreference() }?.preferences?.skipAdSegments
+
+    override suspend fun updateSkipAdSegments(enabled: Boolean): Boolean? =
+        ifEndpointExists { it.updateSkipAdSegments(SkipAdSegmentsPatch(enabled)) }
+            ?.preferences
+            ?.skipAdSegments
 
     override suspend fun readerPreferences(): ReaderPreferencesResponse? =
         ifEndpointExists { it.readerPreferences() }

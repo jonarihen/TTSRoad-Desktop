@@ -80,6 +80,15 @@ data class ServerCapabilities(
      */
     val notifications: Boolean = false,
     /**
+     * The server can say which seconds of a chapter are an advert rather than the book.
+     *
+     * Its own flag because the *client* does the skipping: a server can hold the rules and answer
+     * the endpoint while an older build plays the plug straight through. It says nothing about
+     * whether any fiction has such a rule — that is a per-chapter answer, and an empty list is the
+     * ordinary one.
+     */
+    val playbackSkips: Boolean = false,
+    /**
      * `GET /api/mobile/voices` — the narrator catalogue.
      *
      * Listing is open to any signed-in account; *applying* a choice is admin-gated by the fiction
@@ -165,6 +174,7 @@ data class ServerCapabilities(
             queue = response.capabilities.flag("queue"),
             audiobookExport = response.capabilities.flag("audiobook_export"),
             notifications = response.capabilities.flag("notifications"),
+            playbackSkips = response.capabilities.flag("playback_skips"),
             voiceCatalogue = response.capabilities.flag("voice_catalogue"),
             chapterMaintenance = response.capabilities.flag("chapter_maintenance"),
             fictionMaintenance = response.capabilities.flag("fiction_maintenance"),

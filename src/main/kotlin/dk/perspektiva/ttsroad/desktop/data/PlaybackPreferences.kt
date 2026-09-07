@@ -43,6 +43,20 @@ data class PlaybackPreferences(
     val skipSilence: Boolean = false,
     val volumeBoost: VolumeBoost = VolumeBoost.Off,
     /**
+     * Whether to jump over the advert and disclaimer segments the server marks.
+     *
+     * The one field here that is **not** a property of this machine, and the exception is
+     * deliberate: the four settings above are output-shaped — a laptop on speakers and a phone on
+     * earbuds want different values — while "do I want to hear this book's Patreon plug" is a fact
+     * about the listener and the library. So it follows the account, through [SkipAdSegmentsSync],
+     * and is kept here as well so the controller has an answer with no network and on a server too
+     * old to hold one.
+     *
+     * Defaults on, matching the server: an admin who wrote a skip rule has already said the audio
+     * is unwanted, and a second opt-in per machine would mostly read as the feature being broken.
+     */
+    val skipAdSegments: Boolean = true,
+    /**
      * Rates that belong to one serial rather than to the listener in general.
      *
      * Different narrators want different paces, and a listener who slows down for a dense
@@ -140,6 +154,7 @@ internal data class StoredPlaybackPreferences(
     val skipIntervalSeconds: Int? = null,
     val skipSilence: Boolean? = null,
     val volumeBoost: String? = null,
+    val skipAdSegments: Boolean? = null,
     /** JSON object keys are strings; a key that is not an id at all is dropped rather than fatal. */
     val fictionSpeeds: Map<String, Float>? = null,
 ) {
@@ -152,6 +167,9 @@ internal data class StoredPlaybackPreferences(
         // An unrecognised name falls back to Off rather than to the loudest thing in the enum.
         volumeBoost = VolumeBoost.entries.firstOrNull { it.name.equals(volumeBoost, ignoreCase = true) }
             ?: VolumeBoost.Off,
+        // Absent means an older file, not "off": the server's default is on, and a machine that
+        // has never been told otherwise should behave as the account would have said.
+        skipAdSegments = skipAdSegments ?: true,
         fictionSpeeds = fictionSpeeds.orEmpty()
             .mapNotNull { (key, value) -> key.toIntOrNull()?.takeIf { it > 0 }?.let { it to value } }
             .toMap(),
@@ -167,6 +185,7 @@ internal data class StoredPlaybackPreferences(
             skipIntervalSeconds = preferences.skipIntervalSeconds,
             skipSilence = preferences.skipSilence,
             volumeBoost = preferences.volumeBoost.name,
+            skipAdSegments = preferences.skipAdSegments,
             fictionSpeeds = preferences.fictionSpeeds.mapKeys { (id, _) -> id.toString() },
         )
     }

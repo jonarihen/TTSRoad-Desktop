@@ -278,6 +278,29 @@ interface TtsRoadApi {
         @Header("If-None-Match") ifNoneMatch: String? = null,
     ): retrofit2.Response<ReadAlongResponse>
 
+    /**
+     * Advert and disclaimer segments for one chapter (capability `playback_skips`).
+     *
+     * Asked per chapter as it loads rather than carried on the chapter row: the server computes it
+     * from the narration text and the timing document, and a shelf refresh asks for hundreds of
+     * chapters at once.
+     */
+    @GET("api/mobile/chapters/{chapter_id}/skips")
+    suspend fun chapterSkips(@Path("chapter_id") chapterId: Int): ChapterSkipsResponse
+
+    /**
+     * The same account endpoint the reader settings use, read for one key.
+     *
+     * A second model over one route rather than a wider [ReaderPreferencesWire]: what makes the
+     * reader patch safe is that it can only carry reader keys, and the way to keep that true while
+     * reading something else is a type that knows about something else.
+     */
+    @GET("api/me/preferences")
+    suspend fun skipAdSegmentsPreference(): SkipAdSegmentsResponse
+
+    @PATCH("api/me/preferences")
+    suspend fun updateSkipAdSegments(@Body request: SkipAdSegmentsPatch): SkipAdSegmentsResponse
+
     @GET("api/me/preferences")
     suspend fun readerPreferences(): ReaderPreferencesResponse
 

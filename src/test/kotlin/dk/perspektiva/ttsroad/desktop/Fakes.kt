@@ -107,7 +107,15 @@ open class FakeRepository(
     var deletePronunciationReportResult: Result<Boolean> = Result.success(false),
     /** Null models a server whose notifications route answers 404. */
     var chapterNotificationsResult: Result<ChapterNotificationsResponse?> = Result.success(null),
+    /** Nothing to skip, which is what a server with no skip rules answers for every chapter. */
+    var chapterSkips: dk.perspektiva.ttsroad.desktop.data.ChapterSkips =
+        dk.perspektiva.ttsroad.desktop.data.ChapterSkips.None,
+    /** Null is an account that has never been asked, which is not the same as "off". */
+    var skipAdSegmentsPreference: Boolean? = null,
 ) : TtsRoadRepository {
+    val chapterSkipRequests = mutableListOf<Int>()
+    val skipAdSegmentPatches = mutableListOf<Boolean>()
+
     var loginCalls: Int = 0
         private set
     var lastLoginTotp: String? = null
@@ -403,6 +411,18 @@ open class FakeRepository(
         readAlongCalls++
         readAlongEtags += ifNoneMatch
         return readAlongResult.getOrThrow()
+    }
+
+    override suspend fun chapterSkips(chapterId: Int): dk.perspektiva.ttsroad.desktop.data.ChapterSkips {
+        chapterSkipRequests += chapterId
+        return chapterSkips
+    }
+
+    override suspend fun skipAdSegmentsPreference(): Boolean? = skipAdSegmentsPreference
+
+    override suspend fun updateSkipAdSegments(enabled: Boolean): Boolean? {
+        skipAdSegmentPatches += enabled
+        return enabled
     }
 
     override suspend fun readerPreferences(): dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesResponse? =

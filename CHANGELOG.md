@@ -18,6 +18,31 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Adverts and disclaimers are skipped in audio that was already narrated.** Serials carry things
+  nobody subscribed for — a Patreon plug welded onto the end of every chapter, an "I don't own
+  Marvel, this is a fan work" paragraph welded onto the front of one. Removing that text before
+  narration only helps chapters narrated afterwards, which on a converted library means one
+  re-narration per chapter and a re-download of every file that was taken offline. So the server
+  now says which *seconds* of a chapter those are instead (capability `playback_skips`), worked out
+  from the text the chapter was already narrated from and timed through the read-along cues. The
+  file is untouched: an offline download is still the right download.
+
+  The controller asks per chapter and seeks past the segments on the same 250 ms tick that already
+  drives the sleep timer and progress saves — one clock, no scheduler of its own, and deterministic
+  under the fake engine. A plug that runs to the end of the chapter ends the chapter, through the
+  same completion path a natural end takes, so marking played, the finished-chapter tally, the
+  "stop at end of chapter" timer and auto-advance all keep working rather than being reimplemented.
+
+  **Settings → Playback → Skip adverts and disclaimers** turns it off. Unlike everything else in
+  that pane it follows the account (`skip_ad_segments`, default on), because it is about the books
+  rather than about this computer's output — and it is the only reason `playback.json` now holds
+  something account-shaped, which `SkipAdSegmentsSync` says out loud rather than hiding. Its PATCH
+  carries exactly one key, so the reader settings keep their guarantee that a save here cannot
+  overwrite a choice made in a browser. A server without the capability is never asked, and any
+  failure means the chapter plays exactly as narrated.
+
 ## [1.3.0] - 2026-09-04
 
 One feature, shipped to all three clients at once, and nearly all of its design is about when the

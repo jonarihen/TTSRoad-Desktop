@@ -67,6 +67,7 @@ endpoint 404 becomes a concise unsupported state. Never infer a feature from `ap
 | *(no flag)* `POST /fictions/{id}/cover` | cover-art replacement from the metadata editor | additive route — a **404 is the only signal**, and it stops the control being offered |
 | `audiobook_export` | read-only M4B export shelf and resumable save | Audiobooks pane hidden |
 | `notifications` | new-chapter notices held open until the chapter plays; header badge + tray notification | the New destination is hidden entirely |
+| `playback_skips` | per-chapter advert/disclaimer segments the controller seeks past | nothing is asked for and every chapter plays as narrated |
 | `audio_content_hash` | reserved/parsed contract flag | no UI is promised merely by parsing |
 
 Capability payloads are loose maps by design: unknown keys and non-boolean values cannot make the

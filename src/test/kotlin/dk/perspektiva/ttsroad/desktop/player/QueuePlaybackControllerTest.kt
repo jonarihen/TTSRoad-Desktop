@@ -441,6 +441,114 @@ class QueuePlaybackControllerTest {
         controller.release()
     }
 
+    // ── Skipping adverts (server capability `playback_skips`) ────────────────────
+
+    private fun skipsOf(vararg segments: Pair<Long, Long>, durationMs: Long = 600_000) =
+        dk.perspektiva.ttsroad.desktop.data.ChapterSkips(
+            chapterId = 101,
+            segments = segments.map {
+                dk.perspektiva.ttsroad.desktop.data.ChapterSkipSegment(it.first, it.second)
+            },
+            durationMs = durationMs,
+        )
+
+    @Test
+    fun `playback seeks past an advert it has arrived inside`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        engine.durationOnPrepare = 600_000
+        val repository = FakeRepository(chapterSkips = skipsOf(100_000L to 140_000L))
+        repository.capabilitiesResult = repository.capabilitiesResult.copy(playbackSkips = true)
+        val controller = controllerFor(engine, repository = repository)
+
+        controller.play(chapter(101, "Chapter 3", 600.0), null)
+        controller.await("playback to start") { it.isPlaying }
+        engine.setPosition(120_000)
+
+        controller.await("the skip to land") { it.positionMs == 140_000L }
+
+        assertEquals(listOf(101), repository.chapterSkipRequests)
+        assertTrue(engine.seeks.contains(140_000L))
+        controller.release()
+    }
+
+    @Test
+    fun `a plug that runs to the end of the chapter ends the chapter`() = runBlocking {
+        // The trailing case, and the common one. It goes through the same outcome a natural end
+        // does, so marking played, the listening tally and auto-advance all keep working — rather
+        // than a second path to the same place that can drift from the first.
+        val engine = FakePlaybackEngine()
+        engine.durationOnPrepare = 600_000
+        val repository = FakeRepository(chapterSkips = skipsOf(590_000L to 600_000L))
+        repository.capabilitiesResult = repository.capabilitiesResult.copy(playbackSkips = true)
+        val controller = controllerFor(engine, repository = repository)
+
+        controller.playQueue(
+            listOf(chapter(101, "Chapter 3", 600.0), chapter(102, "Chapter 4", 600.0)),
+            startChapterId = 101,
+            fiction = FictionSummary(id = 7, title = "A Test Serial"),
+        )
+        controller.await("playback to start") { it.isPlaying }
+        engine.setPosition(592_000)
+
+        controller.await("the queue to move on") { it.currentIndex == 1 }
+
+        // Stopped rather than left running: the progress save that follows is a network call, and
+        // the plug must not keep playing while it is in flight.
+        assertTrue(engine.stopCount.get() >= 1)
+        awaitCondition("the finished chapter to be marked played") {
+            repository.savedProgress.any { it.first == 101 && it.third }
+        }
+        controller.release()
+    }
+
+    @Test
+    fun `prose either side of an advert is never touched`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        engine.durationOnPrepare = 600_000
+        val repository = FakeRepository(chapterSkips = skipsOf(100_000L to 140_000L))
+        repository.capabilitiesResult = repository.capabilitiesResult.copy(playbackSkips = true)
+        val controller = controllerFor(engine, repository = repository)
+
+        controller.play(chapter(101, "Chapter 3", 600.0), null)
+        controller.await("playback to start") { it.isPlaying }
+        engine.setPosition(90_000)
+        controller.await("the tick to pick the position up") { it.positionMs == 90_000L }
+        engine.setPosition(200_000)
+        controller.await("the tick to pick the later position up") { it.positionMs == 200_000L }
+
+        assertTrue(engine.seeks.isEmpty(), "seeks: ${engine.seeks}")
+        controller.release()
+    }
+
+    @Test
+    fun `a listener who turned it off is not asked and is not skipped`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        engine.durationOnPrepare = 600_000
+        val repository = FakeRepository(chapterSkips = skipsOf(100_000L to 140_000L))
+        repository.capabilitiesResult = repository.capabilitiesResult.copy(playbackSkips = true)
+        val preferences = dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore(
+            dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences(skipAdSegments = false),
+        )
+        val controller = QueuePlaybackController(
+            repository = repository,
+            sources = FakeMediaSourceFactory(),
+            engine = engine,
+            ioDispatcher = Dispatchers.Default,
+            preferencesStore = preferences,
+            retryDelaysMs = emptyList(),
+            tickIntervalMs = 10,
+        )
+
+        controller.play(chapter(101, "Chapter 3", 600.0), null)
+        controller.await("playback to start") { it.isPlaying }
+        engine.setPosition(120_000)
+        controller.await("the tick to pick the position up") { it.positionMs == 120_000L }
+
+        assertTrue(engine.seeks.isEmpty())
+        assertTrue(repository.chapterSkipRequests.isEmpty(), "the request itself is not made")
+        controller.release()
+    }
+
     @Test
     fun `stop clears the session and releases the engine's source`() = runBlocking {
         val engine = FakePlaybackEngine(completeOnPlay = true)

@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.desktop.player
 
+import dk.perspektiva.ttsroad.desktop.data.ChapterSkips
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.InMemoryListeningStatsStore
@@ -593,6 +594,20 @@ class QueuePlaybackController(
     }
 
     /** One attempt: prepare, play, then tick until the engine says it finished or failed. */
+    /**
+     * Which seconds of this chapter are an advert rather than the book.
+     *
+     * Loaded per chapter, on the attempt rather than at queue time: a queue is a whole serial and
+     * this is a few hundred bytes per chapter that only matters for the one being played. A retry
+     * re-uses nothing — the answer is cheap and a rule may have been written since.
+     */
+    private suspend fun loadSkips(chapter: ChapterSummary): ChapterSkips =
+        if (!preferencesStore.preferences.value.skipAdSegments) {
+            ChapterSkips.None
+        } else {
+            repository.chapterSkips(chapter.resolvedChapterId)
+        }
+
     private suspend fun attemptChapter(chapter: ChapterSummary, startMs: Long): AttemptResult {
         val url = chapter.audio?.url ?: return AttemptResult.Fatal("This chapter has no audio yet")
 
@@ -626,6 +641,10 @@ class QueuePlaybackController(
                 speed = engine.capabilities.coerceSpeed(speed),
             )
         }
+
+        // After play() rather than before it: the request must not stand between pressing play and
+        // hearing something, and the first advert is never in the first quarter second.
+        val skips = loadSkips(chapter)
 
         var lastSavedMs = startMs
         while (coroutineContext[Job]?.isActive != false) {
@@ -661,8 +680,41 @@ class QueuePlaybackController(
                 lastSavedMs = lastKnownPositionMs
                 saveProgress(chapter, lastKnownPositionMs, isPlayed = false)
             }
+
+            // Driven by the same tick as the sleep timer and the progress save, for the same
+            // reason: one clock, no scheduler of its own, and deterministic under a fake engine.
+            if (_state.value.isPlaying) {
+                when (val outcome = applySkip(skips, duration)) {
+                    null -> Unit
+                    else -> return outcome
+                }
+            }
         }
         return AttemptResult.Stopped
+    }
+
+    /**
+     * Jump past the advert playback is inside, if it is inside one.
+     *
+     * Answers [AttemptResult.Completed] for a plug that runs to the end of the chapter, which is
+     * the trailing case and by far the common one. That is not a shortcut: everything that knows
+     * what the end of a chapter means — marking it played, counting it finished, the "stop at end
+     * of chapter" timer, auto-advance — already hangs off that outcome, and inventing a second path
+     * to the same place is how the two drift apart. The engine is stopped first, so the tail cannot
+     * keep playing while the progress save that follows is in flight.
+     */
+    private fun applySkip(skips: ChapterSkips, durationMs: Long): AttemptResult? {
+        if (skips.isEmpty) return null
+        val current = if (durationMs > 0) skips.copy(durationMs = durationMs) else skips
+        val target = current.targetFor(lastKnownPositionMs) ?: return null
+        if (current.endsChapter(target)) {
+            runCatching { engine.stop() }
+            return AttemptResult.Completed
+        }
+        engine.seekTo(target)
+        lastKnownPositionMs = target
+        _state.update { it.copy(positionMs = target) }
+        return null
     }
 
     /**

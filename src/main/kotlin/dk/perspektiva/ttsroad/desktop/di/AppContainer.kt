@@ -16,6 +16,7 @@ import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.ReadAlongCache
 import dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.SkipAdSegmentsSync
 import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinator
 import dk.perspektiva.ttsroad.desktop.download.AudiobookExportDownloader
@@ -266,6 +267,16 @@ class AppContainer(
     /** Local fallback first, account GET/PATCH synchronization whenever the server supports it. */
     val readerPreferences: ReaderPreferencesStore = readerPreferencesFactory(repository, dispatchers)
 
+    /**
+     * The one setting in `playback.json` that follows the account rather than the machine.
+     *
+     * Constructed here rather than inside the preferences store, because that store deliberately
+     * knows nothing about a session or a repository — see [PlaybackPreferences.skipAdSegments] for
+     * why this single field is the exception to that.
+     */
+    val skipAdSegments: SkipAdSegmentsSync =
+        SkipAdSegmentsSync(repository, playbackPreferences, dispatchers.io)
+
     /** Remembered window size/position/maximised state. Never holds anything transient or secret. */
     val windowPreferences: WindowPreferencesStore = windowPreferencesStore
 
@@ -327,6 +338,7 @@ class AppContainer(
         libraryCache.close()
         readAlongCache.clear()
         readerPreferences.close()
+        skipAdSegments.close()
         httpClient.dispatcher.executorService.shutdown()
         httpClient.connectionPool.evictAll()
         runCatching { httpClient.cache?.close() }

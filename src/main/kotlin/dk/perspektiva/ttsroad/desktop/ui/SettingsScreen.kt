@@ -137,6 +137,12 @@ fun SettingsScreen(
      */
     closeToTray: Boolean = false,
     onCloseToTrayChange: (Boolean) -> Unit = {},
+    /**
+     * How to change the advert-skipping setting, which unlike the rest of this pane follows the
+     * account. Passed in for the same reason the tray flag is: the write goes through a syncing
+     * object the container owns, and a pane that reached for it could not be rendered without one.
+     */
+    onSkipAdSegmentsChange: (Boolean) -> Unit = {},
     /** False on a desktop session with no system tray, where the control would promise nothing. */
     traySupported: Boolean = true,
     /**
@@ -213,6 +219,8 @@ fun SettingsScreen(
                             preferences,
                             canChangeSpeed,
                             canSkipSilence,
+                            capabilities.playbackSkips,
+                            onSkipAdSegmentsChange,
                             closeToTray,
                             onCloseToTrayChange,
                             traySupported,
@@ -745,6 +753,8 @@ private fun PlaybackPane(
     preferences: PlaybackPreferencesStore,
     canChangeSpeed: Boolean,
     canSkipSilence: Boolean,
+    canSkipAdverts: Boolean,
+    onSkipAdSegmentsChange: (Boolean) -> Unit,
     closeToTray: Boolean,
     onCloseToTrayChange: (Boolean) -> Unit,
     traySupported: Boolean,
@@ -817,6 +827,21 @@ private fun PlaybackPane(
             MetaText(
                 "Silence removal needs the GStreamer \"removesilence\" element, which ships in " +
                     "gst-plugins-bad. It is not installed here, so the control is not shown.",
+            )
+        }
+
+        if (canSkipAdverts) {
+            RowDivider()
+
+            ToggleRow(
+                label = "SKIP ADVERTS AND DISCLAIMERS",
+                description = "Jumps over the stretches this server marks — a Patreon plug at the " +
+                    "end of a chapter, a \"this is a fan work\" note at the start of one. The audio " +
+                    "is never altered, so turning this off plays the chapter exactly as narrated. " +
+                    "Unlike the rest of this pane it follows your account, because it is about the " +
+                    "books rather than about this computer's output.",
+                checked = prefs.skipAdSegments,
+                onCheckedChange = onSkipAdSegmentsChange,
             )
         }
 
