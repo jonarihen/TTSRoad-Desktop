@@ -60,8 +60,10 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -337,6 +339,47 @@ fun AarisSecondaryAction(
         }
         Text(label.uppercase())
     }
+}
+
+@Composable
+fun AarisTextAction(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    Box(
+        modifier
+            .height(32.dp)
+            .hoverable(interaction, enabled)
+            .let { if (enabled) it.pointerHoverIcon(PointerIcon.Hand) else it }
+            .background(if ((hovered || focused) && enabled) AarisColor.BgHover else Color.Transparent)
+            .border(1.dp, if (focused && enabled) AarisColor.Accent else Color.Transparent)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        MetaText(label, color = if (enabled) AarisColor.Accent else AarisColor.Dim)
+    }
+}
+
+@Composable
+fun PoliteStatus(text: String, modifier: Modifier = Modifier, error: Boolean = false) {
+    Text(
+        text,
+        color = if (error) MaterialTheme.colorScheme.error else AarisColor.Ok,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    )
 }
 
 /**

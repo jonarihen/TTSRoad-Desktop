@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -44,8 +46,11 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -56,6 +61,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -89,6 +95,7 @@ import dk.perspektiva.ttsroad.desktop.ui.MetaText
 import dk.perspektiva.ttsroad.desktop.ui.NowPlayingBar
 import dk.perspektiva.ttsroad.desktop.ui.PageGutter
 import dk.perspektiva.ttsroad.desktop.ui.PlayerScreen
+import dk.perspektiva.ttsroad.desktop.ui.PoliteStatus
 import dk.perspektiva.ttsroad.desktop.ui.ReaderScreen
 import dk.perspektiva.ttsroad.desktop.ui.SearchScreen
 import dk.perspektiva.ttsroad.desktop.ui.SearchStateHolder
@@ -902,6 +909,7 @@ private fun HeaderBar(
                     ) { onSelect(Destination.Library) },
             )
             Spacer(Modifier.weight(1f))
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
             NavItem(
                 "Library",
                 active = current == Destination.Library || current is Destination.Fiction ||
@@ -928,6 +936,7 @@ private fun HeaderBar(
                 "Settings",
                 active = current == Destination.Settings || current == Destination.Devices,
             ) { onSelect(Destination.Settings) }
+            }
         }
     }
 }
@@ -1037,6 +1046,9 @@ private fun LoginScreen(
     val twoFactor = ui.twoFactor
     val busy = ui.busy
     val error = ui.error
+    val canSubmit = !busy && ui.retryAfterSeconds == null && serverUrl.isNotBlank() &&
+        username.isNotBlank() && password.isNotBlank() && (!twoFactor || totpCode.isNotBlank())
+    val submit = { if (canSubmit) holder.submit(serverUrl, username, password, totpCode) }
 
     LaunchedEffect(serverUrl) { holder.serverUrlChanged(serverUrl) }
 
@@ -1053,24 +1065,31 @@ private fun LoginScreen(
                 Text(it, color = AarisColor.Warning, style = MaterialTheme.typography.bodyMedium)
             }
             Spacer(Modifier.height(24.dp))
-            Field("SERVER URL", serverUrl) { serverUrl = it }
+            Field("SERVER URL", serverUrl, imeAction = ImeAction.Next) { serverUrl = it }
             // Unauthenticated discovery: proof the address is a real TTSRoad server, shown before
             // a password is typed rather than after it has been sent somewhere.
             ui.discovered?.let {
                 Spacer(Modifier.height(6.dp))
-                MetaText(text = "${it.serverName} ${it.serverVersion}", color = AarisColor.Ok)
+                PoliteStatus("${it.serverName} ${it.serverVersion}".uppercase())
             }
             Spacer(Modifier.height(12.dp))
-            Field("USERNAME", username) { username = it }
+            Field("USERNAME", username, imeAction = ImeAction.Next) { username = it }
             Spacer(Modifier.height(12.dp))
-            Field("PASSWORD", password, password = true) { password = it }
+            Field(
+                "PASSWORD",
+                password,
+                password = true,
+                imeAction = if (twoFactor) ImeAction.Next else ImeAction.Done,
+                onSubmit = submit,
+            ) { password = it }
             if (twoFactor) {
                 Spacer(Modifier.height(12.dp))
-                Field("2FA CODE", totpCode) { totpCode = it }
+                Field("2FA CODE", totpCode, imeAction = ImeAction.Done, onSubmit = submit) { totpCode = it }
+                PoliteStatus("Two-factor code required")
             }
             error?.let {
                 Spacer(Modifier.height(12.dp))
-                Text(it, color = MaterialTheme.colorScheme.error)
+                PoliteStatus(it, error = true)
             }
             if (!persistsCredentials) {
                 Spacer(Modifier.height(12.dp))
@@ -1081,12 +1100,10 @@ private fun LoginScreen(
             }
             Spacer(Modifier.height(20.dp))
             Button(
-                onClick = { holder.submit(serverUrl, username, password, totpCode) },
+                onClick = submit,
                 // A 429 means the server is counting attempts; leaving the button live would let
                 // the user extend their own lockout.
-                enabled = !busy && ui.retryAfterSeconds == null && serverUrl.isNotBlank() &&
-                    username.isNotBlank() && password.isNotBlank() &&
-                    (!twoFactor || totpCode.isNotBlank()),
+                enabled = canSubmit,
                 shape = RectangleShape,
                 modifier = Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Hand),
             ) {
@@ -1097,14 +1114,29 @@ private fun LoginScreen(
 }
 
 @Composable
-private fun Field(label: String, value: String, password: Boolean = false, onValue: (String) -> Unit) {
+private fun Field(
+    label: String,
+    value: String,
+    password: Boolean = false,
+    imeAction: ImeAction = ImeAction.Default,
+    onSubmit: () -> Unit = {},
+    onValue: (String) -> Unit,
+) {
+    val focusManager = LocalFocusManager.current
     OutlinedTextField(
         value = value,
         onValueChange = onValue,
         label = { Text(label) },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().testTag("loginField-$label"),
         visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
-        keyboardOptions = if (password) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (password) KeyboardType.Password else KeyboardType.Text,
+            imeAction = imeAction,
+        ),
+        keyboardActions = KeyboardActions(
+            onNext = { focusManager.moveFocus(FocusDirection.Next) },
+            onDone = { onSubmit() },
+        ),
     )
 }

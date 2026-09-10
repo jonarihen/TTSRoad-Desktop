@@ -86,7 +86,7 @@ fun NotificationsScreen(
                     }
                     state.error?.let {
                         Spacer(Modifier.height(12.dp))
-                        Text(it, color = MaterialTheme.colorScheme.error)
+                        PoliteStatus(it, error = true)
                     }
                     Spacer(Modifier.height(10.dp))
                 }
@@ -102,6 +102,10 @@ fun NotificationsScreen(
                 }
 
                 !state.loaded && state.loading -> item(key = "loading") { CenterProgress() }
+
+                !state.loaded && state.error != null -> item(key = "initial-error") {
+                    InitialErrorState(state.error.orEmpty(), holder::refresh)
+                }
 
                 rows.isEmpty() -> item(key = "empty") {
                     EmptyState(

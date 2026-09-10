@@ -29,19 +29,28 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -293,8 +302,19 @@ private fun BookmarkEditDialog(
 ) {
     var label by remember(bookmark.id) { mutableStateOf(bookmark.label.orEmpty()) }
     var note by remember(bookmark.id) { mutableStateOf(bookmark.note.orEmpty()) }
+    val initialFocus = remember { FocusRequester() }
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .semantics { paneTitle = "Edit bookmark" },
         title = { Text("Edit bookmark") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -306,7 +326,7 @@ private fun BookmarkEditDialog(
                     onValueChange = { label = it.take(BookmarkLimits.MaxLabelChars) },
                     label = { Text("LABEL") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag(BookmarkLabelFieldTestTag),
+                    modifier = Modifier.fillMaxWidth().focusRequester(initialFocus).testTag(BookmarkLabelFieldTestTag),
                 )
                 OutlinedTextField(
                     value = note,
@@ -321,6 +341,7 @@ private fun BookmarkEditDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL") } },
         shape = RectangleShape,
     )
+    LaunchedEffect(bookmark.id) { runCatching { initialFocus.requestFocus() } }
 }
 
 const val BookmarkLabelFieldTestTag: String = "bookmarkLabelField"

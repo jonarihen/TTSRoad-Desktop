@@ -126,11 +126,11 @@ fun SearchScreen(
                     }
                     state.error?.let {
                         Spacer(Modifier.height(12.dp))
-                        Text(it, color = MaterialTheme.colorScheme.error)
+                        PoliteStatus(it, error = true)
                     }
                     state.result?.let { result ->
                         Spacer(Modifier.height(12.dp))
-                        MetaText(resultSummary(result.total, state.resultQuery), color = AarisColor.Dim)
+                        PoliteStatus(resultSummary(result.total, state.resultQuery))
                     }
                     Spacer(Modifier.height(20.dp))
                 }

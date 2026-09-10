@@ -56,8 +56,10 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -459,15 +461,20 @@ private fun SettingsNav(
  */
 @Composable
 private fun NavEntry(section: SettingsSection, selected: Boolean, onSelect: (SettingsSection) -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
     Row(
         Modifier
             .selectable(
                 selected = selected,
+                interactionSource = interaction,
+                indication = null,
                 role = Role.Tab,
                 onClick = { onSelect(section) },
             )
             .pointerHoverIcon(PointerIcon.Hand)
             .background(if (selected) AarisColor.BgHover else Color.Transparent)
+            .border(1.dp, if (focused) AarisColor.Accent else Color.Transparent)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1143,16 +1150,20 @@ private fun UpdateCard(updates: UpdateStateHolder) {
     MetaText(text = "// Updates", color = AarisColor.Accent)
     SettingsCard {
         val status = state.status
-        SettingRow(
-            "Update check",
-            when (status) {
-                is UpdateStatus.Checking -> "Checking…"
-                is UpdateStatus.UpToDate -> "${BuildInfo.VERSION} is the newest release"
-                is UpdateStatus.Available -> "Version ${status.release.version} is available"
-                is UpdateStatus.Failed -> status.reason
-                is UpdateStatus.Unknown -> "Not checked yet"
-            },
-        )
+        val statusText = when (status) {
+            is UpdateStatus.Checking -> "Checking…"
+            is UpdateStatus.UpToDate -> "${BuildInfo.VERSION} is the newest release"
+            is UpdateStatus.Available -> "Version ${status.release.version} is available"
+            is UpdateStatus.Failed -> status.reason
+            is UpdateStatus.Unknown -> "Not checked yet"
+        }
+        if (status is UpdateStatus.Checking || status is UpdateStatus.Unknown) {
+            SettingRow("Update check", statusText)
+        } else {
+            Column(Modifier.semantics { liveRegion = LiveRegionMode.Polite }) {
+                SettingRow("Update check", statusText)
+            }
+        }
         RowDivider()
         ToggleRow(
             label = "Check automatically",
@@ -1324,9 +1335,9 @@ private fun ListeningBackupBlock(holder: ListeningBackupStateHolder) {
             modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag(ImportBackupButtonTestTag),
         ) { Text("RESTORE FROM A BACKUP") }
     }
-    ui.savedTo?.let { MetaText(text = "Saved to $it", color = AarisColor.Ok) }
-    ui.importLines.forEach { MetaText(text = it, color = AarisColor.Ok) }
-    ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    ui.savedTo?.let { PoliteStatus("Saved to $it") }
+    ui.importLines.forEach { PoliteStatus(it) }
+    ui.error?.let { PoliteStatus(it, error = true) }
 }
 
 // --- Podcast feeds -------------------------------------------------------------------------
@@ -1346,7 +1357,7 @@ private fun PodcastFeedsPane(holder: PodcastFeedsStateHolder) {
     when {
         ui.unsupported -> InfoCard("This server does not publish feed URLs over the mobile API.")
         ui.isEmpty && ui.loading -> Box(Modifier.fillMaxWidth().height(120.dp)) { CenterProgress() }
-        ui.isEmpty && ui.error != null -> Text(ui.error.orEmpty(), color = MaterialTheme.colorScheme.error)
+        ui.isEmpty && ui.error != null -> InitialErrorState(ui.error.orEmpty()) { holder.ensureLoaded(force = true) }
         ui.isEmpty -> InfoCard("Nothing to subscribe to yet. Follow a fiction and its feed appears here.")
         else -> {
             InfoCard(
@@ -1378,8 +1389,8 @@ private fun PodcastFeedsPane(holder: PodcastFeedsStateHolder) {
                     }
                 }
             }
-            ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            ui.notice?.let { MetaText(text = it, color = AarisColor.Ok) }
+            ui.error?.let { PoliteStatus(it, error = true) }
+            ui.notice?.let { PoliteStatus(it) }
         }
     }
 

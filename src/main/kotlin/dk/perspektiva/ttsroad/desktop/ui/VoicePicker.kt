@@ -3,6 +3,12 @@ package dk.perspektiva.ttsroad.desktop.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,15 +32,27 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.MobileVoice
 import dk.perspektiva.ttsroad.desktop.data.initiallyExpandedVoiceLocale
@@ -126,9 +144,20 @@ fun VoicePickerDialog(
     }
     var expanded by remember(initiallyOpen) { mutableStateOf(setOfNotNull(initiallyOpen)) }
     val searching = query.isNotBlank()
+    val searchFocus = remember { FocusRequester() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .semantics { paneTitle = "Choose a voice" },
         shape = RectangleShape,
         title = { Text("CHOOSE A VOICE") },
         text = {
@@ -139,7 +168,7 @@ fun VoicePickerDialog(
                     label = { Text("SEARCH") },
                     supportingText = { Text("A name, a language, or a gender") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag(VoicePickerSearchTestTag),
+                    modifier = Modifier.fillMaxWidth().focusRequester(searchFocus).testTag(VoicePickerSearchTestTag),
                 )
                 if (groups.isEmpty()) {
                     Text(
@@ -149,7 +178,8 @@ fun VoicePickerDialog(
                     )
                 } else {
                     LazyColumn(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).testTag(VoicePickerTestTag),
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).selectableGroup()
+                            .testTag(VoicePickerTestTag),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         groups.forEach { group ->
@@ -190,6 +220,7 @@ fun VoicePickerDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss, shape = RectangleShape) { Text("CANCEL") } },
     )
+    LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
 }
 
 @Composable
@@ -200,12 +231,28 @@ private fun LocaleHeader(
     expanded: Boolean,
     onToggle: (() -> Unit)?,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .let { if (onToggle != null) it.clickable(onClick = onToggle).pointerHoverIcon(PointerIcon.Hand) else it }
-            .background(AarisColor.BgRaise)
+            .hoverable(interaction, enabled = onToggle != null)
+            .background(if (hovered || focused) AarisColor.BgHover else AarisColor.BgRaise)
+            .border(1.dp, if (focused) AarisColor.Accent else AarisColor.BgRaise)
+            .let {
+                if (onToggle != null) {
+                    it.clickable(
+                        interactionSource = interaction,
+                        indication = null,
+                        role = Role.Button,
+                        onClick = onToggle,
+                    ).pointerHoverIcon(PointerIcon.Hand).semantics {
+                        stateDescription = if (expanded) "Expanded" else "Collapsed"
+                    }
+                } else it
+            }
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
         Text(
@@ -229,14 +276,25 @@ private fun LocaleHeader(
 
 @Composable
 private fun VoiceRow(shortName: String, detail: String, chosen: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .hoverable(interaction)
+            .background(if (hovered || focused) AarisColor.BgHover else androidx.compose.ui.graphics.Color.Transparent)
+            .border(1.dp, if (focused || chosen) AarisColor.Accent else androidx.compose.ui.graphics.Color.Transparent)
+            .selectable(
+                selected = chosen,
+                interactionSource = interaction,
+                indication = null,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
             .pointerHoverIcon(PointerIcon.Hand)
-            .then(if (chosen) Modifier.border(1.dp, AarisColor.Accent) else Modifier)
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {

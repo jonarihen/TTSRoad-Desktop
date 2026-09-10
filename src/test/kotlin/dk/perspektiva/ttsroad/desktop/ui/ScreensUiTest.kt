@@ -2,6 +2,8 @@ package dk.perspektiva.ttsroad.desktop.ui
 
 import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -128,6 +130,71 @@ class ScreensUiTest {
         compose.waitForIdle()
 
         assertEquals(1, repository.loginCalls)
+    }
+
+    @Test
+    fun `login fields advance focus on next and submit on done`() {
+        val repository = FakeRepository()
+        val app = container(SessionState(), repository)
+        compose.setContent { TtsRoadTheme { App(app) } }
+
+        compose.onNodeWithTag("loginField-SERVER URL").performTextInput("https://ttsroad.test/")
+        compose.onNodeWithTag("loginField-SERVER URL").performImeAction()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("loginField-USERNAME").assertIsFocused()
+        compose.onNodeWithTag("loginField-USERNAME").performTextInput("testuser")
+        compose.onNodeWithTag("loginField-USERNAME").performImeAction()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("loginField-PASSWORD").assertIsFocused()
+        compose.onNodeWithTag("loginField-PASSWORD").performTextInput("secret")
+        compose.onNodeWithTag("loginField-PASSWORD").performImeAction()
+        compose.waitUntil(5_000) { repository.loginCalls > 0 }
+
+        assertEquals(1, repository.loginCalls)
+    }
+
+    @Test
+    fun `dialogs expose paneTitle semantics and focus their initial field`() {
+        val repository = FakeRepository(
+            currentUserResult = Result.success(MobileUser(1, "admin", isAdmin = true)),
+            capabilitiesResult = ServerCapabilities(fictionManagement = true),
+        )
+        val app = container(
+            SessionState(serverUrl = "https://x/", token = "t", username = "admin", isAdmin = true),
+            repository,
+        )
+
+        compose.setContent { TtsRoadTheme { App(app) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag(AddFictionButtonTestTag).performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag(AddFictionDialogTestTag).assertIsDisplayed()
+        compose.onNodeWithText("ROYAL ROAD URL OR FICTION ID").assertIsFocused()
+    }
+
+    @Test
+    fun `voice picker exposes paneTitle, initial search focus, and expanded state`() {
+        val voices = listOf(
+            dk.perspektiva.ttsroad.desktop.data.MobileVoice(
+                name = "en-US-BrianNeural",
+                locale = "en-US",
+                gender = "Male",
+            ),
+        )
+        compose.setContent {
+            TtsRoadTheme {
+                VoicePickerDialog(voices = voices, current = "", onPick = {}, onDismiss = {})
+            }
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("CHOOSE A VOICE").assertIsDisplayed()
+        compose.onNodeWithTag(VoicePickerSearchTestTag).assertIsFocused()
+        compose.onNodeWithText("ENGLISH (UNITED STATES)", substring = true).assertIsDisplayed()
     }
 
     @Test

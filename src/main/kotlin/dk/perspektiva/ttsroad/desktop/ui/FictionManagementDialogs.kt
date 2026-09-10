@@ -16,12 +16,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.MobileVoice
 import dk.perspektiva.ttsroad.desktop.data.SyncScope
@@ -85,9 +96,20 @@ private fun AddFictionDialog(
     onDismiss: () -> Unit,
 ) {
     val epub = editor.epubFile
+    val initialFocus = remember { FocusRequester() }
     AlertDialog(
         onDismissRequest = { if (!isBusy) onDismiss() },
-        modifier = Modifier.testTag(AddFictionDialogTestTag),
+        modifier = Modifier
+            .testTag(AddFictionDialogTestTag)
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape && !isBusy) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .semantics { paneTitle = "Add fiction" },
         containerColor = AarisColor.BgRaise,
         title = {
             Text(
@@ -112,7 +134,7 @@ private fun AddFictionDialog(
                     // saying rather than implying.
                     enabled = !isBusy && epub == null,
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().focusRequester(initialFocus),
                 )
                 if (epubUploadAvailable) {
                     Row(
@@ -215,6 +237,7 @@ private fun AddFictionDialog(
             }
         },
     )
+    LaunchedEffect(Unit) { runCatching { initialFocus.requestFocus() } }
 }
 
 const val SyncScopeTestTag: String = "addFictionSyncScope"

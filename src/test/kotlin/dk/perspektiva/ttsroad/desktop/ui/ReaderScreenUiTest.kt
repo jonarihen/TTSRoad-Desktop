@@ -1,19 +1,26 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.pressKey
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.InMemoryReaderPreferencesStore
@@ -211,6 +218,48 @@ class ReaderScreenUiTest {
 
         assertEquals(0, advances)
         compose.onNodeWithText("Play this chapter to follow the narration.").assertIsDisplayed()
+    }
+
+    @Test
+    fun `reader paragraphs offer semantic seek actions`() {
+        val player = FakePlaybackController(
+            PlayerUiState(
+                title = "Chapter One",
+                hasMedia = true,
+                queue = listOf(QueueItem(10, "Chapter One")),
+            ),
+        )
+        screen(player = player)
+
+        val paragraphNode = compose.onAllNodesWithTag(ReaderParagraphTestTag).onFirst()
+
+        val actions = paragraphNode.fetchSemanticsNode().config[SemanticsActions.CustomActions]
+        val names = actions.map { it.label }
+        assertTrue(names.contains("Seek to paragraph start"))
+        assertTrue(names.contains("Seek to sentence start"))
+
+        val targetAction = actions.first { it.label == "Seek to paragraph start" }
+        targetAction.action()
+        assertTrue(player.calls.contains("seekTo(0)"), "calls were ${player.calls}")
+    }
+
+    @Test
+    fun `escape in reader closes find and settings before exiting reader`() {
+        val preferences = InMemoryReaderPreferencesStore()
+        screen(preferences = preferences)
+
+        compose.onNodeWithContentDescription("Find in chapter").performClick()
+        compose.onNodeWithTag(ReaderFindFieldTestTag).assertIsDisplayed()
+
+        compose.onAllNodes(isRoot())[0].performKeyInput { pressKey(Key.Escape) }
+        compose.waitForIdle()
+        compose.onAllNodesWithTag(ReaderFindFieldTestTag).assertCountEquals(0)
+
+        compose.onNodeWithContentDescription("Reading settings").performClick()
+        compose.onNodeWithText("Font size").assertIsDisplayed()
+        compose.onNodeWithText("Font size").performKeyInput { pressKey(Key.Escape) }
+        compose.waitForIdle()
+        compose.onAllNodesWithText("Font size").assertCountEquals(0)
     }
 
     @Test

@@ -11,10 +11,21 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.formatReportPosition
 
@@ -33,12 +44,23 @@ const val PronunciationSendTestTag: String = "pronunciationSend"
 fun PronunciationReportDialog(holder: PronunciationReportsStateHolder) {
     val ui by holder.state.collectAsState()
     val draft = ui.draft ?: return
+    val initialFocus = remember { FocusRequester() }
 
     AlertDialog(
         onDismissRequest = holder::dismiss,
         shape = RectangleShape,
         containerColor = AarisColor.BgRaise,
-        modifier = Modifier.testTag(PronunciationDialogTestTag),
+        modifier = Modifier
+            .testTag(PronunciationDialogTestTag)
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    holder.dismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .semantics { paneTitle = "Report a pronunciation" },
         title = { Text("REPORT A PRONUNCIATION") },
         text = {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -55,7 +77,7 @@ fun PronunciationReportDialog(holder: PronunciationReportsStateHolder) {
                     supportingText = { Text("As it is written — the server's tools match on the text.") },
                     singleLine = true,
                     enabled = !ui.busy,
-                    modifier = Modifier.fillMaxWidth().testTag(PronunciationWordFieldTestTag),
+                    modifier = Modifier.fillMaxWidth().focusRequester(initialFocus).testTag(PronunciationWordFieldTestTag),
                 )
                 OutlinedTextField(
                     value = draft.note,
@@ -84,4 +106,5 @@ fun PronunciationReportDialog(holder: PronunciationReportsStateHolder) {
             TextButton(onClick = holder::dismiss, shape = RectangleShape) { Text("CANCEL") }
         },
     )
+    LaunchedEffect(Unit) { runCatching { initialFocus.requestFocus() } }
 }

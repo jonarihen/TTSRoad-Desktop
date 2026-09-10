@@ -82,8 +82,13 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -341,6 +346,7 @@ fun ReaderScreen(
                 // The dialog is modal chrome of its own, so the toolbar behind it stays put
                 // rather than vanishing under the pointer that is about to close it.
                 settingsOpen = showSettings,
+                onDismissSettings = { showSettings = false },
                 onBack = onBack,
                 onOpenSettings = { showSettings = true },
             )
@@ -369,6 +375,7 @@ private fun ReaderDocumentPage(
     readingMode: Boolean,
     onToggleReadingMode: () -> Unit,
     settingsOpen: Boolean,
+    onDismissSettings: () -> Unit,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -492,14 +499,25 @@ private fun ReaderDocumentPage(
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                if (event.isCtrlPressed && event.key == Key.F) {
-                    findOpen = true
-                    true
-                } else {
-                    handleKey(event.key)
+                when {
+                    event.key == Key.Escape && findOpen -> {
+                        findOpen = false
+                        query = ""
+                        true
+                    }
+                    event.key == Key.Escape && settingsOpen -> {
+                        onDismissSettings()
+                        true
+                    }
+                    event.isCtrlPressed && event.key == Key.F -> {
+                        findOpen = true
+                        true
+                    }
+                    else -> handleKey(event.key)
                 }
             },
     ) {
+        LaunchedEffect(document.chapterId) { runCatching { focusRequester.requestFocus() } }
         Column(
             Modifier.align(Alignment.TopCenter).fillMaxSize()
                 .widthIn(max = if (readingMode) ReadingModeMeasure else ReaderMeasure),
@@ -826,7 +844,20 @@ private fun ReaderParagraph(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag(ReaderParagraphTestTag)
-                .semantics { contentDescription = document.textIn(paragraph) }
+                .semantics {
+                    contentDescription = document.textIn(paragraph)
+                    customActions = listOf(
+                        CustomAccessibilityAction("Seek to paragraph start") {
+                            onSeek(paragraph.start)
+                            true
+                        },
+                        CustomAccessibilityAction("Seek to sentence start") {
+                            val start = document.sentences.firstOrNull { it.overlaps(paragraph) }?.start ?: paragraph.start
+                            onSeek(start)
+                            true
+                        },
+                    )
+                }
                 .pointerInput(paragraph) {
                     detectTapGestures { position ->
                         val local = layout?.getOffsetForPosition(position) ?: return@detectTapGestures
@@ -877,8 +908,19 @@ private fun ReaderSettingsDialog(
     onDismiss: () -> Unit,
     onChange: ((ReaderPreferences) -> ReaderPreferences) -> Unit,
 ) {
+    val initialFocus = remember { FocusRequester() }
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .semantics { paneTitle = "Reading settings" },
         title = { Text("Reading settings") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -889,6 +931,7 @@ private fun ReaderSettingsDialog(
                     canIncrease = prefs.fontSize < ReaderPreferences.MaxFontSize,
                     onDecrease = { onChange { it.copy(fontSize = it.fontSize - 1.0) } },
                     onIncrease = { onChange { it.copy(fontSize = it.fontSize + 1.0) } },
+                    modifier = Modifier.focusRequester(initialFocus),
                 )
                 ReaderNumberControl(
                     label = "Line height",
@@ -917,6 +960,7 @@ private fun ReaderSettingsDialog(
         confirmButton = { TextButton(onClick = onDismiss) { Text("DONE") } },
         shape = RectangleShape,
     )
+    LaunchedEffect(Unit) { runCatching { initialFocus.requestFocus() } }
 }
 
 @Composable
@@ -927,8 +971,9 @@ private fun ReaderNumberControl(
     canIncrease: Boolean,
     onDecrease: () -> Unit,
     onIncrease: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(label)
             MetaText(value)

@@ -18,6 +18,14 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-09-10
+
+### Fixed
+
+- Improved keyboard and screen-reader operation across the reader, player, navigation, dialogs,
+  notifications, podcast feeds, and sign-in surfaces, including reliable reader shortcuts,
+  transient-overlay Escape precedence, actionable initial-load failures, and narrow-window layouts.
+
 ## [1.3.1] - 2026-09-10
 
 ### Added
@@ -229,7 +237,8 @@ server.
 - A Debian package with a bundled JDK 25 runtime, desktop entry, upgrade-safe revisioning and XDG
   rotating logs, plus credential-safe `--version` and `--diagnostics` commands.
 
-[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.3.2
 [1.3.1]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.3.1
 [1.3.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.3.0
 [1.2.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.2.0

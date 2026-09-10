@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -342,22 +343,17 @@ private fun PlayerMain(
         Spacer(Modifier.height(12.dp))
         val error = s.error
         when {
-            error != null -> Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            error != null -> Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(error, color = MaterialTheme.colorScheme.error)
-                // Only after the automatic 2s/5s/15s attempts are spent — before that the
-                // controller is already retrying and a button would just race it.
+                PoliteStatus(error, Modifier.fillMaxWidth(), error = true)
                 if (s.canRetry) {
-                    Text(
+                    AarisTextAction(
                         "Retry",
-                        color = AarisColor.Accent,
-                        modifier = Modifier
-                            .testTag(RetryButtonTestTag)
-                            .clickable { playback.retry() }
-                            .pointerHoverIcon(PointerIcon.Hand)
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        playback::retry,
+                        modifier = Modifier.testTag(RetryButtonTestTag),
                     )
                 }
             }
@@ -392,12 +388,10 @@ private fun SpeedControl(
     onSelect: (Float) -> Unit,
     onUseDefault: () -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         MetaText("Speed", color = AarisColor.Dim)
-        // One `selectableGroup`, so this announces as one choice with N options rather than as N
-        // unrelated pieces of clickable text — the same treatment Settings already gave its panes.
         Row(
-            Modifier.selectableGroup(),
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -417,15 +411,12 @@ private fun SpeedControl(
             }
         }
         if (perFiction) {
-            Text(
-                text = "THIS BOOK ONLY · USE ${formatSpeed(defaultSpeed)}",
-                color = if (enabled) AarisColor.Muted else AarisColor.Dim,
-                style = MaterialTheme.typography.labelSmall,
+            AarisTextAction(
+                label = "This book only · use ${formatSpeed(defaultSpeed)}",
+                onClick = onUseDefault,
+                enabled = enabled,
                 modifier = Modifier
                     .testTag(SpeedDefaultChipTestTag)
-                    .clickable(enabled = enabled, onClick = onUseDefault)
-                    .pointerHoverIcon(PointerIcon.Hand)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
                     .semantics { contentDescription = "Use the default speed for this book" },
             )
         }
@@ -492,11 +483,13 @@ private fun SleepTimerControl(
     onArm: (SleepTimerMode) -> Unit,
     onExtend: () -> Unit,
 ) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         MetaText("Sleep", color = AarisColor.Dim)
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
         SleepChip("Off", selected = !state.isArmed, enabled = enabled) { onArm(SleepTimerMode.Off) }
         SleepTimerMode.OfferedMinutes.forEach { minutes ->
             SleepChip(
@@ -520,17 +513,14 @@ private fun SleepTimerControl(
             )
         }
         if (state.isFading) {
-            Text(
+            AarisTextAction(
                 "+5 min",
-                style = MaterialTheme.typography.bodyMedium,
-                color = AarisColor.Accent,
+                onExtend,
                 modifier = Modifier
                     .testTag(SleepExtendTestTag)
-                    .clickable { onExtend() }
-                    .pointerHoverIcon(PointerIcon.Hand)
-                    .semantics { contentDescription = "Add five minutes to the sleep timer" }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .semantics { contentDescription = "Add five minutes to the sleep timer" },
             )
+        }
         }
     }
 }
