@@ -302,11 +302,15 @@ interface TtsRoadRepository {
     /** Conditional reader document request; 404 is a normal [ReadAlongFetchResult.NotFound]. */
     suspend fun readAlong(chapterId: Int, ifNoneMatch: String? = null): ReadAlongFetchResult
 
+    suspend fun playbackSkips(chapterId: Int): PlaybackSkipsFetchResult = PlaybackSkipsFetchResult.Unsupported
+
     /** Null means this older server has no account-preferences endpoint. */
     suspend fun readerPreferences(): ReaderPreferencesResponse?
 
     /** Null means this older server has no account-preferences endpoint. */
     suspend fun updateReaderPreferences(request: ReaderPreferencesPatch): ReaderPreferencesResponse?
+
+    suspend fun updatePlaybackSkipPreference(enabled: Boolean): ReaderPreferencesResponse? = null
 
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse
 
@@ -425,7 +429,12 @@ class RetrofitTtsRoadRepository(
      * refetching.
      */
     private val capabilityCache = HashMap<String, CachedCapabilities>()
+    private val playbackSkipsCache = object : LinkedHashMap<Int, CachedPlaybackSkips>(40, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, CachedPlaybackSkips>?): Boolean =
+            size > 40
+    }
 
+    private data class CachedPlaybackSkips(val value: PlaybackSkips, val etag: String?)
     private data class CachedCapabilities(val value: ServerCapabilities, val fetchedAtMillis: Long)
 
     private val _currentCapabilities = MutableStateFlow(ServerCapabilities.Baseline)
@@ -731,11 +740,45 @@ class RetrofitTtsRoadRepository(
             }
         }
 
+    override suspend fun playbackSkips(chapterId: Int): PlaybackSkipsFetchResult {
+        val cached = synchronized(playbackSkipsCache) { playbackSkipsCache[chapterId] }
+        return try {
+            withAuthorizedApi { api ->
+                val response = api.playbackSkips(chapterId, cached?.etag)
+                when {
+                    response.code() == 304 && cached != null -> PlaybackSkipsFetchResult.Available(cached.value)
+                    response.code() == 404 -> PlaybackSkipsFetchResult.Unsupported
+                    response.isSuccessful -> {
+                        val body = response.body()
+                        val parsed = body?.takeIf { it.chapterId == chapterId }?.let(PlaybackSkips::from)
+                            ?: return@withAuthorizedApi cached?.let { PlaybackSkipsFetchResult.Available(it.value) }
+                            ?: PlaybackSkipsFetchResult.Unsupported
+                        synchronized(playbackSkipsCache) {
+                            playbackSkipsCache[chapterId] = CachedPlaybackSkips(parsed, response.headers()["ETag"])
+                        }
+                        PlaybackSkipsFetchResult.Available(parsed)
+                    }
+                    response.code() == 401 -> throw HttpException(response)
+                    else -> cached?.let { PlaybackSkipsFetchResult.Available(it.value) }
+                        ?: PlaybackSkipsFetchResult.Unsupported
+                }
+            }
+        } catch (e: HttpException) {
+            if (e.code() == 401) throw e
+            cached?.let { PlaybackSkipsFetchResult.Available(it.value) } ?: PlaybackSkipsFetchResult.Unsupported
+        } catch (_: Exception) {
+            cached?.let { PlaybackSkipsFetchResult.Available(it.value) } ?: PlaybackSkipsFetchResult.Unsupported
+        }
+    }
+
     override suspend fun readerPreferences(): ReaderPreferencesResponse? =
         ifEndpointExists { it.readerPreferences() }
 
     override suspend fun updateReaderPreferences(request: ReaderPreferencesPatch): ReaderPreferencesResponse? =
         ifEndpointExists { it.updateReaderPreferences(request) }
+
+    override suspend fun updatePlaybackSkipPreference(enabled: Boolean): ReaderPreferencesResponse? =
+        ifEndpointExists { it.updatePlaybackSkipPreference(PlaybackSkipPreferencePatch(enabled)) }
 
     override suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
         withAuthorizedApi { it.markPlayback(PlaybackMarkRequest(chapterIds, played)) }

@@ -9,6 +9,11 @@ import dk.perspektiva.ttsroad.desktop.data.ListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackSkipPreferenceStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackSkipPreferenceStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackSkips
+import dk.perspektiva.ttsroad.desktop.data.PlaybackSkipsFetchResult
+import dk.perspektiva.ttsroad.desktop.data.playbackSkipTarget
 import dk.perspektiva.ttsroad.desktop.data.PlaybackSnapshot
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.describeNetworkFailure
@@ -92,6 +97,7 @@ class QueuePlaybackController(
     private val progressIntervalMs: Long = 10_000,
     private val historyRecordIntervalMs: Long = 5 * 60_000L,
     private val listeningFlushIntervalMs: Long = 60_000L,
+    private val playbackSkipPreference: PlaybackSkipPreferenceStore = InMemoryPlaybackSkipPreferenceStore(),
 ) : PlaybackController {
 
     private val _state = MutableStateFlow(emptyState())
@@ -119,6 +125,10 @@ class QueuePlaybackController(
 
     /** Last position actually reported by the engine — what a save or a retry resumes from. */
     @Volatile private var lastKnownPositionMs = 0L
+    @Volatile private var loadedSkipsChapterId = 0
+    @Volatile private var loadedSkips: PlaybackSkips? = null
+    @Volatile private var skipLoadGeneration = 0L
+    private val announcedSkipSegments = mutableSetOf<Pair<Int, Long>>()
 
     @Volatile private var speed = preferencesStore.preferences.value.speed
 
@@ -495,6 +505,7 @@ class QueuePlaybackController(
                 queueIndex = index
                 val chapter = queue[index]
                 publishMetadata(index, positionMs)
+                loadPlaybackSkips(chapter.resolvedChapterId)
 
                 val outcome = playChapter(chapter, positionMs)
                 if (outcome == ChapterOutcome.Stopped) return@launch
@@ -520,6 +531,26 @@ class QueuePlaybackController(
                 }
                 index++
                 positionMs = 0L
+            }
+        }
+    }
+
+    private fun loadPlaybackSkips(chapterId: Int) {
+        loadedSkipsChapterId = chapterId
+        loadedSkips = null
+        announcedSkipSegments.removeAll { it.first == chapterId }
+        val generation = ++skipLoadGeneration
+        _state.update { it.copy(playbackNotice = null) }
+        if (!repository.currentCapabilities.value.playbackSkips) return
+        scope.launch {
+            val result = runCatching { repository.playbackSkips(chapterId) }.getOrNull()
+            if (loadedSkipsChapterId == chapterId && skipLoadGeneration == generation) {
+                loadedSkips = (result as? PlaybackSkipsFetchResult.Available)?.skips
+                if (loadedSkips?.needsTimings == true) {
+                    _state.update {
+                        it.copy(playbackNotice = "Advert skipping needs chapter timings; playing normally.")
+                    }
+                }
             }
         }
     }
@@ -640,6 +671,22 @@ class QueuePlaybackController(
             val position = engine.positionMs()
             if (position > 0) lastKnownPositionMs = position
             val duration = engine.durationMs().takeIf { it > 0 } ?: _state.value.durationMs
+            val skipTarget = playbackSkipTarget(
+                loadedSkips?.takeIf { loadedSkipsChapterId == chapter.resolvedChapterId },
+                lastKnownPositionMs,
+                duration,
+                _state.value.isPlaying && playbackSkipPreference.enabled.value,
+            )
+            if (skipTarget != null && skipTarget > lastKnownPositionMs) {
+                val segment = loadedSkips?.segments?.firstOrNull { skipTarget == it.endMs || skipTarget == duration }
+                engine.seekTo(skipTarget)
+                lastKnownPositionMs = skipTarget
+                lastSavedMs = skipTarget
+                if (segment != null && announcedSkipSegments.add(chapter.resolvedChapterId to segment.startMs)) {
+                    val label = segment.label.trim().ifEmpty { "advert or disclaimer" }.lowercase()
+                    _state.update { it.copy(playbackNotice = "Skipped $label.") }
+                }
+            }
             _state.update { it.copy(positionMs = lastKnownPositionMs, durationMs = duration) }
 
             // The web client writes the same `kind=auto` breadcrumb every five minutes of actual

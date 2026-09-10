@@ -495,6 +495,34 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `auto skip emits user-visible notice once per segment and handles needs-timings`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val repository = FakeRepository(
+            capabilitiesResult = dk.perspektiva.ttsroad.desktop.data.ServerCapabilities(playbackSkips = true),
+            playbackSkipsResult = Result.success(
+                dk.perspektiva.ttsroad.desktop.data.PlaybackSkipsFetchResult.Available(
+                    dk.perspektiva.ttsroad.desktop.data.PlaybackSkips(
+                        chapterId = 101,
+                        audioDurationMs = 60_000,
+                        segments = listOf(
+                            dk.perspektiva.ttsroad.desktop.data.PlaybackSkipSegment(10_000, 20_000, "Advert", "preview"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        repository.refreshCurrentCapabilities(forceRefresh = true)
+        val controller = controllerFor(engine, repository = repository)
+
+        controller.play(chapter(101, "One", 60.0), FictionSummary(id = 7))
+        controller.await("playback to start") { it.hasMedia && it.isPlaying }
+        engine.setPosition(10_000)
+
+        controller.await("skip notice to appear") { it.playbackNotice == "Skipped advert." }
+        controller.release()
+    }
+
+    @Test
     fun `a fiction whose chapters cannot be loaded still plays the one chapter`() = runBlocking {
         // Offline, or a chapter the fiction no longer lists. One chapter with nothing after it is
         // the honest state; refusing to play would be worse.

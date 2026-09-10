@@ -484,6 +484,7 @@ fun App(
             // Local values are already usable; a capable server can now replace them with this
             // account's cross-device reader settings. Older/offline servers leave them alone.
             container.readerPreferences.refreshFromServer()
+            container.playbackSkipPreference.refreshFromServer()
             // Relaunching is the reconnect that matters: positions recorded while the last run was
             // offline have been on disk since, and this is the first chance to send them. After
             // discovery, so the flush knows whether the server can order writes. Failure is fine —
@@ -730,6 +731,7 @@ fun App(
                                     repository = repository,
                                     holder = settings,
                                     preferences = container.playbackPreferences,
+                                    playbackSkipPreference = container.playbackSkipPreference,
                                     // Read off the player state rather than the engine, so the
                                     // Settings pane and the player agree about what the backend
                                     // can do by construction.

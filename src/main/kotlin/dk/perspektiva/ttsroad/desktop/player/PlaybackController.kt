@@ -59,6 +59,7 @@ data class PlayerUiState(
     val skipIntervalMs: Long = 30_000L,
     val sleepTimer: SleepTimerState = SleepTimerState(),
     val error: String? = null,
+    val playbackNotice: String? = null,
     /** Set when playback stopped for a reason another attempt could plausibly fix. */
     val canRetry: Boolean = false,
     val queue: List<QueueItem> = emptyList(),

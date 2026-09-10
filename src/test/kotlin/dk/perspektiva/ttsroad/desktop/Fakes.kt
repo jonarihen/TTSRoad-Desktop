@@ -63,6 +63,9 @@ open class FakeRepository(
     var readAlongResult: Result<dk.perspektiva.ttsroad.desktop.data.ReadAlongFetchResult> = Result.success(
         dk.perspektiva.ttsroad.desktop.data.ReadAlongFetchResult.NotFound,
     ),
+    var playbackSkipsResult: Result<dk.perspektiva.ttsroad.desktop.data.PlaybackSkipsFetchResult> = Result.success(
+        dk.perspektiva.ttsroad.desktop.data.PlaybackSkipsFetchResult.Unsupported,
+    ),
     var readerPreferencesResult: Result<dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesResponse?> =
         Result.success(null),
     /** `success(null)` is the server saying it cannot search — not "nothing matched". */
@@ -147,6 +150,8 @@ open class FakeRepository(
     val readAlongEtags: MutableList<String?> = mutableListOf()
     val readerPreferencePatches: MutableList<dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesPatch> =
         mutableListOf()
+    val playbackSkipChapters: MutableList<Int> = mutableListOf()
+    val playbackSkipPreferencePatches: MutableList<Boolean> = mutableListOf()
 
     /** Token ids passed to [revokeDevice], in order — "the current session was never revoked". */
     val revokedDevices: MutableList<Int> = mutableListOf()
@@ -405,6 +410,13 @@ open class FakeRepository(
         return readAlongResult.getOrThrow()
     }
 
+    override suspend fun playbackSkips(
+        chapterId: Int,
+    ): dk.perspektiva.ttsroad.desktop.data.PlaybackSkipsFetchResult {
+        playbackSkipChapters += chapterId
+        return playbackSkipsResult.getOrThrow()
+    }
+
     override suspend fun readerPreferences(): dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesResponse? =
         readerPreferencesResult.getOrThrow()
 
@@ -412,6 +424,13 @@ open class FakeRepository(
         request: dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesPatch,
     ): dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesResponse? {
         readerPreferencePatches += request
+        return readerPreferencesResult.getOrThrow()
+    }
+
+    override suspend fun updatePlaybackSkipPreference(
+        enabled: Boolean,
+    ): dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesResponse? {
+        playbackSkipPreferencePatches += enabled
         return readerPreferencesResult.getOrThrow()
     }
 

@@ -72,6 +72,8 @@ import dk.perspektiva.ttsroad.desktop.data.ListeningStatsStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.desktop.data.formatListeningSpan
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackSkipPreferenceStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackSkipPreferenceStore
 import dk.perspektiva.ttsroad.desktop.data.FeedLink
 import dk.perspektiva.ttsroad.desktop.data.ImportMergeExplanation
 import dk.perspektiva.ttsroad.desktop.data.RotateFeedConfirmation
@@ -119,6 +121,7 @@ fun SettingsScreen(
      * writes to the real config directory just by rendering the Playback pane.
      */
     preferences: PlaybackPreferencesStore = remember { InMemoryPlaybackPreferencesStore() },
+    playbackSkipPreference: PlaybackSkipPreferenceStore = remember { InMemoryPlaybackSkipPreferenceStore() },
     /**
      * What the *engine* can do, passed down rather than read here.
      *
@@ -211,6 +214,8 @@ fun SettingsScreen(
                         SettingsSection.Devices -> DevicesPane(ui, session, holder, nowMs)
                         SettingsSection.Playback -> PlaybackPane(
                             preferences,
+                            playbackSkipPreference,
+                            capabilities,
                             canChangeSpeed,
                             canSkipSilence,
                             closeToTray,
@@ -743,6 +748,8 @@ private fun DeviceDetail(label: String, value: String) {
 @Composable
 private fun PlaybackPane(
     preferences: PlaybackPreferencesStore,
+    playbackSkipPreference: PlaybackSkipPreferenceStore,
+    capabilities: ServerCapabilities,
     canChangeSpeed: Boolean,
     canSkipSilence: Boolean,
     closeToTray: Boolean,
@@ -750,8 +757,9 @@ private fun PlaybackPane(
     traySupported: Boolean,
 ) {
     val prefs by preferences.preferences.collectAsState()
+    val skipAdSegments by playbackSkipPreference.enabled.collectAsState()
 
-    PaneTitle("Playback", "Kept on this computer, not on your account")
+    PaneTitle("Playback", "Output settings are local; advert skipping follows your account")
 
     SettingsCard {
         if (canChangeSpeed) {
@@ -801,6 +809,17 @@ private fun PlaybackPane(
             onSelect = { value -> preferences.update { it.copy(volumeBoost = value) } },
         )
         MetaText("Boost stops at ${formatSpeed(VolumeBoost.High.gain.toFloat())} — louder than that clips quiet narration instead of raising it.")
+
+        RowDivider()
+
+        if (capabilities.playbackSkips && capabilities.playerPreferences) {
+            ToggleRow(
+                label = "SKIP ADVERTS AND DISCLAIMERS",
+                description = "Skips advert and disclaimer regions identified by the server. This setting follows your account across devices.",
+                checked = skipAdSegments,
+                onCheckedChange = playbackSkipPreference::setEnabled,
+            )
+        }
 
         RowDivider()
 

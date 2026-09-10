@@ -62,8 +62,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -106,6 +108,17 @@ fun PlayerScreen(
 
     Box(Modifier.fillMaxSize().padding(horizontal = PageGutter, vertical = 20.dp)) {
         BackLink("Back", onBack)
+        s.playbackNotice?.let { notice ->
+            Text(
+                notice,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AarisColor.Ok,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
         if (compact) {
             // Narrow: the up-next panel stops being a side panel and becomes a section under the
             // transport, inside one scroll container. The transport itself never shrinks — clipped

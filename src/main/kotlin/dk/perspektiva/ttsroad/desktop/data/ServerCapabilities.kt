@@ -119,6 +119,8 @@ data class ServerCapabilities(
      * list but not create has nothing to list.
      */
     val pronunciationReports: Boolean = false,
+    val playbackSkips: Boolean = false,
+    val playerPreferences: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch.
@@ -171,6 +173,8 @@ data class ServerCapabilities(
             feedUrls = response.capabilities.flag("feed_urls"),
             listeningStateBackup = response.capabilities.flag("listening_state_backup"),
             pronunciationReports = response.capabilities.flag("pronunciation_reports"),
+            playbackSkips = response.capabilities.flag("playback_skips"),
+            playerPreferences = response.capabilities.flag("player_preferences"),
             maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             maxEpubBytes = response.limits.longLimit("max_epub_bytes"),

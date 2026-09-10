@@ -52,6 +52,7 @@ data class ReaderPreferencesWire(
     @param:Json(name = "reader_line_height") val lineHeight: Double? = null,
     @param:Json(name = "reader_theme") val theme: String? = null,
     @param:Json(name = "reader_highlight") val highlight: String? = null,
+    @param:Json(name = "skip_ad_segments") val skipAdSegments: Boolean? = null,
 )
 
 /** Only the four reader keys are ever sent; unrelated account preferences cannot be overwritten. */

@@ -18,6 +18,15 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-10
+
+### Added
+
+- **Advert and disclaimer regions can now be skipped during playback.** The desktop conditionally
+  caches each chapter's server-authored media-time segments, applies them only while audio is
+  playing, and follows the account-wide `skip_ad_segments` preference live. Settings exposes the
+  account-scoped toggle only when the server advertises playback skips and player preferences.
+
 ## [1.3.0] - 2026-09-04
 
 One feature, shipped to all three clients at once, and nearly all of its design is about when the
@@ -220,7 +229,8 @@ server.
 - A Debian package with a bundled JDK 25 runtime, desktop entry, upgrade-safe revisioning and XDG
   rotating logs, plus credential-safe `--version` and `--diagnostics` commands.
 
-[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/jonarihen/TTSRoad-Desktop/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.3.1
 [1.3.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.3.0
 [1.2.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.2.0
 [1.1.0]: https://github.com/jonarihen/TTSRoad-Desktop/releases/tag/v1.1.0

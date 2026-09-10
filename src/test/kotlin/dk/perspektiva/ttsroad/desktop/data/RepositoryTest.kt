@@ -86,6 +86,40 @@ class RepositoryTest {
     }
 
     @Test
+    fun `playback skips conditionally revalidate and reuse cached data`() = runTest {
+        server.enqueue(MockResponse(code = 200, headers = Headers.headersOf(
+            "Content-Type", "application/json", "ETag", "\"skip-101-v1\"",
+        ), body = """{"api_version":1,"chapter_id":101,"has_timings":true,"rule_count":1,
+            "audio_duration":60.0,"segments":[{"start_seconds":10.0,"end_seconds":20.0,
+            "duration_seconds":10.0,"label":"Advert","preview":"Buy now"}],"total_skipped_seconds":10.0}"""))
+        val first = repository.playbackSkips(101) as PlaybackSkipsFetchResult.Available
+        assertEquals(10_000, first.skips.segments.single().startMs)
+        val firstRequest = server.takeRequest()
+        assertNull(firstRequest.headers["If-None-Match"])
+
+        server.enqueue(MockResponse(code = 304))
+        val second = repository.playbackSkips(101) as PlaybackSkipsFetchResult.Available
+        assertEquals(first.skips, second.skips)
+        assertEquals("\"skip-101-v1\"", server.takeRequest().headers["If-None-Match"])
+    }
+
+    @Test
+    fun `missing playback skips endpoint is safe and 401 propagates`() = runTest {
+        enqueue(404, """{"detail":"Not found"}""")
+        assertEquals(PlaybackSkipsFetchResult.Unsupported, repository.playbackSkips(101))
+        enqueue(401, """{"detail":"Unauthorized"}""")
+        assertThrows<HttpException> { repository.playbackSkips(102) }
+    }
+
+    @Test
+    fun `playback skip preference patch sends only its account key`() = runTest {
+        enqueue(200, """{"preferences":{"skip_ad_segments":false}}""")
+        repository.updatePlaybackSkipPreference(false)
+        val body = server.takeRequest().bodyText()
+        assertEquals("{\"skip_ad_segments\":false}", body)
+    }
+
+    @Test
     fun `delta index and resource pulls echo the server cursor`() = runTest {
         enqueue(
             200,

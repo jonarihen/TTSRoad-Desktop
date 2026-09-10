@@ -14,6 +14,8 @@ import dk.perspektiva.ttsroad.desktop.data.FileReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackHistory
 import dk.perspektiva.ttsroad.desktop.data.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.PlaybackPreferencesStore
+import dk.perspektiva.ttsroad.desktop.data.FilePlaybackSkipPreferenceStore
+import dk.perspektiva.ttsroad.desktop.data.PlaybackSkipPreferenceStore
 import dk.perspektiva.ttsroad.desktop.data.ReadAlongCache
 import dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
@@ -104,6 +106,8 @@ class AppContainer(
      * test never writes into the user's config directory.
      */
     val playbackPreferences: PlaybackPreferencesStore = FilePlaybackPreferencesStore(),
+    playbackSkipPreferenceFactory: (TtsRoadRepository, AppDispatchers) -> PlaybackSkipPreferenceStore =
+        { repo, d -> FilePlaybackSkipPreferenceStore(repo, sessionStore, dispatcher = d.io) },
     /**
      * How the shelf is arranged — order, ticked tags, browsed scope — kept across restarts.
      *
@@ -125,8 +129,9 @@ class AppContainer(
         PlaybackHistoryStore,
         ListeningStatsStore,
         () -> String,
+        PlaybackSkipPreferenceStore,
     ) -> PlaybackController =
-        { repo, mediaSources, engine, d, prefs, history, stats, owner ->
+        { repo, mediaSources, engine, d, prefs, history, stats, owner, skipPreference ->
             QueuePlaybackController(
                 repo,
                 mediaSources,
@@ -136,6 +141,7 @@ class AppContainer(
                 history,
                 stats,
                 ownerKey = owner,
+                playbackSkipPreference = skipPreference,
             )
         },
     libraryCacheFactory: (TtsRoadRepository, AppDispatchers, () -> Long) -> LibraryCache =
@@ -191,6 +197,8 @@ class AppContainer(
         streamingCache = downloads::streamingCacheOrNull,
     )
     val audioEngine: PlaybackEngine = audioEngineFactory()
+    val playbackSkipPreference: PlaybackSkipPreferenceStore =
+        playbackSkipPreferenceFactory(repository, dispatchers)
     /**
      * Which account's history is being written or shown.
      *
@@ -219,6 +227,7 @@ class AppContainer(
         this.playbackHistory,
         listeningStats,
         historyOwnerKey,
+        playbackSkipPreference,
     )
 
     /**
@@ -327,6 +336,7 @@ class AppContainer(
         libraryCache.close()
         readAlongCache.clear()
         readerPreferences.close()
+        playbackSkipPreference.close()
         httpClient.dispatcher.executorService.shutdown()
         httpClient.connectionPool.evictAll()
         runCatching { httpClient.cache?.close() }
