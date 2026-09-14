@@ -10,7 +10,7 @@
 # --- Toolchain -----------------------------------------------------------------------------
 # Also referenced from settings.gradle.kts (foojay) and build.gradle.kts (jvmToolchain).
 jdk = "25"
-kotlin = "2.4.10"
+kotlin = "2.4.20"
 composeMultiplatform = "1.12.0"
 foojayResolver = "1.0.0"
 # Compose Multiplatform 1.12.0 ships ProGuard 7.7.0 by default, which cannot parse Java 25
