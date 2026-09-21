@@ -46,7 +46,7 @@ jna = "5.19.1"
 # dbus-java 5.x talks the D-Bus wire protocol in pure Java and reaches the session bus through
 # the JDK's own AF_UNIX socket support, so there is no JNI and no libdbus to package. See
 # docs/adr/0006-listening-preferences-and-desktop-integration.md.
-dbusJava = "5.2.0"
+dbusJava = "5.2.1"
 # dbus-java logs through SLF4J. Version-locked to what dbus-java resolves, because an api/provider
 # mismatch is exactly the case SLF4J reports by printing to stderr — which is what we are avoiding.
 slf4j = "2.0.18"
