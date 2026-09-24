@@ -6,8 +6,10 @@ import dk.perspektiva.ttsroad.desktop.data.ChapterNotificationState
 import dk.perspektiva.ttsroad.desktop.data.ChapterNotificationsResponse
 import dk.perspektiva.ttsroad.desktop.data.NotificationChapter
 import dk.perspektiva.ttsroad.desktop.data.NotificationFiction
+import dk.perspektiva.ttsroad.desktop.data.ReadyNotificationKey
 import dk.perspektiva.ttsroad.desktop.data.detailLabel
 import dk.perspektiva.ttsroad.desktop.data.newlyReady
+import dk.perspektiva.ttsroad.desktop.data.noticeMessage
 import dk.perspektiva.ttsroad.desktop.data.readyNotificationText
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -38,13 +40,22 @@ class ChapterNotificationsStateHolderTest {
         fictionTitle: String = "A Test Serial",
         chapterTitle: String = "Chapter $id",
         progress: Int? = null,
+        kind: String = "chapter",
+        backlogSeconds: Double? = null,
+        message: String? = null,
+        readyAt: String? = null,
+        chapterStatus: String? = null,
     ) = ChapterNotification(
         id = id,
         state = state,
         dismissible = dismissible,
         playable = playable,
         fiction = NotificationFiction(id = 7, title = fictionTitle),
-        chapter = NotificationChapter(id = 100 + id, title = chapterTitle, chapterNumber = id, ttsProgress = progress),
+        chapter = NotificationChapter(id = 100 + id, title = chapterTitle, chapterNumber = id.toDouble(), ttsProgress = progress, status = chapterStatus),
+        kind = kind,
+        backlogSeconds = backlogSeconds,
+        message = message,
+        readyAt = readyAt,
     )
 
     private fun response(vararg notifications: ChapterNotification) = ChapterNotificationsResponse(
@@ -270,7 +281,7 @@ class ChapterNotificationsStateHolderTest {
         val (fresh, seen) = newlyReady(ready, alreadySeen = null)
 
         assertTrue(fresh.isEmpty())
-        assertEquals(setOf(1, 2), seen)
+        assertEquals(setOf(ReadyNotificationKey(1, null), ReadyNotificationKey(2, null)), seen)
     }
 
     @Test
@@ -293,6 +304,60 @@ class ChapterNotificationsStateHolderTest {
         assertEquals("Chapter 1  ·  converting 62%", notice(1, "pulled", progress = 62).detailLabel())
         assertEquals("Chapter 1  ·  converting", notice(1, "pulled").detailLabel())
         assertEquals("Chapter 1  ·  ready to listen", notice(1, "ready").detailLabel())
-        assertEquals("Chapter 1  ·  conversion failed", notice(1, "stalled").detailLabel())
+        assertEquals("Chapter 1  ·  conversion failed", notice(1, "stalled", chapterStatus = "error").detailLabel())
+        assertEquals("Chapter 1  ·  audio unavailable", notice(1, "stalled", chapterStatus = "excluded").detailLabel())
+    }
+
+    @Test
+    fun `reused ready notice id with changed ready_at announces again post-baseline`() = runTest {
+        val announcements = Announcements()
+        val repository = FakeRepository().apply {
+            chapterNotificationsResult = Result.success(response(notice(1, "ready", readyAt = "2026-09-24T10:00:00Z")))
+        }
+        val holder = ChapterNotificationsStateHolder(
+            repository,
+            UnconfinedTestDispatcher(testScheduler),
+            notify = announcements::invoke,
+        )
+
+        holder.refresh()
+        runCurrent()
+        assertTrue(announcements.raised.isEmpty(), "initial baseline announces nothing")
+
+        repository.chapterNotificationsResult = Result.success(
+            response(notice(1, "ready", readyAt = "2026-09-24T11:00:00Z")),
+        )
+        holder.refresh()
+        runCurrent()
+        assertEquals(1, announcements.raised.size, "changed ready_at announces")
+        holder.clear()
+    }
+
+    @Test
+    fun `backlog notifications format properly and display server message`() {
+        val backlog = notice(10, "ready", kind = "backlog", backlogSeconds = 7200.0, message = "2 hours ready to listen")
+        assertEquals("Backlog alert", backlog.detailLabel())
+        assertEquals("2 hours ready to listen", backlog.noticeMessage())
+
+        val notification = readyNotificationText(listOf(backlog))
+        assertEquals("Backlog alert · A Test Serial", notification?.first)
+        assertEquals("2 hours ready to listen", notification?.second)
+    }
+
+    @Test
+    fun `refused dismissal sets error and busy guards concurrent dismissals`() = runTest {
+        val repository = FakeRepository().apply {
+            chapterNotificationsResult = Result.success(response(notice(1, "ready")))
+            dismissedNotificationResult = Result.success(false)
+        }
+        val holder = ChapterNotificationsStateHolder(repository, UnconfinedTestDispatcher(testScheduler))
+        holder.refresh()
+        runCurrent()
+
+        holder.dismiss(holder.state.value.notifications.single())
+        runCurrent()
+
+        assertEquals("The server refused to clear that notice. Refresh and try again.", holder.state.value.error)
+        holder.clear()
     }
 }

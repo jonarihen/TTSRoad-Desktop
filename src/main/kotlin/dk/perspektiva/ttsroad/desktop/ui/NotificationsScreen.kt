@@ -30,6 +30,7 @@ import dk.perspektiva.ttsroad.desktop.data.ChapterNotification
 import dk.perspektiva.ttsroad.desktop.data.ChapterNotificationState
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.detailLabel
+import dk.perspektiva.ttsroad.desktop.data.noticeMessage
 
 const val NotificationsListTestTag: String = "notificationsList"
 const val NotificationRowTestTag: String = "notificationRow"
@@ -163,6 +164,9 @@ private fun NotificationRow(
                         else -> AarisColor.Muted
                     },
                 )
+                notification.noticeMessage()?.let {
+                    MetaText(it, color = AarisColor.Muted)
+                }
             }
             // Only a chapter that actually has audio offers Play, and only the server's own
             // `dismissible` offers Dismiss. Neither is inferred from the state name.

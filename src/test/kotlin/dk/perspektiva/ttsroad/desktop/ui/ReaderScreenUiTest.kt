@@ -1,5 +1,11 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
@@ -20,12 +26,25 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.pressKey
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.InMemoryReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.ReadAlongCache
 import dk.perspektiva.ttsroad.desktop.data.ReadAlongChapter
+import dk.perspektiva.ttsroad.desktop.data.ReadAlongDocument
+import dk.perspektiva.ttsroad.desktop.data.ReaderHighlight
+import dk.perspektiva.ttsroad.desktop.data.ReaderPreferences
+import dk.perspektiva.ttsroad.desktop.data.ReaderTheme
+import dk.perspektiva.ttsroad.desktop.data.SessionState
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicInteger
 import dk.perspektiva.ttsroad.desktop.data.ReadAlongFetchResult
 import dk.perspektiva.ttsroad.desktop.data.ReadAlongResponse
 import dk.perspektiva.ttsroad.desktop.player.PlayerUiState
@@ -77,12 +96,13 @@ class ReaderScreenUiTest {
         val repository = FakeRepository(
             readAlongResult = Result.success(ReadAlongFetchResult.Modified(response, "\"etag\"")),
         )
+        val cache = ReadAlongCache(repository)
         compose.setContent {
             TtsRoadTheme {
                 ReaderScreen(
                     chapterId = response.chapter.id,
                     fallbackTitle = response.chapter.title,
-                    cache = ReadAlongCache(repository),
+                    cache = cache,
                     preferences = preferences,
                     playback = player,
                     bookmarksAvailable = bookmarksAvailable,
@@ -152,6 +172,31 @@ class ReaderScreenUiTest {
         screen(response(hasTimings = false))
         compose.onNodeWithText("// TEXT ONLY").assertIsDisplayed()
         compose.onNodeWithText("This chapter has narration text but no word timings.").assertIsDisplayed()
+    }
+
+    @Test
+    fun `stale audio duration disables highlighting and semantic seeks`() {
+        val player = playingThisChapter()
+        player.emit(player.state.value.copy(durationMs = 120_000))
+        screen(player = player)
+
+        compose.onNodeWithText("The timing data does not match this audio version, so highlighting is disabled.").assertIsDisplayed()
+        assertTrue(paragraphLayout().layoutInput.text.spanStyles.isEmpty())
+        val actions = compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode().config[SemanticsActions.CustomActions]
+        compose.runOnIdle { actions.first { it.label == "Seek to paragraph start" }.action() }
+        assertTrue(player.calls.none { it.startsWith("seekTo(") })
+    }
+
+    @Test
+    fun `semantic seeking ceilings the first pronunciation cue to milliseconds`() {
+        val raw = response().copy(cues = listOf(listOf(0.0, 4.0, 0.1001), listOf(0.0, 4.0, 0.2)))
+        val player = playingThisChapter()
+        screen(raw, player)
+        val actions = compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode().config[SemanticsActions.CustomActions]
+
+        compose.runOnIdle { actions.first { it.label == "Seek to paragraph start" }.action() }
+
+        assertTrue(player.calls.contains("seekTo(101)"), player.calls.toString())
     }
 
     @Test
@@ -279,6 +324,223 @@ class ReaderScreenUiTest {
 
         val composed = compose.onAllNodesWithTag(ReaderParagraphTestTag).fetchSemanticsNodes().size
         assertTrue(composed in 1..80, "the lazy reader composed $composed of 500 paragraphs")
+    }
+
+    private fun longParagraph(): ReadAlongResponse {
+        val text = (0 until 1000).joinToString(" ") { "word$it" }
+        var offset = 0
+        val cues = text.split(' ').mapIndexed { index, word ->
+            listOf(offset.toDouble(), (offset + word.length).toDouble(), index.toDouble()).also {
+                offset += word.length + 1
+            }
+        }
+        val raw = response(text = text)
+        return raw.copy(chapter = raw.chapter.copy(audioDuration = 1000.0), cues = cues)
+    }
+
+    private fun paragraphLayout(): TextLayoutResult {
+        val results = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithTag(ReaderParagraphTestTag).performSemanticsAction(SemanticsActions.GetTextLayoutResult) {
+            it(results)
+        }
+        return results.single()
+    }
+
+    private fun assertSpokenLineVisible(document: ReadAlongDocument, positionMs: Long) {
+        val layout = paragraphLayout()
+        val offset = requireNotNull(document.highlightAtMillis(positionMs).word).start
+        val line = requireNotNull(readerSpokenLine(layout, offset))
+        val paragraph = compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode()
+        val list = compose.onNodeWithTag(ReaderListTestTag).fetchSemanticsNode()
+        val lineTop = paragraph.positionInRoot.y + line.top
+        val lineBottom = paragraph.positionInRoot.y + line.bottom
+        val bandTop = list.boundsInRoot.top + list.boundsInRoot.height / 5
+        val bandBottom = list.boundsInRoot.top + list.boundsInRoot.height * 2 / 3
+        assertTrue(lineTop >= bandTop - 2, "line starts above comfort band: $lineTop < $bandTop")
+        assertTrue(lineBottom <= bandBottom + 2, "line ends below comfort band: $lineBottom > $bandBottom")
+    }
+
+    @Test
+    fun `spoken visual lines follow forwards and backwards within one long paragraph`() {
+        val raw = longParagraph()
+        val document = ReadAlongDocument.from(raw)
+        val player = playingThisChapter(0)
+        player.emit(player.state.value.copy(durationMs = 1_000_000))
+        val preferences = InMemoryReaderPreferencesStore()
+        screen(raw, player, preferences)
+
+        listOf(250_000L, 700_000L, 100_000L).forEach { position ->
+            compose.runOnIdle { player.emit(player.state.value.copy(positionMs = position)) }
+            compose.waitForIdle()
+            assertSpokenLineVisible(document, position)
+        }
+        compose.runOnIdle { preferences.update { it.copy(fontSize = 30.0, lineHeight = 2.4) } }
+        compose.waitForIdle()
+        assertSpokenLineVisible(document, 100_000L)
+        compose.runOnIdle {
+            preferences.update { it.copy(highlight = ReaderHighlight.Off) }
+            player.emit(player.state.value.copy(positionMs = 400_000L))
+        }
+        compose.waitForIdle()
+        assertSpokenLineVisible(document, 400_000L)
+        val before = compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode().positionInRoot
+        compose.runOnIdle { player.emit(player.state.value.copy(speed = 2f, isPlaying = true)) }
+        compose.mainClock.advanceTimeBy(5000)
+        compose.waitForIdle()
+        assertEquals(before, compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode().positionInRoot)
+    }
+
+    @Test
+    fun `wheel drag and scrollbar surrender follow until back to current`() {
+        val raw = longParagraph()
+        val document = ReadAlongDocument.from(raw)
+        val player = playingThisChapter(0)
+        player.emit(player.state.value.copy(durationMs = 1_000_000))
+        screen(raw, player)
+
+        repeat(3) { input ->
+            when (input) {
+                0 -> compose.onNodeWithTag(ReaderListTestTag).performMouseInput { scroll(2f) }
+                1 -> compose.onNodeWithTag(ReaderListTestTag).performMouseInput {
+                    moveTo(center)
+                    press()
+                    moveTo(center + Offset(0f, -80f))
+                    release()
+                }
+                else -> compose.onNodeWithTag(ReaderScrollbarTestTag).performMouseInput {
+                    moveTo(center)
+                    press()
+                    moveTo(center + Offset(0f, 30f))
+                    release()
+                }
+            }
+            compose.waitForIdle()
+            compose.onNodeWithText("BACK TO CURRENT").assertIsDisplayed()
+            val before = compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode().positionInRoot
+            val position = (input + 1) * 200_000L
+            compose.runOnIdle { player.emit(player.state.value.copy(positionMs = position)) }
+            compose.waitForIdle()
+            assertEquals(before, compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode().positionInRoot)
+            val actions = compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode().config[SemanticsActions.CustomActions]
+            compose.runOnIdle { actions.first { it.label == "Seek to paragraph start" }.action() }
+            compose.onNodeWithText("BACK TO CURRENT").assertIsDisplayed()
+            compose.runOnIdle { player.emit(player.state.value.copy(positionMs = position)) }
+            compose.onNodeWithText("BACK TO CURRENT").performClick()
+            compose.waitForIdle()
+            assertSpokenLineVisible(document, position)
+        }
+    }
+
+    @Test
+    fun `active word changes preserve line breaks glyph positions and paragraph height`() {
+        val document = ReadAlongDocument.from(longParagraph())
+        var position by mutableStateOf(0L)
+        var mode by mutableStateOf(ReaderHighlight.Word)
+        compose.setContent {
+            TtsRoadTheme {
+                Box(Modifier.width(320.dp)) {
+                    ReaderParagraph(
+                        document = document,
+                        paragraph = document.paragraphs.single(),
+                        highlight = document.highlightAtMillis(position),
+                        matches = emptyList(),
+                        activeMatch = null,
+                        prefs = ReaderPreferences(highlight = mode),
+                        palette = readerPalette(ReaderTheme.Dark),
+                        onSeek = {},
+                        isActiveParagraph = true,
+                        onActiveLayout = {},
+                    )
+                }
+            }
+        }
+        val original = paragraphLayout()
+        listOf(ReaderHighlight.Sentence, ReaderHighlight.Word, ReaderHighlight.Off).forEach { highlight ->
+            compose.runOnIdle {
+                position = 17_000L
+                mode = highlight
+            }
+            compose.waitForIdle()
+            val changed = paragraphLayout()
+            assertEquals(original.size, changed.size)
+            assertEquals(original.lineCount, changed.lineCount)
+            for (line in 0 until original.lineCount) {
+                assertEquals(original.getLineStart(line), changed.getLineStart(line))
+                assertEquals(original.getLineEnd(line), changed.getLineEnd(line))
+            }
+            document.text.indices.forEach { offset ->
+                assertEquals(original.getBoundingBox(offset), changed.getBoundingBox(offset))
+            }
+        }
+    }
+
+    @Test
+    fun `a cancelled old load cannot replace new session text even if its request ignores cancellation`() {
+        val oldResponse = CompletableDeferred<ReadAlongFetchResult>()
+        val requests = AtomicInteger()
+        val raw = response()
+        val repository = object : FakeRepository() {
+            override suspend fun readAlong(chapterId: Int, ifNoneMatch: String?): ReadAlongFetchResult {
+                if (requests.incrementAndGet() == 1) return withContext(NonCancellable) { oldResponse.await() }
+                return ReadAlongFetchResult.Modified(raw.copy(text = "New owner narration", paragraphs = emptyList()), "new")
+            }
+        }
+        val cache = ReadAlongCache(repository)
+        val prefs = InMemoryReaderPreferencesStore()
+        val player = FakePlaybackController()
+        compose.setContent {
+            TtsRoadTheme {
+                ReaderScreen(10, "Chapter", cache, prefs, player, onBack = {}, onChapterAdvanced = { _, _ -> })
+            }
+        }
+        compose.waitUntil { requests.get() == 1 }
+        compose.runOnIdle { cache.clear() }
+        compose.waitUntil { requests.get() == 2 }
+        compose.onNodeWithText("New owner narration").assertIsDisplayed()
+        compose.runOnIdle { oldResponse.complete(ReadAlongFetchResult.Modified(raw, "old")) }
+        compose.waitForIdle()
+
+        compose.onAllNodesWithText(raw.text).assertCountEquals(0)
+        compose.onNodeWithText("New owner narration").assertIsDisplayed()
+    }
+
+    @Test
+    fun `cache clear and session change remove visible text while replacements are suspended`() {
+        val raw = response()
+        val session = MutableStateFlow(SessionState("https://example.test", "first", "alice"))
+        val second = CompletableDeferred<ReadAlongFetchResult>()
+        val third = CompletableDeferred<ReadAlongFetchResult>()
+        val requests = AtomicInteger()
+        val repository = object : FakeRepository() {
+            override suspend fun readAlong(chapterId: Int, ifNoneMatch: String?): ReadAlongFetchResult =
+                when (requests.incrementAndGet()) {
+                    1 -> ReadAlongFetchResult.Modified(raw, "first")
+                    2 -> second.await()
+                    else -> third.await()
+                }
+        }
+        val cache = ReadAlongCache(repository, session)
+        val prefs = InMemoryReaderPreferencesStore()
+        val player = FakePlaybackController()
+        compose.setContent {
+            TtsRoadTheme {
+                ReaderScreen(10, "Chapter", cache, prefs, player, onBack = {}, onChapterAdvanced = { _, _ -> })
+            }
+        }
+        compose.onNodeWithText(raw.text).assertIsDisplayed()
+        compose.runOnIdle { cache.clear() }
+        compose.waitUntil { requests.get() == 2 }
+        compose.onAllNodesWithText(raw.text).assertCountEquals(0)
+        compose.runOnIdle {
+            second.complete(ReadAlongFetchResult.Modified(raw.copy(text = "Second session text", paragraphs = emptyList()), "second"))
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Second session text").assertIsDisplayed()
+        compose.runOnIdle { session.value = session.value.copy(username = "bob", token = "third") }
+        compose.waitUntil { requests.get() == 3 }
+        compose.onAllNodesWithText("Second session text").assertCountEquals(0)
+        compose.runOnIdle { third.complete(ReadAlongFetchResult.NotFound) }
+        compose.waitForIdle()
     }
 
     // --- Distraction-free reading -------------------------------------------------------------

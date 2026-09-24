@@ -66,10 +66,46 @@ enum class FictionMaintenanceAction(
 fun fictionMaintenanceActions(
     capabilities: ServerCapabilities,
     isAdmin: Boolean,
+    sourceType: String? = null,
 ): List<FictionMaintenanceAction> = when {
     !capabilities.fictionMaintenance -> emptyList()
-    isAdmin -> FictionMaintenanceAction.entries
-    else -> FictionMaintenanceAction.entries.filterNot { it.adminOnly }
+    else -> FictionMaintenanceAction.entries.filter {
+        (!it.adminOnly || isAdmin) && (it != FictionMaintenanceAction.Poll || supportsFictionPoll(sourceType))
+    }
+}
+
+fun supportsFictionPoll(sourceType: String?): Boolean =
+    sourceType?.trim()?.lowercase() !in setOf("epub", "patreon")
+
+data class FictionPollScope(
+    val full: Boolean? = null,
+    val firstN: Int? = null,
+    val lastN: Int? = null,
+) {
+    init {
+        require(full == null || full) { "Use full=true or omit full" }
+        require(firstN == null || firstN > 0) { "First chapter count must be positive" }
+        require(lastN == null || lastN > 0) { "Last chapter count must be positive" }
+        require(listOfNotNull(full, firstN, lastN).size <= 1) { "Choose only one fetch scope" }
+    }
+}
+
+enum class FictionFetchRange(val label: String) {
+    First("First"),
+    Last("Last"),
+    All("All"),
+}
+
+val FictionFetchCounts: List<Int> = listOf(10, 25, 50, 100)
+
+fun fictionPollScope(range: FictionFetchRange, count: String): FictionPollScope? {
+    if (range == FictionFetchRange.All) return FictionPollScope(full = true)
+    val positive = count.trim().toIntOrNull()?.takeIf { it > 0 } ?: return null
+    return when (range) {
+        FictionFetchRange.First -> FictionPollScope(firstN = positive)
+        FictionFetchRange.Last -> FictionPollScope(lastN = positive)
+        FictionFetchRange.All -> FictionPollScope(full = true)
+    }
 }
 
 /**
@@ -98,8 +134,11 @@ fun fictionMaintenanceMessage(
     response: MaintenanceResponse,
 ): String = when (action) {
     FictionMaintenanceAction.Poll -> when {
+        !response.detail.isNullOrBlank() -> response.detail
         response.fullIngest -> "Re-read the whole chapter list from the source."
-        response.partialSync != null -> "Checked the source — re-read the last ${response.partialSync} chapters."
+        response.firstN != null -> if (response.firstN == 1) "Checked the source — re-read the first chapter." else "Checked the source — re-read the first ${response.firstN} chapters."
+        response.lastN != null -> if (response.lastN == 1) "Checked the source — re-read the last chapter." else "Checked the source — re-read the last ${response.lastN} chapters."
+        response.partialSync != null -> if (response.partialSync == 1) "Checked the source — re-read the last chapter." else "Checked the source — re-read the last ${response.partialSync} chapters."
         else -> "Checked the source for new chapters."
     }
 

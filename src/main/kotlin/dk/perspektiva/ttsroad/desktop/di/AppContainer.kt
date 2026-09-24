@@ -21,8 +21,12 @@ import dk.perspektiva.ttsroad.desktop.data.ReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.RetrofitTtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinator
 import dk.perspektiva.ttsroad.desktop.download.AudiobookExportDownloader
+import dk.perspektiva.ttsroad.desktop.download.EpubExportDownloader
 import dk.perspektiva.ttsroad.desktop.download.HttpAudiobookExportDownloader
+import dk.perspektiva.ttsroad.desktop.download.HttpEpubExportDownloader
 import dk.perspektiva.ttsroad.desktop.download.OfflineFirstMediaSourceFactory
+import dk.perspektiva.ttsroad.desktop.ui.DesktopEpubSavePicker
+import dk.perspektiva.ttsroad.desktop.ui.EpubExportStateHolder
 import dk.perspektiva.ttsroad.desktop.data.SessionStore
 import dk.perspektiva.ttsroad.desktop.data.SyncedPlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.TtsRoadAuthInterceptor
@@ -269,8 +273,12 @@ class AppContainer(
         .attachDiskCache(downloads::libraryCacheOrNull)
 
     /** Reader documents share the download identity but have their own bounded cache. */
-    val readAlongCache: ReadAlongCache = ReadAlongCache(repository)
+    val readAlongCache: ReadAlongCache = ReadAlongCache(repository, sessionStore.session)
         .attachDiskCache(downloads::readAlongCacheOrNull)
+
+    val epubExportDownloader: EpubExportDownloader = HttpEpubExportDownloader(dispatchers.io)
+    fun epubExportStateHolder(): EpubExportStateHolder =
+        EpubExportStateHolder(repository, epubExportDownloader, sessionStore, DesktopEpubSavePicker, dispatchers.main)
 
     /** Local fallback first, account GET/PATCH synchronization whenever the server supports it. */
     val readerPreferences: ReaderPreferencesStore = readerPreferencesFactory(repository, dispatchers)
@@ -312,6 +320,7 @@ class AppContainer(
         source = releaseSourceFactory(httpClient),
         settingsStore = updateSettings,
         clock = clock,
+        ioDispatcher = dispatchers.io,
     )
 
     /**
@@ -321,6 +330,7 @@ class AppContainer(
     val updateDownloader: UpdateDownloader = UpdateDownloader(
         client = httpClient,
         targetDirectory = File(AppDirectories.cacheDir(), "updates"),
+        ioDispatcher = dispatchers.io,
     )
 
     /** Called when the main window closes; without it the playback job and temp file outlive it. */

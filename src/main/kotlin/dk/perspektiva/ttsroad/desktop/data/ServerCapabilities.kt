@@ -52,6 +52,7 @@ data class ServerCapabilities(
      * files, so this is never inferred from [fictionManagement].
      */
     val epubUpload: Boolean = false,
+    val ebookExport: Boolean = false,
     /**
      * Per-user libraries.
      *
@@ -79,6 +80,7 @@ data class ServerCapabilities(
      * its system notification is a rendering of state it already has.
      */
     val notifications: Boolean = false,
+    val backlogNotifications: Boolean = false,
     /**
      * `GET /api/mobile/voices` — the narrator catalogue.
      *
@@ -162,11 +164,13 @@ data class ServerCapabilities(
             audioContentHash = response.capabilities.flag("audio_content_hash"),
             fictionManagement = response.capabilities.flag("fiction_management"),
             epubUpload = response.capabilities.flag("epub_upload"),
+            ebookExport = response.capabilities.flag("ebook_export"),
             follows = response.capabilities.flag("follows"),
             deviceManagement = response.capabilities.flag("device_management"),
             queue = response.capabilities.flag("queue"),
             audiobookExport = response.capabilities.flag("audiobook_export"),
             notifications = response.capabilities.flag("notifications"),
+            backlogNotifications = response.capabilities.flag("backlog_notifications"),
             voiceCatalogue = response.capabilities.flag("voice_catalogue"),
             chapterMaintenance = response.capabilities.flag("chapter_maintenance"),
             fictionMaintenance = response.capabilities.flag("fiction_maintenance"),

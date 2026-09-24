@@ -4,6 +4,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dk.perspektiva.ttsroad.desktop.security.SecureFiles
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,10 +22,12 @@ data class PendingProgress(
     val positionSeconds: Double,
     val isPlayed: Boolean,
     val clientUpdatedAt: String,
+    val generation: String = UUID.randomUUID().toString(),
 )
 
 private data class StoredOutbox(
     val version: Int = ProgressOutbox.CurrentVersion,
+    val owner: String? = null,
     val entries: List<PendingProgress> = emptyList(),
 )
 
@@ -38,7 +41,7 @@ private data class StoredOutbox(
  */
 object ProgressOutbox {
 
-    const val CurrentVersion: Int = 1
+    const val CurrentVersion: Int = 2
 
     /**
      * Queue a position, replacing any earlier one for the same chapter.
@@ -65,10 +68,10 @@ object ProgressOutbox {
      * again. Only a transport failure leaves the queue untouched, and that is expressed by not
      * calling this at all.
      */
-    fun drop(entries: List<PendingProgress>, chapterIds: Collection<Int>): List<PendingProgress> {
-        if (chapterIds.isEmpty()) return entries
-        val gone = chapterIds.toSet()
-        return entries.filterNot { it.chapterId in gone }
+    fun drop(entries: List<PendingProgress>, sent: Collection<PendingProgress>): List<PendingProgress> {
+        if (sent.isEmpty()) return entries
+        val gone = sent.toSet()
+        return entries.filterNot { it in gone }
     }
 
     /**
@@ -86,8 +89,10 @@ object ProgressOutbox {
 /** Storage for positions that have not reached the server yet. */
 interface ProgressOutboxStore {
     val entries: StateFlow<List<PendingProgress>>
+    val owner: String?
+    fun bindOwner(owner: String)
     fun record(entry: PendingProgress)
-    fun drop(chapterIds: Collection<Int>)
+    fun drop(sent: Collection<PendingProgress>)
     fun clear()
 }
 
@@ -109,8 +114,16 @@ class FileProgressOutboxStore(private val file: File) : ProgressOutboxStore {
         .build()
         .adapter(StoredOutbox::class.java)
 
-    private val _entries = MutableStateFlow(load())
+    private var stored = load()
+    private val _entries = MutableStateFlow(stored.entries)
     override val entries: StateFlow<List<PendingProgress>> = _entries.asStateFlow()
+    override val owner: String? get() = synchronized(this) { stored.owner }
+
+    @Synchronized
+    override fun bindOwner(owner: String) {
+        require(owner.isNotBlank())
+        if (stored.owner != owner) write(StoredOutbox(owner = owner))
+    }
 
     /**
      * Synchronised because every mutation is read-modify-write and the writers genuinely differ:
@@ -119,25 +132,27 @@ class FileProgressOutboxStore(private val file: File) : ProgressOutboxStore {
      */
     @Synchronized
     override fun record(entry: PendingProgress) {
-        write(ProgressOutbox.record(_entries.value, entry))
+        check(stored.owner != null) { "No progress owner" }
+        write(stored.copy(entries = ProgressOutbox.record(_entries.value, entry)))
     }
 
     @Synchronized
-    override fun drop(chapterIds: Collection<Int>) {
-        write(ProgressOutbox.drop(_entries.value, chapterIds))
+    override fun drop(sent: Collection<PendingProgress>) {
+        write(stored.copy(entries = ProgressOutbox.drop(_entries.value, sent)))
     }
 
     /** Used when the credential dies: a queue that cannot be authenticated can never be flushed. */
     @Synchronized
     override fun clear() {
-        write(emptyList())
+        write(StoredOutbox())
     }
 
-    private fun write(next: List<PendingProgress>) {
-        if (next == _entries.value) return
-        _entries.value = next
+    private fun write(next: StoredOutbox) {
+        if (next == stored) return
         file.parentFile?.mkdirs()
-        SecureFiles.writeAtomically(file, adapter.toJson(StoredOutbox(entries = next)))
+        SecureFiles.writeAtomically(file, adapter.toJson(next))
+        stored = next
+        _entries.value = next.entries
     }
 
     /**
@@ -146,9 +161,13 @@ class FileProgressOutboxStore(private val file: File) : ProgressOutboxStore {
      * Losing a few queued positions is bad; failing to construct the repository — and so refusing
      * to play anything at all — because of one malformed JSON file is worse.
      */
-    private fun load(): List<PendingProgress> = runCatching {
-        if (!file.isFile) return@runCatching emptyList()
-        val stored = adapter.fromJson(file.readText()) ?: return@runCatching emptyList()
-        if (stored.version != ProgressOutbox.CurrentVersion) emptyList() else stored.entries
-    }.getOrElse { emptyList() }
+    private fun load(): StoredOutbox = runCatching {
+        if (!file.isFile) return@runCatching StoredOutbox()
+        val loaded = adapter.fromJson(file.readText()) ?: return@runCatching StoredOutbox()
+        if (loaded.version != ProgressOutbox.CurrentVersion || loaded.owner.isNullOrBlank()) {
+            StoredOutbox()
+        } else {
+            loaded
+        }
+    }.getOrElse { StoredOutbox() }
 }

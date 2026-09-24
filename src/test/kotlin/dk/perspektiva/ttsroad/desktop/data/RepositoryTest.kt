@@ -382,6 +382,38 @@ class RepositoryTest {
     }
 
     @Test
+    fun `pollFiction sends scope query parameters`() = runTest {
+        enqueue(200, """{"api_version": 1, "status": "ok", "full_ingest": true}""")
+        repository.pollFiction(7, FictionPollScope(full = true))
+        var request = server.takeRequest()
+        assertEquals("/api/mobile/fictions/7/poll", request.url.encodedPath)
+        assertEquals("true", request.url.queryParameter("full"))
+        assertNull(request.url.queryParameter("first_n"))
+        assertNull(request.url.queryParameter("last_n"))
+
+        enqueue(200, """{"api_version": 1, "status": "ok", "first_n": 25}""")
+        repository.pollFiction(7, FictionPollScope(firstN = 25))
+        request = server.takeRequest()
+        assertEquals("25", request.url.queryParameter("first_n"))
+        assertNull(request.url.queryParameter("full"))
+        assertNull(request.url.queryParameter("last_n"))
+
+        enqueue(200, """{"api_version": 1, "status": "ok", "last_n": 50}""")
+        repository.pollFiction(7, FictionPollScope(lastN = 50))
+        request = server.takeRequest()
+        assertEquals("50", request.url.queryParameter("last_n"))
+        assertNull(request.url.queryParameter("full"))
+        assertNull(request.url.queryParameter("first_n"))
+
+        enqueue(200, """{"api_version": 1, "status": "ok"}""")
+        repository.pollFiction(7, FictionPollScope())
+        request = server.takeRequest()
+        assertNull(request.url.queryParameter("full"))
+        assertNull(request.url.queryParameter("first_n"))
+        assertNull(request.url.queryParameter("last_n"))
+    }
+
+    @Test
     fun `authHeaderValue is what the audio download path attaches`() = runTest {
         assertEquals("Bearer ttsr_token", repository.authHeaderValue())
         sessionStore.clearToken()

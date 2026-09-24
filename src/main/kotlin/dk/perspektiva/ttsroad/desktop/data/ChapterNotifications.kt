@@ -60,6 +60,9 @@ data class ChapterNotification(
     @param:Json(name = "ready_at") val readyAt: String? = null,
     val fiction: NotificationFiction = NotificationFiction(),
     val chapter: NotificationChapter = NotificationChapter(),
+    val kind: String = "chapter",
+    @param:Json(name = "backlog_seconds") val backlogSeconds: Double? = null,
+    val message: String? = null,
 ) {
     val presentation: ChapterNotificationState get() = ChapterNotificationState.fromWire(state)
 }
@@ -74,7 +77,7 @@ data class NotificationFiction(
 data class NotificationChapter(
     val id: Int = 0,
     val title: String = "Untitled",
-    @param:Json(name = "chapter_number") val chapterNumber: Int? = null,
+    @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
     val status: String? = null,
     /**
      * Conversion percentage while a chapter is still being narrated, null once it is done.
@@ -87,10 +90,12 @@ data class NotificationChapter(
 
 /** One line for a row: "Chapter 412 · converting 62%", or what went wrong instead. */
 fun ChapterNotification.detailLabel(): String {
-    val chapterLabel = chapter.chapterNumber?.let { "Chapter $it" } ?: chapter.title
+    if (kind == "backlog") return "Backlog alert"
+    val chapterLabel = chapter.chapterNumber?.takeIf { it.isFinite() }?.let { "Chapter ${notificationNumber(it)}" }
+        ?: chapter.title
     val state = when (presentation) {
         ChapterNotificationState.Ready -> "ready to listen"
-        ChapterNotificationState.Stalled -> "conversion failed"
+        ChapterNotificationState.Stalled -> if (chapter.status == "error") "conversion failed" else "audio unavailable"
         ChapterNotificationState.Dismissed -> "dismissed"
         ChapterNotificationState.Pulled ->
             chapter.ttsProgress?.let { "converting $it%" } ?: "converting"
@@ -106,15 +111,23 @@ fun ChapterNotification.detailLabel(): String {
  * — the app was closed when it happened — and without this every launch would re-announce the whole
  * backlog. `alreadySeen` is null on that first look and a set on every one after.
  */
+data class ReadyNotificationKey(val id: Int, val readyAt: String?)
+
 fun newlyReady(
     notifications: List<ChapterNotification>,
-    alreadySeen: Set<Int>?,
-): Pair<List<ChapterNotification>, Set<Int>> {
+    alreadySeen: Set<ReadyNotificationKey>?,
+): Pair<List<ChapterNotification>, Set<ReadyNotificationKey>> {
     val readyNow = notifications.filter { it.presentation == ChapterNotificationState.Ready }
-    val ids = readyNow.map { it.id }.toSet()
-    if (alreadySeen == null) return emptyList<ChapterNotification>() to ids
-    return readyNow.filter { it.id !in alreadySeen } to ids
+        .distinctBy { ReadyNotificationKey(it.id, it.readyAt) }
+    val keys = readyNow.map { ReadyNotificationKey(it.id, it.readyAt) }.toSet()
+    if (alreadySeen == null) return emptyList<ChapterNotification>() to keys
+    return readyNow.filter { ReadyNotificationKey(it.id, it.readyAt) !in alreadySeen } to (alreadySeen + keys)
 }
+
+fun ChapterNotification.noticeMessage(): String? = message?.takeIf { it.isNotBlank() }
+    ?: if (kind == "backlog") {
+        backlogSeconds?.let(::remainingBacklogLabel) ?: "Audio is ready to listen."
+    } else null
 
 /**
  * What the desktop should raise for a batch that just became ready, or null for nothing.
@@ -126,7 +139,14 @@ fun readyNotificationText(fresh: List<ChapterNotification>): Pair<String, String
     fresh.isEmpty() -> null
     fresh.size == 1 -> {
         val item = fresh.single()
-        item.fiction.title to "${item.chapter.title} is ready to listen"
+        val title = if (item.kind == "backlog") "Backlog alert · ${item.fiction.title}" else item.fiction.title
+        title to (item.noticeMessage() ?: "${item.chapter.title} is ready to listen")
+    }
+    fresh.any { it.kind == "backlog" || !it.message.isNullOrBlank() } -> {
+        val title = if (fresh.any { it.kind == "backlog" }) "Backlog alert" else "${fresh.size} chapters ready"
+        title to fresh.joinToString("\n") {
+            "${it.fiction.title}: ${it.noticeMessage() ?: "${it.chapter.title} is ready to listen"}"
+        }
     }
     else -> {
         val serials = fresh.map { it.fiction.title }.distinct()

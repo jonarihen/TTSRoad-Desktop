@@ -30,13 +30,22 @@ class NotificationsScreenUiTest {
     @get:Rule
     val compose = createComposeRule()
 
-    private fun notice(id: Int, state: String) = ChapterNotification(
+    private fun notice(
+        id: Int,
+        state: String,
+        kind: String = "chapter",
+        message: String? = null,
+        backlogSeconds: Double? = null,
+    ) = ChapterNotification(
         id = id,
         state = state,
         dismissible = state == "ready",
         playable = state == "ready",
         fiction = NotificationFiction(id = 7, title = "A Test Serial"),
-        chapter = NotificationChapter(id = 100 + id, title = "Chapter $id", chapterNumber = id, ttsProgress = 62),
+        chapter = NotificationChapter(id = 100 + id, title = "Chapter $id", chapterNumber = id.toDouble(), ttsProgress = 62),
+        kind = kind,
+        message = message,
+        backlogSeconds = backlogSeconds,
     )
 
     private fun screen(vararg notifications: ChapterNotification): FakeRepository {
@@ -95,5 +104,14 @@ class NotificationsScreenUiTest {
 
         compose.onNodeWithText("THIS SERVER CANNOT REPORT NEW CHAPTERS").assertIsDisplayed()
         assertTrue(compose.onAllNodesWithTag(NotificationRowTestTag).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun `a backlog notification displays alert label and custom message`() {
+        screen(notice(1, "ready", kind = "backlog", message = "3 hours ready to listen"))
+
+        compose.onNodeWithTag(NotificationRowTestTag).assertIsDisplayed()
+        compose.onNodeWithText("BACKLOG ALERT").assertIsDisplayed()
+        compose.onNodeWithText("3 HOURS READY TO LISTEN").assertIsDisplayed()
     }
 }

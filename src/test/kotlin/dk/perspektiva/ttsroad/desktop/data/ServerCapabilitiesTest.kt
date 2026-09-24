@@ -56,6 +56,15 @@ class ServerCapabilitiesTest {
     }
 
     @Test
+    fun `the ebook_export capability is read from its own flag`() {
+        val capabilities = parse(
+            """{"api_version": 1, "server": {"name": "X", "version": "1.5.0"}, "capabilities": {"ebook_export": true}}""",
+        )
+
+        assertTrue(capabilities.ebookExport)
+    }
+
+    @Test
     fun `a non-boolean queue flag is off`() {
         val capabilities = parse(
             """{"api_version": 1, "server": {"name": "X", "version": "1.5.0"}, "capabilities": {"queue": "yes"}}""",

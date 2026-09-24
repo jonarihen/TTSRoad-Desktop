@@ -33,6 +33,7 @@ data class BrowsePreferences(
      * the same list and the mode switch is not drawn at all.
      */
     val browsingAll: Boolean = false,
+    val sources: Set<String> = emptySet(),
 ) {
     companion object {
         /**
@@ -42,6 +43,7 @@ data class BrowsePreferences(
          * once and never cleaned can grow to, the same reason `fictionSpeeds` is bounded.
          */
         const val MaxRememberedTags: Int = 32
+        const val MaxRememberedSources: Int = 32
     }
 }
 
@@ -117,11 +119,13 @@ internal data class StoredBrowsePreferences(
     val sort: String? = null,
     val tags: List<String>? = null,
     val browsingAll: Boolean? = null,
+    val sources: List<String>? = null,
 ) {
     fun toPreferences(): BrowsePreferences = BrowsePreferences(
         sort = FictionSort.fromStorage(sort),
         tags = tags?.toSet().orEmpty(),
         browsingAll = browsingAll ?: false,
+        sources = sources?.toSet().orEmpty(),
     ).sanitised()
 
     companion object {
@@ -130,6 +134,7 @@ internal data class StoredBrowsePreferences(
             // Sorted so the file does not churn on every write purely because a set reordered.
             tags = preferences.tags.sorted(),
             browsingAll = preferences.browsingAll,
+            sources = preferences.sources.sorted(),
         )
     }
 }
@@ -145,5 +150,9 @@ internal fun BrowsePreferences.sanitised(): BrowsePreferences = copy(
     tags = tags.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
         .distinctBy(String::lowercase)
         .take(BrowsePreferences.MaxRememberedTags)
+        .toSet(),
+    sources = sources.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+        .distinct()
+        .take(BrowsePreferences.MaxRememberedSources)
         .toSet(),
 )

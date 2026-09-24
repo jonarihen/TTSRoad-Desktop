@@ -1,5 +1,11 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import dk.perspektiva.ttsroad.desktop.data.ReadAlongDocument
+import dk.perspektiva.ttsroad.desktop.data.ReaderHighlight
+import dk.perspektiva.ttsroad.desktop.data.ReaderTheme
+import dk.perspektiva.ttsroad.desktop.data.TextSpan
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,6 +17,40 @@ class ReaderBehaviourTest {
     fun `active content is placed one third down the viewport`() {
         assertEquals(-300, readerAutoScrollOffsetPx(900))
         assertEquals(0, readerAutoScrollOffsetPx(0))
+    }
+
+    @Test
+    fun `spoken lines stay still inside the comfort band and recenter outside it`() {
+        assertNull(readerFollowScrollDelta(200, 240, 900))
+        assertNull(readerFollowScrollDelta(560, 600, 900))
+        assertEquals(300, readerFollowScrollDelta(600, 640, 900))
+        assertEquals(-320, readerFollowScrollDelta(-20, 20, 900))
+        assertEquals(4700, readerFollowScrollDelta(5000, 5040, 900))
+        assertNull(readerFollowScrollDelta(10, 40, 0))
+    }
+
+    @Test
+    fun `word styles change only paint and word mode covers the whole word`() {
+        ReaderTheme.entries.forEach { theme ->
+            val palette = readerPalette(theme)
+            listOf(ReaderHighlight.Word, ReaderHighlight.Sentence).forEach { mode ->
+                val style = readerWordStyle(mode, palette)
+                assertEquals(SpanStyle(), style.copy(color = Color.Unspecified, background = Color.Unspecified))
+                assertEquals(palette.accent, style.color)
+                assertEquals(if (mode == ReaderHighlight.Word) palette.sentenceBand else Color.Unspecified, style.background)
+            }
+            val document = ReadAlongDocument(text = "before complete after")
+            val paragraph = TextSpan(0, document.text.length)
+            val word = TextSpan(7, 15)
+            val annotated = readerParagraphText(document, paragraph, paragraph, word, emptyList(), null, ReaderHighlight.Word, palette)
+            assertEquals(document.text, annotated.text)
+            assertEquals(1, annotated.spanStyles.size)
+            val range = annotated.spanStyles.single()
+            assertEquals(word.start, range.start)
+            assertEquals(word.end, range.end)
+            assertEquals(palette.sentenceBand, range.item.background)
+            assertNull(range.item.fontWeight)
+        }
     }
 
     @Test

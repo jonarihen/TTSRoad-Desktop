@@ -1,13 +1,44 @@
 package dk.perspektiva.ttsroad.desktop.update
 
+import dk.perspektiva.ttsroad.desktop.ui.UpdateStateHolder
+import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import okhttp3.Call
+import okhttp3.EventListener
+import okhttp3.OkHttpClient
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 
 /**
  * Throttling, dismissal and failure handling around the update check.
@@ -15,7 +46,11 @@ import org.junit.jupiter.api.Test
  * Everything here runs without a network: the release feed is a lambda and the clock is a variable,
  * which is the point of the [ReleaseSource] seam.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class UpdateCheckerTest {
+
+    @TempDir
+    lateinit var directory: File
 
     private val installed = "1.0.1"
 
@@ -41,6 +76,7 @@ class UpdateCheckerTest {
         source: ReleaseSource,
         osName: String = "Linux",
         architecture: String = "amd64",
+        ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     ) = UpdateChecker(
         source = source,
         settingsStore = store,
@@ -48,6 +84,7 @@ class UpdateCheckerTest {
         osName = osName,
         architecture = architecture,
         clock = now,
+        ioDispatcher = ioDispatcher,
     )
 
     // --- Finding an update ----------------------------------------------------------------------
@@ -219,5 +256,204 @@ class UpdateCheckerTest {
     @Test
     fun `a negative stored timestamp is treated as never checked`() {
         assertEquals(0L, StoredUpdateSettings(lastCheckMillis = -1L).toSettings().lastCheckMillis)
+    }
+
+    @Test
+    fun `cancellation from the release source propagates unchanged`() = runTest {
+        val store = InMemoryUpdateSettingsStore()
+        val cancelled = CancellationException("cancelled check")
+        val subject = checker(store, { now }, { throw cancelled })
+
+        assertEquals("cancelled check", assertFailsWith<CancellationException> { subject.check(manual = true) }.message)
+        assertEquals(0L, store.settings.value.lastCheckMillis)
+    }
+
+    @Test
+    fun `a source returning after cancellation cannot record or publish a release`() = runTest {
+        val store = InMemoryUpdateSettingsStore()
+        var published = false
+        val subject = checker(store, { now }, {
+            currentCoroutineContext().cancel()
+            release("1.0.2")
+        })
+
+        val job = launch {
+            subject.check(manual = true)
+            published = true
+        }
+        job.join()
+
+        assertTrue(job.isCancelled)
+        assertFalse(published)
+        assertEquals(0L, store.settings.value.lastCheckMillis)
+    }
+
+    @Test
+    fun `a network failure after cancellation is not reported as an update failure`() = runTest {
+        val store = InMemoryUpdateSettingsStore()
+        val subject = checker(store, { now }, {
+            currentCoroutineContext().cancel()
+            throw IOException("cancelled socket")
+        })
+        var published = false
+
+        val job = launch {
+            subject.check(manual = true)
+            published = true
+        }
+        job.join()
+
+        assertTrue(job.isCancelled)
+        assertFalse(published)
+        assertEquals(0L, store.settings.value.lastCheckMillis)
+    }
+
+    @Test
+    fun `a newer manual check wins over a cancelled automatic result`() = runTest {
+        assertStaleCheckIgnored(fail = false)
+    }
+
+    @Test
+    fun `a cancelled automatic failure cannot replace a newer manual result`() = runTest {
+        assertStaleCheckIgnored(fail = true)
+    }
+
+    private suspend fun TestScope.assertStaleCheckIgnored(fail: Boolean) {
+        val store = InMemoryUpdateSettingsStore()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val releaseFirst = CompletableDeferred<Unit>()
+        var calls = 0
+        val subject = checker(store, { now }, {
+            if (++calls == 1) {
+                withContext(NonCancellable) { releaseFirst.await() }
+                if (fail) throw IOException("stale failure")
+                release("1.0.2")
+            } else {
+                release("1.0.3")
+            }
+        }, ioDispatcher = dispatcher)
+        val holder = UpdateStateHolder(
+            subject,
+            UpdateDownloader(OkHttpClient(), directory, dispatcher) { error("unexpected download") },
+            store,
+            dispatcher,
+        )
+        try {
+            holder.checkAutomatically()
+            runCurrent()
+            holder.checkNow()
+            runCurrent()
+            assertEquals("1.0.3", holder.state.value.available?.version)
+
+            releaseFirst.complete(Unit)
+            runCurrent()
+            assertEquals("1.0.3", holder.state.value.available?.version)
+            assertEquals(2, calls)
+        } finally {
+            releaseFirst.complete(Unit)
+            holder.clear()
+            runCurrent()
+        }
+    }
+
+    @Test
+    fun `clearing a holder prevents a late check from publishing`() = runTest {
+        val store = InMemoryUpdateSettingsStore()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val gate = CompletableDeferred<Unit>()
+        val subject = checker(store, { now }, {
+            withContext(NonCancellable) { gate.await() }
+            release("1.0.2")
+        }, ioDispatcher = dispatcher)
+        val holder = UpdateStateHolder(
+            subject,
+            UpdateDownloader(OkHttpClient(), directory, dispatcher) { error("unexpected download") },
+            store,
+            dispatcher,
+        )
+
+        holder.checkNow()
+        runCurrent()
+        holder.clear()
+        val cleared = holder.state.value
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(cleared, holder.state.value)
+        assertEquals(0L, store.settings.value.lastCheckMillis)
+    }
+
+    @Test
+    fun `blocking release work uses injected IO instead of the caller thread`() = runBlocking {
+        val entered = CountDownLatch(1)
+        val gate = CountDownLatch(1)
+        val callerThread = Thread.currentThread()
+        Executors.newSingleThreadExecutor().asCoroutineDispatcher().use { io ->
+            val subject = checker(InMemoryUpdateSettingsStore(), { now }, {
+                assertFalse(Thread.currentThread() === callerThread)
+                entered.countDown()
+                check(gate.await(5, TimeUnit.SECONDS))
+                release("1.0.2")
+            }, ioDispatcher = io)
+            val job = launch(start = CoroutineStart.UNDISPATCHED) {
+                subject.check(manual = true)
+            }
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                assertTrue(job.isActive)
+            } finally {
+                gate.countDown()
+                job.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test
+    fun `cancelling a slow release request cancels the blocked call`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse.Builder()
+                    .body("""{"tag_name":"v1.0.2"}""")
+                    .headersDelay(2, TimeUnit.SECONDS)
+                    .build(),
+            )
+            val started = CompletableDeferred<Call>()
+            val cancelled = CompletableDeferred<Unit>()
+            val client = OkHttpClient.Builder()
+                .readTimeout(60, TimeUnit.SECONDS)
+                .addInterceptor { chain ->
+                    chain.proceed(chain.request().newBuilder().url(server.url("/latest")).build())
+                }
+                .eventListener(object : EventListener() {
+                    override fun callStart(call: Call) {
+                        started.complete(call)
+                    }
+
+                    override fun canceled(call: Call) {
+                        cancelled.complete(Unit)
+                    }
+                })
+                .build()
+            val store = InMemoryUpdateSettingsStore()
+            val subject = checker(store, { now }, GitHubReleaseSource(client))
+            var published = false
+            val job = launch(Dispatchers.IO) {
+                subject.check(manual = true)
+                published = true
+            }
+            try {
+                assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+                job.cancel()
+                assertTrue(cancelled.isCompleted)
+                withTimeout(1_000) { job.join() }
+                assertTrue(started.await().isCanceled())
+                assertFalse(published)
+                assertEquals(0L, store.settings.value.lastCheckMillis)
+            } finally {
+                job.cancel()
+                client.dispatcher.cancelAll()
+            }
+        }
     }
 }

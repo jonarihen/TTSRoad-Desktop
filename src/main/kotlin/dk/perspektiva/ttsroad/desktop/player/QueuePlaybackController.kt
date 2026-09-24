@@ -21,6 +21,8 @@ import dk.perspektiva.ttsroad.desktop.data.playbackOrder
 import dk.perspektiva.ttsroad.desktop.data.skipIntervalMs
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +38,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -98,6 +102,7 @@ class QueuePlaybackController(
     private val historyRecordIntervalMs: Long = 5 * 60_000L,
     private val listeningFlushIntervalMs: Long = 60_000L,
     private val playbackSkipPreference: PlaybackSkipPreferenceStore = InMemoryPlaybackSkipPreferenceStore(),
+    private val queueRefreshIntervalMs: Long = 15_000L,
 ) : PlaybackController {
 
     private val _state = MutableStateFlow(emptyState())
@@ -105,9 +110,37 @@ class QueuePlaybackController(
 
     private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
 
+    private val playbackLock = Any()
+    private val transitionMutex = Mutex()
     private var playJob: Job? = null
+    private var refreshJob: Job? = null
+    private var requestGeneration = 0L
+    private var seekGeneration = 0L
+    private var playbackRequested = false
+    private var endedChapterId: Int? = null
+    private var queueRequest: PlayRequest? = null
     private var queue: List<ChapterSummary> = emptyList()
     private var queueFiction: FictionSummary? = null
+
+    private class PlayRequest(
+        val generation: Long,
+        val owner: String,
+        val authorization: String?,
+        val server: String,
+    )
+
+    private fun newPlayRequest(): PlayRequest = synchronized(playbackLock) {
+        requestGeneration++
+        refreshJob?.cancel()
+        refreshJob = null
+        playbackRequested = false
+        PlayRequest(requestGeneration, ownerKey(), repository.authHeaderValue(), repository.resolveUrl("/"))
+    }
+
+    private fun isCurrent(request: PlayRequest): Boolean =
+        request.generation == requestGeneration && request.owner == ownerKey() &&
+            request.authorization == repository.authHeaderValue() &&
+            request.server == repository.resolveUrl("/") && repository.sessionEnd.value == null
 
     /**
      * Which account this queue was loaded for, captured at load time rather than read at record
@@ -247,37 +280,21 @@ class QueuePlaybackController(
     }
 
     override suspend fun play(chapter: ChapterSummary, fiction: FictionSummary?) {
-        if (chapter.audio == null) {
-            stopInternal(clearQueue = true)
-            queueFiction = fiction
-            _state.value = metadataOf(chapter, fiction, 0L, emptyList(), 0)
-                .copy(error = "This chapter has no audio yet")
+        val request = newPlayRequest()
+        if (!chapter.hasAudio) {
+            transitionMutex.withLock {
+                if (!synchronized(playbackLock) { isCurrent(request) }) return
+                stopInternal(clearQueue = true)
+                synchronized(playbackLock) {
+                    if (!isCurrent(request)) return
+                    queueFiction = fiction
+                    _state.value = metadataOf(chapter, fiction, 0L, emptyList(), 0)
+                        .copy(error = "This chapter has no audio yet")
+                }
+            }
             return
         }
-        // Starting one chapter still means starting the *serial* at that chapter. Without this the
-        // library's "jump back in" and continue-listening rows built a queue of exactly one, so
-        // Next was disabled and playback stopped at the end of the chapter instead of advancing —
-        // while the identical chapter started from the fiction screen carried the whole fiction.
-        val fictionId = fiction?.id?.takeIf { it > 0 } ?: chapter.fictionId.takeIf { it > 0 }
-        val siblings = fictionId?.let {
-            runCatching { repository.chapters(it).chapters }.getOrNull()
-        }.orEmpty()
-        if (siblings.any { it.resolvedChapterId == chapter.resolvedChapterId }) {
-            playQueue(siblings, chapter.resolvedChapterId, fiction)
-            return
-        }
-
-        // No sibling list — offline, or a chapter the fiction no longer lists. One chapter still
-        // plays; it simply has nothing to advance to, which is the honest state rather than a
-        // failure.
-        // Before the queue changes, not after: `leaveCurrentChapter` reads queue[queueIndex], and
-        // once the new queue is in place that index names a different chapter — or nothing at all.
-        leaveCurrentChapter()
-        queue = listOf(chapter)
-        queueFiction = fiction
-        queueOwnerKey = ownerKey()
-        useFictionSpeed(fictionIdOf(chapter, fiction))
-        begin(0, resumeMsOf(chapter), leaveCurrent = false)
+        startQueue(listOf(chapter), chapter.resolvedChapterId, fiction, null, request, refreshImmediately = true)
     }
 
     override suspend fun playQueue(
@@ -286,34 +303,120 @@ class QueuePlaybackController(
         fiction: FictionSummary?,
         startPositionMs: Long?,
     ) {
-        // Canonical reading order, never the order the screen happens to be sorted in: a listener
-        // who flipped the list to newest-first still wants the serial to play forwards.
-        val playable = chapters.playbackOrder().filter { it.hasAudio }
-        if (playable.isEmpty()) {
-            _state.update { it.copy(error = "No playable chapters yet") }
+        startQueue(chapters, startChapterId, fiction, startPositionMs, newPlayRequest())
+    }
+
+    private suspend fun startQueue(
+        chapters: List<ChapterSummary>,
+        startChapterId: Int,
+        fiction: FictionSummary?,
+        startPositionMs: Long?,
+        request: PlayRequest,
+        refreshImmediately: Boolean = false,
+    ) {
+        transitionMutex.withLock {
+            if (!synchronized(playbackLock) { isCurrent(request) }) return@withLock
+            val playable = chapters.playbackOrder().filter { it.hasAudio }.distinctBy { it.resolvedChapterId }
+            if (playable.isEmpty()) {
+                _state.update { it.copy(error = "No playable chapters yet") }
+                return@withLock
+            }
+            leaveCurrentChapter()
+            val fictionId = fiction?.id?.takeIf { it > 0 }
+                ?: chapters.firstOrNull()?.resolvedFictionId?.takeIf { it > 0 }
+                ?: 0
+            synchronized(playbackLock) {
+                if (!isCurrent(request)) return@withLock
+                queue = playable
+                queueFiction = fiction
+                queueOwnerKey = ownerKey()
+                queueRequest = request
+                playbackRequested = true
+                endedChapterId = null
+            }
+            useFictionSpeed(fictionIdOf(playable.first(), fiction))
+            val startIndex = playable.indexOfFirst { it.resolvedChapterId == startChapterId }.coerceAtLeast(0)
+            val requestedFound = playable[startIndex].resolvedChapterId == startChapterId
+            val startMs = startPositionMs?.takeIf { requestedFound }?.coerceAtLeast(0L)
+                ?: resumeMsOf(playable[startIndex])
+            begin(startIndex, startMs, leaveCurrent = false)
+            startQueueRefresh(request, fictionId, immediate = refreshImmediately)
+        }
+    }
+
+    private fun startQueueRefresh(request: PlayRequest, fictionId: Int, immediate: Boolean = false) {
+        if (fictionId <= 0) return
+        refreshJob?.cancel()
+        refreshJob = scope.launch {
+            if (immediate) {
+                refreshQueue(request, fictionId)
+            }
+            while (isActive) {
+                delay(queueRefreshIntervalMs)
+                refreshQueue(request, fictionId)
+            }
+        }
+    }
+
+    private suspend fun refreshQueue(request: PlayRequest, fictionId: Int, endedEvent: Boolean = false) {
+        synchronized(playbackLock) {
+            if (!isCurrent(request) || request.generation != requestGeneration) return
+        }
+        val loaded = try {
+            repository.chapters(fictionId).chapters
+        } catch (_: CancellationException) {
+            throw CancellationException("cancelled")
+        } catch (_: Exception) {
             return
         }
-        // See `play`: the chapter being left has to be recorded while it is still the one the queue
-        // and the index point at.
-        leaveCurrentChapter()
-        queue = playable
-        queueFiction = fiction
-        queueOwnerKey = ownerKey()
-        useFictionSpeed(fictionIdOf(playable.first(), fiction))
-        val startIndex = playable.indexOfFirst { it.resolvedChapterId == startChapterId }.coerceAtLeast(0)
-        // An explicit start position only applies to the chapter that was asked for. Falling back
-        // to the saved position when the requested chapter is not in the queue is what stops a
-        // bookmark on a chapter that has since lost its audio from seeking chapter one to 41:12.
-        val requestedFound = playable[startIndex].resolvedChapterId == startChapterId
-        val startMs = startPositionMs?.takeIf { requestedFound }?.coerceAtLeast(0L)
-            ?: resumeMsOf(playable[startIndex])
-        begin(startIndex, startMs, leaveCurrent = false)
+        val seekGen = seekGeneration
+        synchronized(playbackLock) {
+            if (!isCurrent(request) || request.generation != requestGeneration) return
+            if (seekGeneration != seekGen) return
+            val currentChapterId = queue.getOrNull(queueIndex)?.resolvedChapterId ?: return
+            val oldQueue = queue
+            val merged = mergeQueue(oldQueue, loaded).filter { it.hasAudio }.distinctBy { it.resolvedChapterId }
+            if (merged.isEmpty()) return
+            val newIndex = merged.indexOfFirst { it.resolvedChapterId == currentChapterId }
+            if (newIndex < 0) return
+            queue = merged
+            queueIndex = newIndex
+            _state.update {
+                it.copy(
+                    queue = merged.map { c -> QueueItem(c.resolvedChapterId, c.resolvedTitle, c.resolvedDisplayNumber) },
+                    currentIndex = newIndex,
+                    hasNext = newIndex < merged.lastIndex,
+                    hasPrevious = newIndex > 0,
+                )
+            }
+        }
+    }
+
+    private fun mergeQueue(
+        existing: List<ChapterSummary>,
+        fresh: List<ChapterSummary>,
+    ): List<ChapterSummary> {
+        val freshPlayable = fresh.playbackOrder().filter { it.hasAudio }.distinctBy { it.resolvedChapterId }
+        if (freshPlayable.isEmpty()) return existing
+        val freshById = freshPlayable.associateBy { it.resolvedChapterId }
+        val presentIds = existing.map { it.resolvedChapterId }.toMutableSet()
+        val result = existing.map { freshById[it.resolvedChapterId] ?: it }.toMutableList()
+
+        for ((index, chapter) in freshPlayable.withIndex()) {
+            if (!presentIds.add(chapter.resolvedChapterId)) continue
+            val following = freshPlayable.drop(index + 1).map { it.resolvedChapterId }.toSet()
+            val insertion = result.indexOfFirst { it.resolvedChapterId in following }
+                .takeIf { it >= 0 } ?: result.size
+            result.add(insertion, chapter)
+        }
+        return result
     }
 
     override fun togglePlayPause() {
         val current = _state.value
         if (!current.hasMedia) return
         if (current.isPlaying) {
+            synchronized(playbackLock) { playbackRequested = false }
             engine.pause()
             _state.update { it.copy(isPlaying = false) }
             // A manual pause freezes a countdown; a listener who stops to answer the door should
@@ -324,6 +427,7 @@ class QueuePlaybackController(
             saveCurrentProgress()
             recordHistory()
         } else {
+            synchronized(playbackLock) { playbackRequested = true }
             engine.play()
             _state.update { it.copy(isPlaying = true) }
             sleepTimer.onPlaybackResumed()
@@ -332,6 +436,7 @@ class QueuePlaybackController(
 
     override fun seekTo(positionMs: Long) {
         if (!_state.value.hasMedia) return
+        seekGeneration++
         val clamped = positionMs.coerceIn(0L, _state.value.durationMs.coerceAtLeast(0L))
         engine.seekTo(clamped)
         lastKnownPositionMs = clamped
@@ -347,7 +452,10 @@ class QueuePlaybackController(
 
     override fun skipToNextChapter() {
         val next = queueIndex + 1
-        if (next in queue.indices) scope.launch { begin(next, 0L) }
+        if (next in queue.indices) scope.launch {
+            synchronized(playbackLock) { playbackRequested = true }
+            begin(next, 0L)
+        }
     }
 
     override fun skipToPreviousChapter() {
@@ -355,13 +463,19 @@ class QueuePlaybackController(
         if (_state.value.positionMs > PREVIOUS_RESTARTS_AFTER_MS || queueIndex == 0) {
             seekTo(0L)
         } else {
-            scope.launch { begin(queueIndex - 1, 0L) }
+            scope.launch {
+                synchronized(playbackLock) { playbackRequested = true }
+                begin(queueIndex - 1, 0L)
+            }
         }
     }
 
     override fun skipToQueueIndex(index: Int) {
         if (index in queue.indices && index != queueIndex) {
-            scope.launch { begin(index, 0L) }
+            scope.launch {
+                synchronized(playbackLock) { playbackRequested = true }
+                begin(index, 0L)
+            }
         }
     }
 
@@ -406,7 +520,10 @@ class QueuePlaybackController(
     override fun retry() {
         if (!_state.value.canRetry) return
         val index = queueIndex.takeIf { it in queue.indices } ?: return
-        scope.launch { begin(index, lastKnownPositionMs) }
+        scope.launch {
+            synchronized(playbackLock) { playbackRequested = true }
+            begin(index, lastKnownPositionMs)
+        }
     }
 
     override fun stop() {
@@ -414,15 +531,8 @@ class QueuePlaybackController(
     }
 
     override fun release() {
-        // Called from window close, off any coroutine. The save has to happen before the process
-        // goes away, so this is the one place that blocks — bounded, so a dead server cannot hold
-        // the window open.
-        // Cancel without joining: the job may be parked in the retry ladder, and the window must
-        // not wait for it. The save below reads `lastKnownPositionMs`, which the job has already
-        // published, so it does not need the job to finish first.
         playJob?.cancel()
-        // Local and synchronous, so it happens whether or not the server is reachable — the whole
-        // point of a local history is that closing the lid on a dead network still remembers.
+        refreshJob?.cancel()
         recordHistory()
         runBlocking {
             withTimeoutOrNull(RELEASE_TIMEOUT_MS) { saveProgressNow() }
@@ -449,6 +559,12 @@ class QueuePlaybackController(
     private suspend fun stopInternal(clearQueue: Boolean) {
         playJob?.cancelAndJoin()
         playJob = null
+        refreshJob?.cancel()
+        refreshJob = null
+        synchronized(playbackLock) {
+            playbackRequested = false
+            endedChapterId = null
+        }
         saveProgressNow()
         recordHistory()
         runCatching { engine.stop() }
@@ -458,8 +574,6 @@ class QueuePlaybackController(
             queueOwnerKey = ""
             queueIndex = 0
             lastKnownPositionMs = 0
-            // A stop is also the end of any sleep timer: the thing it was counting down to has
-            // already happened, and leaving it armed would silence the *next* chapter.
             sleepTimer.cancel()
             _state.value = emptyState()
         }
@@ -522,10 +636,27 @@ class QueuePlaybackController(
                 // chapter" has to prevent auto-advance, not stop the next one a moment after it
                 // has already started playing.
                 if (sleepTimer.shouldStopAtChapterEnd()) {
+                    synchronized(playbackLock) { playbackRequested = false }
                     _state.update { it.copy(isPlaying = false, positionMs = duration) }
                     return@launch
                 }
                 if (index == queue.lastIndex) {
+                    val request = synchronized(playbackLock) { queueRequest }
+                    val fictionId = (queueFiction?.id ?: queue.firstOrNull()?.resolvedFictionId)
+                        ?.takeIf { it > 0 }
+                    if (request != null && fictionId != null && synchronized(playbackLock) { playbackRequested }) {
+                        synchronized(playbackLock) { endedChapterId = chapter.resolvedChapterId }
+                        refreshQueue(request, fictionId, endedEvent = true)
+                        val newNext = synchronized(playbackLock) {
+                            if (queueIndex < queue.lastIndex) queueIndex + 1 else null
+                        }
+                        if (newNext != null && synchronized(playbackLock) { playbackRequested }) {
+                            index = newNext
+                            positionMs = 0L
+                            continue
+                        }
+                    }
+                    synchronized(playbackLock) { playbackRequested = false }
                     _state.update { it.copy(isPlaying = false, positionMs = duration) }
                     return@launch
                 }
@@ -574,6 +705,7 @@ class QueuePlaybackController(
                 is AttemptResult.Stopped -> return ChapterOutcome.Stopped
 
                 is AttemptResult.SleptOff -> {
+                    synchronized(playbackLock) { playbackRequested = false }
                     // A pause, not a stop: the queue and the position stay exactly where they are
                     // so the morning's "resume" is one keypress, not a search for the chapter.
                     engine.pause()
@@ -584,6 +716,7 @@ class QueuePlaybackController(
                 }
 
                 is AttemptResult.SessionExpired -> {
+                    synchronized(playbackLock) { playbackRequested = false }
                     _state.update { it.copy(isPlaying = false, error = result.failure.message, canRetry = false) }
                     // Same door as a 401 on an API call: drop the token and return to login rather
                     // than retrying a request that can only fail the same way.
@@ -592,6 +725,7 @@ class QueuePlaybackController(
                 }
 
                 is AttemptResult.Fatal -> {
+                    synchronized(playbackLock) { playbackRequested = false }
                     _state.update { it.copy(isPlaying = false, error = result.message, canRetry = true) }
                     return ChapterOutcome.Stopped
                 }
@@ -599,6 +733,7 @@ class QueuePlaybackController(
                 is AttemptResult.Transient -> {
                     resumeMs = lastKnownPositionMs
                     if (attempt >= retryDelaysMs.size) {
+                        synchronized(playbackLock) { playbackRequested = false }
                         _state.update { it.copy(isPlaying = false, error = result.message, canRetry = true) }
                         return ChapterOutcome.Stopped
                     }

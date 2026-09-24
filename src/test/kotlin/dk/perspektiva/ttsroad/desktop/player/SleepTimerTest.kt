@@ -244,4 +244,32 @@ class SleepTimerTest {
         assertEquals("0:05", formatRemaining(4_100))
         assertEquals("0:00", formatRemaining(0))
     }
+
+    @Test
+    fun `default constructor arms and ticks using monotonic clock millis`() {
+        val timer = SleepTimer()
+        timer.arm(SleepTimerMode.Duration(5))
+        assertTrue(timer.state.value.isArmed)
+        assertTrue(timer.state.value.remainingMs in 1..minutes(5))
+        assertNull(timer.tick())
+    }
+
+    @Test
+    fun `deadlines remain independent of wall clock changes`() {
+        var wallClock = 1_700_000_000_000L
+        var monotonicTime = 10_000_000L
+        val timer = SleepTimer { monotonicTime }
+        timer.arm(SleepTimerMode.Duration(15))
+
+        wallClock += 3_600_000L
+        assertNull(timer.tick())
+        assertEquals(minutes(15), timer.state.value.remainingMs)
+
+        wallClock -= 7_200_000L
+        assertNull(timer.tick())
+        assertEquals(minutes(15), timer.state.value.remainingMs)
+
+        monotonicTime += minutes(15)
+        assertEquals(SleepTimerEvent.Expired, timer.tick())
+    }
 }
