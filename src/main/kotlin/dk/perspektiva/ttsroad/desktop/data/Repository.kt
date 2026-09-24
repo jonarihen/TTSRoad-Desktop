@@ -530,7 +530,7 @@ class RetrofitTtsRoadRepository(
                         expiresAt = response.expiresAt,
                     ),
                 )
-                bindProgressOwner(sessionStore.current())
+                runCatching { bindProgressOwner(sessionStore.current()) }
                 _sessionEnd.value = null
             }
             // Forced: the previous answer may be from a different account or from before an

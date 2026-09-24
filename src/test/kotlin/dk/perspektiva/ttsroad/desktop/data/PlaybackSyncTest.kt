@@ -504,6 +504,25 @@ class PlaybackSyncTest {
     }
 
     @Test
+    fun `an unwritable progress outbox does not turn a successful login into a failure`() = runTest {
+        val failing = object : ProgressOutboxStore {
+            override val entries: StateFlow<List<PendingProgress>> = MutableStateFlow(emptyList())
+            override val owner: String? = null
+            override fun bindOwner(owner: String) = throw java.io.IOException("read-only config")
+            override fun record(entry: PendingProgress) = Unit
+            override fun drop(sent: Collection<PendingProgress>) = Unit
+            override fun clear() = Unit
+        }
+        sessionStore.clearToken()
+        val repository = repositoryWith(true, progressOutbox = failing)
+
+        signIn(repository, username = "reader")
+
+        assertTrue(sessionStore.current().isLoggedIn)
+        assertTrue(repository.currentCapabilities.value.batchProgress)
+    }
+
+    @Test
     fun `missing authenticated username never claims or creates persisted progress`() = runTest {
         val file = tempDir.resolve("unknown-owner.json")
         val original = sessionStore.current()

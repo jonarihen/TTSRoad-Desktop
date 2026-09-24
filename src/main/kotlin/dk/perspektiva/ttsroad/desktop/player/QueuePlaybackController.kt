@@ -402,7 +402,10 @@ class QueuePlaybackController(
         fresh: List<ChapterSummary>,
         currentChapterId: Int,
     ): List<ChapterSummary> {
-        if (fresh.isEmpty()) return existing
+        if (fresh.isEmpty()) {
+            val currentIndex = existing.indexOfFirst { it.resolvedChapterId == currentChapterId }
+            return if (currentIndex < 0) existing else existing.take(currentIndex + 1)
+        }
         val freshPlayable = fresh.filter { it.hasAudio }.distinctBy { it.resolvedChapterId }
         val current = existing.firstOrNull { it.resolvedChapterId == currentChapterId }
         val candidates = if (current != null && freshPlayable.none { it.resolvedChapterId == currentChapterId }) {

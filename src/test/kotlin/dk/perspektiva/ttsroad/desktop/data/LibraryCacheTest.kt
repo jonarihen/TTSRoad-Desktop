@@ -102,6 +102,28 @@ class LibraryCacheTest {
     }
 
     @Test
+    fun `a refresh that lands after local playback keeps the newer listening stamp`() = runTest {
+        val stale = LibraryResponse(
+            fictions = listOf(
+                FictionSummary(id = 1, title = "Other", progress = FictionProgress(lastListenedAt = "2026-09-24T10:00:00.000Z")),
+                FictionSummary(id = 2, title = "Now", progress = FictionProgress(lastListenedAt = "2026-09-23T10:00:00.000Z")),
+            ),
+        )
+        val repository = FakeRepository(libraryResult = Result.success(stale))
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureLibrary()
+        runCurrent()
+
+        cache.recordListening(2, "2026-09-24T12:00:00.000Z")
+        cache.refreshLibrary(forceFull = true)
+        runCurrent()
+
+        val fiction = cache.library.value.value!!.fictions.single { it.id == 2 }
+        assertEquals("2026-09-24T12:00:00.000Z", fiction.progress?.lastListenedAt)
+        cache.close()
+    }
+
+    @Test
     fun `a second ensure returns the cached library without asking again`() = runTest {
         // This is the whole point of the phase: Library to Fiction to Back costs no requests.
         val repository = FakeRepository(libraryResult = Result.success(library("A")))

@@ -286,7 +286,11 @@ fun FictionDetailScreen(
     // moment its chapters arrived. See [FictionSummary.following].
     var followOverride by remember(fiction.id) { mutableStateOf<Boolean?>(null) }
     var followBusy by remember(fiction.id) { mutableStateOf(false) }
-    val following = followOverride ?: fiction.following ?: cache.followingOf(fiction.id)
+    val shelf by cache.library.collectAsState()
+    val everything by cache.browseAll.collectAsState()
+    val following = followOverride ?: fiction.following ?: remember(shelf, everything, fiction.id) {
+        cache.followingOf(fiction.id)
+    }
 
     fun toggleFollow() {
         val target = !(following ?: false)
