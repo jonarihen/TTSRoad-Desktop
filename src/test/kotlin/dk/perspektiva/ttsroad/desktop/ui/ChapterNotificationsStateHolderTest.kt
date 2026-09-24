@@ -353,10 +353,12 @@ class ChapterNotificationsStateHolderTest {
         val holder = ChapterNotificationsStateHolder(repository, UnconfinedTestDispatcher(testScheduler))
         holder.refresh()
         runCurrent()
+        repository.chapterNotificationsResult = Result.success(response())
 
         holder.dismiss(holder.state.value.notifications.single())
         runCurrent()
 
+        assertTrue(holder.state.value.notifications.isEmpty())
         assertEquals("The server refused to clear that notice. Refresh and try again.", holder.state.value.error)
         holder.clear()
     }

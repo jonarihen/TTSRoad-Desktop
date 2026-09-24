@@ -639,6 +639,37 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `seeking while the final chapter refresh is in flight prevents auto advance`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val repository = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                entered.complete(Unit)
+                release.await()
+                return ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0)),
+                )
+            }
+        }
+        val controller = controllerFor(engine, sources = sources, repository = repository)
+        controller.playQueue(listOf(chapter(1, "One", 10.0)), startChapterId = 1, fiction = FictionSummary(id = 7))
+        controller.await("playing final known chapter") { it.isPlaying }
+
+        engine.emit(EngineEvent.Completed)
+        entered.await()
+        controller.seekTo(500)
+        release.complete(Unit)
+        kotlinx.coroutines.delay(100)
+
+        assertEquals(listOf(1), sources.requestedChapterIds.toList())
+        assertEquals(listOf(500L), engine.seeks.toList())
+        controller.release()
+    }
+
+    @Test
     fun `queue refresh stops asking the server while playback is paused`() = runBlocking {
         val engine = FakePlaybackEngine()
         val calls = java.util.concurrent.atomic.AtomicInteger()

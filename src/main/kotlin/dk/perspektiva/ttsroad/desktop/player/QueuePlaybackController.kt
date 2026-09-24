@@ -362,6 +362,7 @@ class QueuePlaybackController(
         synchronized(playbackLock) {
             if (!isCurrent(request) || request.generation != requestGeneration) return
         }
+        val seekGen = seekGeneration
         val loaded = try {
             repository.chapters(fictionId).chapters
         } catch (_: CancellationException) {
@@ -369,7 +370,6 @@ class QueuePlaybackController(
         } catch (_: Exception) {
             return
         }
-        val seekGen = seekGeneration
         synchronized(playbackLock) {
             if (!isCurrent(request) || request.generation != requestGeneration) return
             if (seekGeneration != seekGen) return

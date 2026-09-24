@@ -67,7 +67,7 @@ class ChapterNotificationsStateHolder(
         loadJob = scope.launch { load(version) }
     }
 
-    private suspend fun load(version: Long) {
+    private suspend fun load(version: Long, statusMessage: String? = null) {
         try {
             val response = repository.chapterNotifications()
             currentCoroutineContext().ensureActive()
@@ -89,7 +89,7 @@ class ChapterNotificationsStateHolder(
                     unread = response.unread,
                     ready = response.ready,
                     loading = false,
-                    error = null,
+                    error = statusMessage,
                     unsupported = false,
                     loaded = true,
                 )
@@ -135,7 +135,8 @@ class ChapterNotificationsStateHolder(
                     _state.update { it.copy(loading = true) }
                     load(version)
                 } else {
-                    _state.update { it.copy(error = refused) }
+                    _state.update { it.copy(loading = true, error = refused) }
+                    load(version, statusMessage = refused)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled

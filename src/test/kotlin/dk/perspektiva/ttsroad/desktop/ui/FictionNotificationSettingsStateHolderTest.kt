@@ -102,8 +102,12 @@ class FictionNotificationSettingsStateHolderTest {
         runCurrent()
 
         assertFalse(holder.state.value.dirty)
+        assertFalse(holder.state.value.canSave)
+        holder.save()
+        assertTrue(repo.fictionNotificationSettingsRequests.isEmpty())
         holder.setHours("5")
         assertTrue(holder.state.value.dirty)
+        assertTrue(holder.state.value.canSave)
         assertEquals(2.0, holder.state.value.settings?.backlogHours)
         assertEquals("5", holder.state.value.draft?.hours)
         holder.clear()

@@ -54,7 +54,7 @@ data class FictionNotificationSettingsUiState(
     val busy: Boolean get() = loading || saving
     val error: String? get() = saveError ?: loadError
     val canEdit: Boolean get() = visible && settings != null && draft != null && !busy
-    val canSave: Boolean get() = canEdit && settings?.let { draft?.request(it) } != null
+    val canSave: Boolean get() = canEdit && dirty && settings?.let { draft?.request(it) } != null
     val dirty: Boolean get() = settings?.let { saved ->
         draft?.let { it.mode != saved.mode || validBacklogHours(it.hours) != saved.backlogHours }
     } == true
