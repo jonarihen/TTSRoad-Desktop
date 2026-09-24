@@ -730,6 +730,77 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `seeking while completed progress is saving prevents auto advance`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val saveEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseSave = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val repository = object : FakeRepository() {
+            override suspend fun saveProgress(
+                fictionId: Int,
+                chapterId: Int,
+                positionSeconds: Double,
+                isPlayed: Boolean,
+            ) {
+                if (isPlayed) {
+                    saveEntered.complete(Unit)
+                    releaseSave.await()
+                }
+                super.saveProgress(fictionId, chapterId, positionSeconds, isPlayed)
+            }
+
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse =
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0)),
+                )
+        }
+        val controller = controllerFor(engine, sources = sources, repository = repository)
+        controller.playQueue(listOf(chapter(1, "One", 10.0)), startChapterId = 1, fiction = FictionSummary(id = 7))
+        controller.await("playing final known chapter") { it.isPlaying }
+
+        engine.emit(EngineEvent.Completed)
+        saveEntered.await()
+        controller.seekTo(500)
+        releaseSave.complete(Unit)
+        kotlinx.coroutines.delay(100)
+
+        assertEquals(listOf(1), sources.requestedChapterIds.toList())
+        assertEquals(listOf(500L), engine.seeks.toList())
+        controller.release()
+    }
+
+    @Test
+    fun `refresh removes future chapters the server no longer reports as playable`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val repository = FakeRepository()
+        repository.chaptersResult = Result.success(
+            ChaptersResponse(
+                fiction = FictionSummary(id = 7),
+                chapters = listOf(
+                    chapter(1, "One", 10.0),
+                    chapter(2, "Two", 10.0).copy(playable = false, audio = null),
+                    chapter(3, "Three", 10.0),
+                ),
+            ),
+        )
+        val controller = controllerFor(engine, sources = sources, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(
+            listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0), chapter(3, "Three", 10.0)),
+            startChapterId = 1,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("chapter 2 removed") { it.queue.map { item -> item.chapterId } == listOf(1, 3) }
+
+        engine.emit(EngineEvent.Completed)
+        controller.await("chapter 3 playing") { it.currentIndex == 1 && sources.requestedChapterIds.contains(3) }
+
+        assertEquals(listOf(1, 3), sources.requestedChapterIds.toList())
+        controller.release()
+    }
+
+    @Test
     fun `queue refresh stops asking the server while playback is paused`() = runBlocking {
         val engine = FakePlaybackEngine()
         val calls = java.util.concurrent.atomic.AtomicInteger()

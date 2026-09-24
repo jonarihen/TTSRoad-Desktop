@@ -322,6 +322,24 @@ class LibraryCache(
         restorePlayback(fictionId, rejected)
     }
 
+    fun recordListening(fictionId: Int, listenedAt: String = nowStamp()) {
+        fun FictionSummary.patched(): FictionSummary =
+            if (id != fictionId) {
+                this
+            } else {
+                val progress = progress ?: FictionProgress()
+                copy(progress = progress.copy(lastListenedAt = listenedAt))
+            }
+        _library.update { cached ->
+            val library = cached.value ?: return@update cached
+            cached.copy(value = library.copy(fictions = library.fictions.map { it.patched() }))
+        }
+        _browseAll.update { cached ->
+            val library = cached.value ?: return@update cached
+            cached.copy(value = library.copy(fictions = library.fictions.map { it.patched() }))
+        }
+    }
+
     /** Patches the cached rows without a request. Public so a test can pin the identity rule. */
     fun applyPlayed(fictionId: Int, chapterIds: List<Int>, played: Boolean) {
         val state = chapterStates[fictionId] ?: return

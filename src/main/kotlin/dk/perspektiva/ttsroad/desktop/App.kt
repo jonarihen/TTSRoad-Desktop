@@ -237,6 +237,11 @@ fun App(
     val screenState = rememberSaveableStateHolder()
     val nav = remember { NavigationState(onDestinationDropped = screenState::removeState) }
     val playerState by playback.state.collectAsState()
+    val listeningChapterId = playerState.queue.getOrNull(playerState.currentIndex)?.chapterId
+    LaunchedEffect(playerState.fictionId, listeningChapterId, playerState.isPlaying) {
+        val fictionId = playerState.fictionId
+        if (playerState.isPlaying && fictionId > 0) cache.recordListening(fictionId)
+    }
 
     val scope = rememberCoroutineScope()
 

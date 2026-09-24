@@ -65,6 +65,43 @@ class LibraryCacheTest {
     }
 
     @Test
+    fun `recording playback moves a fiction in recently listened order without a refetch`() = runTest {
+        val repository = FakeRepository(
+            libraryResult = Result.success(
+                LibraryResponse(
+                    fictions = listOf(
+                        FictionSummary(
+                            id = 1,
+                            title = "Earlier",
+                            progress = FictionProgress(lastListenedAt = "2026-09-24T10:00:00.000Z"),
+                        ),
+                        FictionSummary(
+                            id = 2,
+                            title = "Now",
+                            progress = FictionProgress(lastListenedAt = "2026-09-23T10:00:00.000Z"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val cache = LibraryCache(repository, UnconfinedTestDispatcher(testScheduler))
+        cache.ensureLibrary()
+        runCurrent()
+
+        cache.recordListening(2, "2026-09-24T12:00:00.000Z")
+
+        val ordered = browseFictions(
+            cache.library.value.value!!.fictions,
+            query = "",
+            tags = emptySet(),
+            sort = FictionSort.RecentlyListened,
+        )
+        assertEquals(listOf(2, 1), ordered.fictions.map { it.id })
+        assertEquals(1, repository.libraryCalls)
+        cache.close()
+    }
+
+    @Test
     fun `a second ensure returns the cached library without asking again`() = runTest {
         // This is the whole point of the phase: Library to Fiction to Back costs no requests.
         val repository = FakeRepository(libraryResult = Result.success(library("A")))

@@ -380,7 +380,7 @@ class QueuePlaybackController(
             if (seekGeneration != seekGen) return
             val currentChapterId = queue.getOrNull(queueIndex)?.resolvedChapterId ?: return
             val oldQueue = queue
-            val merged = mergeQueue(oldQueue, loaded).filter { it.hasAudio }.distinctBy { it.resolvedChapterId }
+            val merged = mergeQueue(oldQueue, loaded, currentChapterId)
             if (merged.isEmpty()) return
             val newIndex = merged.indexOfFirst { it.resolvedChapterId == currentChapterId }
             if (newIndex < 0) return
@@ -400,21 +400,17 @@ class QueuePlaybackController(
     private fun mergeQueue(
         existing: List<ChapterSummary>,
         fresh: List<ChapterSummary>,
+        currentChapterId: Int,
     ): List<ChapterSummary> {
-        val freshPlayable = fresh.playbackOrder().filter { it.hasAudio }.distinctBy { it.resolvedChapterId }
-        if (freshPlayable.isEmpty()) return existing
-        val freshById = freshPlayable.associateBy { it.resolvedChapterId }
-        val presentIds = existing.map { it.resolvedChapterId }.toMutableSet()
-        val result = existing.map { freshById[it.resolvedChapterId] ?: it }.toMutableList()
-
-        for ((index, chapter) in freshPlayable.withIndex()) {
-            if (!presentIds.add(chapter.resolvedChapterId)) continue
-            val following = freshPlayable.drop(index + 1).map { it.resolvedChapterId }.toSet()
-            val insertion = result.indexOfFirst { it.resolvedChapterId in following }
-                .takeIf { it >= 0 } ?: result.size
-            result.add(insertion, chapter)
+        if (fresh.isEmpty()) return existing
+        val freshPlayable = fresh.filter { it.hasAudio }.distinctBy { it.resolvedChapterId }
+        val current = existing.firstOrNull { it.resolvedChapterId == currentChapterId }
+        val candidates = if (current != null && freshPlayable.none { it.resolvedChapterId == currentChapterId }) {
+            freshPlayable + current
+        } else {
+            freshPlayable
         }
-        return result
+        return candidates.playbackOrder().distinctBy { it.resolvedChapterId }
     }
 
     override fun togglePlayPause() {
@@ -627,7 +623,11 @@ class QueuePlaybackController(
         } ?: return
         val resolvedIndex = synchronized(playbackLock) {
             queue.indexOfFirst { it.resolvedChapterId == targetChapterId }.takeIf { it >= 0 }
-        } ?: return
+        } ?: run {
+            synchronized(playbackLock) { playbackRequested = false }
+            _state.update { it.copy(isPlaying = false) }
+            return
+        }
         queueIndex = resolvedIndex
         lastKnownPositionMs = startMs
         publishMetadata(targetChapterId, startMs)
@@ -643,12 +643,18 @@ class QueuePlaybackController(
                 if (outcome == ChapterOutcome.Stopped) return@launch
 
                 // Reaching here means the chapter ended on its own.
+                val completionSeekGeneration = synchronized(playbackLock) { seekGeneration }
                 val duration = _state.value.durationMs
                 saveProgress(chapter, duration.takeIf { it > 0 } ?: lastKnownPositionMs, isPlayed = true)
                 // A chapter that ran to its end is the only thing this client can honestly call
                 // "finished": marking one played by hand says the listener is done with it, not
                 // that they heard it.
                 flushListening(chaptersFinished = 1)
+                if (synchronized(playbackLock) { seekGeneration != completionSeekGeneration }) {
+                    synchronized(playbackLock) { playbackRequested = false }
+                    _state.update { it.copy(isPlaying = false) }
+                    return@launch
+                }
 
                 // Checked before the advance, which is the whole requirement: "end of current
                 // chapter" has to prevent auto-advance, not stop the next one a moment after it
