@@ -182,7 +182,11 @@ class HttpEpubExportDownloader(
                 coroutineContext.ensureActive()
                 if (!operation.publish {
                         coroutineContext.ensureActive()
-                        Files.move(part, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                        try {
+                            Files.move(part, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                            Files.move(part, target, StandardCopyOption.REPLACE_EXISTING)
+                        }
                     }
                 ) throw CancellationException("EPUB export cancelled")
                 EpubDownloadResult.Success(target.toFile(), written)

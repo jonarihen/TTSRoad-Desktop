@@ -243,6 +243,7 @@ fun FictionDetailScreen(
     maintenance: ChapterMaintenanceUi = ChapterMaintenanceUi(),
     fictionManagement: FictionManagementUiState = FictionManagementUiState(),
     epub: EpubExportUi = EpubExportUi(),
+    onNotificationSettingsSaved: () -> Unit = {},
     onEditFiction: (FictionSummary) -> Unit = {},
     onDeleteFiction: (FictionSummary) -> Unit = {},
     nowMillis: () -> Long = System::currentTimeMillis,
@@ -407,6 +408,7 @@ fun FictionDetailScreen(
                                 fictionId = header.id,
                                 isFollowed = following ?: false,
                                 sessionKey = repository,
+                                onSaved = onNotificationSettingsSaved,
                             )
                         },
                         compact = compact,

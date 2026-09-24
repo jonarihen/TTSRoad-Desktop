@@ -640,7 +640,11 @@ class QueuePlaybackController(
                     _state.update { it.copy(isPlaying = false, positionMs = duration) }
                     return@launch
                 }
-                if (index == queue.lastIndex) {
+                index = synchronized(playbackLock) {
+                    queue.indexOfFirst { it.resolvedChapterId == chapter.resolvedChapterId }
+                        .takeIf { it >= 0 } ?: index
+                }
+                if (index >= queue.lastIndex) {
                     val request = synchronized(playbackLock) { queueRequest }
                     val fictionId = (queueFiction?.id ?: queue.firstOrNull()?.resolvedFictionId)
                         ?.takeIf { it > 0 }

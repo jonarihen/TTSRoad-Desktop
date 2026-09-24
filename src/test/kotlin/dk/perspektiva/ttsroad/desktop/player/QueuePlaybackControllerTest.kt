@@ -639,6 +639,41 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `an earlier chapter inserted by refresh does not replay the current one when it ends`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val repository = FakeRepository()
+        repository.chaptersResult = Result.success(
+            ChaptersResponse(
+                fiction = FictionSummary(id = 7),
+                chapters = listOf(
+                    chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                    chapter(2, "Two", 10.0).copy(displayNumber = 2.0),
+                    chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                    chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+                ),
+            ),
+        )
+        val controller = controllerFor(engine, sources = sources, repository = repository, queueRefreshIntervalMs = 50)
+
+        controller.playQueue(
+            listOf(
+                chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+            ),
+            startChapterId = 3,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("queue grown around chapter 3") { it.isPlaying && it.queue.size == 4 && it.currentIndex == 2 }
+
+        engine.emit(EngineEvent.Completed)
+        controller.await("chapter 4 playing") { it.currentIndex == 3 }
+
+        assertEquals(listOf(3, 4), sources.requestedChapterIds.toList())
+        controller.release()
+    }
+
+    @Test
     fun `offline failure during queue refresh retains existing queue and auto advance continues`() = runBlocking {
         val engine = FakePlaybackEngine(completeOnPlay = true)
         val repository = object : FakeRepository() {

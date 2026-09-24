@@ -422,12 +422,15 @@ class ReaderScreenUiTest {
             compose.waitForIdle()
             assertEquals(before, compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode().positionInRoot)
             val actions = compose.onNodeWithTag(ReaderParagraphTestTag).fetchSemanticsNode().config[SemanticsActions.CustomActions]
-            compose.runOnIdle { actions.first { it.label == "Seek to paragraph start" }.action() }
-            compose.onNodeWithText("BACK TO CURRENT").assertIsDisplayed()
-            compose.runOnIdle { player.emit(player.state.value.copy(positionMs = position)) }
             compose.onNodeWithText("BACK TO CURRENT").performClick()
             compose.waitForIdle()
             assertSpokenLineVisible(document, position)
+            compose.onNodeWithTag(ReaderListTestTag).performMouseInput { scroll(2f) }
+            compose.waitForIdle()
+            compose.onNodeWithText("BACK TO CURRENT").assertIsDisplayed()
+            compose.runOnIdle { actions.first { it.label == "Seek to paragraph start" }.action() }
+            compose.waitForIdle()
+            compose.onNodeWithText("BACK TO CURRENT").assertDoesNotExist()
         }
     }
 

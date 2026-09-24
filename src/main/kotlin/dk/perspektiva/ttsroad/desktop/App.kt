@@ -683,13 +683,16 @@ fun App(
                                          },
                                      ),
                                      fictionManagement = fictionManagementState,
-                                     epub = EpubExportUi(
-                                         available = capabilities.ebookExport,
-                                         isBusy = epubExportState.isBusy,
-                                         notice = epubExportState.notice,
-                                         error = epubExportState.error,
-                                         onExport = { epubExport.download(destination.fiction) },
-                                     ),
+                                    epub = EpubExportUi(
+                                        available = capabilities.ebookExport,
+                                        isBusy = epubExportState.isBusy,
+                                        notice = epubExportState.notice
+                                            .takeIf { epubExportState.fictionId == destination.fiction.id },
+                                        error = epubExportState.error
+                                            .takeIf { epubExportState.fictionId == destination.fiction.id },
+                                        onExport = { epubExport.download(destination.fiction) },
+                                    ),
+                                    onNotificationSettingsSaved = chapterNotifications::refresh,
                                      onEditFiction = { nav.open(Destination.FictionMetadata(it)) },
                                      onDeleteFiction = fictionManagement::askDelete,
                                  )

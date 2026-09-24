@@ -484,6 +484,7 @@ private fun ReaderDocumentPage(
         if (!isPlayingThisChapter || !timingsMatch) return
         val positionMs = document.seekMillisForOffset(offset) ?: return
         playback.seekTo(positionMs)
+        followPlayback = readerFollowAfter(followPlayback, ReaderFollowEvent.BackToCurrent)
     }
 
     fun handleKey(key: Key): Boolean = when (key) {
