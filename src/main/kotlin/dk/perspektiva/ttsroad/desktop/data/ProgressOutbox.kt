@@ -153,7 +153,12 @@ class FileProgressOutboxStore(private val file: File) : ProgressOutboxStore {
     /** Used when the credential dies: a queue that cannot be authenticated can never be flushed. */
     @Synchronized
     override fun clear() {
-        write(StoredOutbox())
+        try {
+            write(StoredOutbox())
+        } finally {
+            stored = StoredOutbox()
+            _entries.value = emptyList()
+        }
     }
 
     private fun write(next: StoredOutbox) {

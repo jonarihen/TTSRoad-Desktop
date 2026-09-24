@@ -639,7 +639,11 @@ class QueuePlaybackController(
             var chapterId = targetChapterId
             var positionMs = startMs
             while (isActive) {
-                val chapter = publishMetadata(chapterId, positionMs) ?: return@launch
+                val chapter = publishMetadata(chapterId, positionMs) ?: run {
+                    synchronized(playbackLock) { playbackRequested = false }
+                    _state.update { it.copy(isPlaying = false) }
+                    return@launch
+                }
                 loadPlaybackSkips(chapter.resolvedChapterId)
 
                 val outcome = playChapter(chapter, positionMs)

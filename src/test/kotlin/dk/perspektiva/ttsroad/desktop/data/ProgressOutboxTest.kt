@@ -6,6 +6,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ProgressOutboxTest {
@@ -177,6 +178,21 @@ class FileProgressOutboxStoreTest {
         store.drop(store.entries.value.filter { it.chapterId == 7 })
 
         assertEquals(listOf(8), FileProgressOutboxStore(file).entries.value.map { it.chapterId })
+    }
+
+    @Test
+    fun `clear forgets in-memory progress even when the file cannot be replaced`() {
+        val store = store()
+        store.record(entry(7, 120.0))
+        val parent = file.parentFile
+        parent.deleteRecursively()
+        parent.writeText("not a directory")
+
+        kotlin.test.assertFails { store.clear() }
+
+        assertNull(store.owner)
+        assertTrue(store.entries.value.isEmpty())
+        parent.delete()
     }
 
     @Test

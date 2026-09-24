@@ -39,6 +39,7 @@ private class RecordingOutbox(initial: List<PendingProgress> = emptyList()) : Pr
     override val entries: StateFlow<List<PendingProgress>> = _entries
     var cleared: Boolean = false
         private set
+    var failClear: Boolean = false
 
     override var owner: String? = null
         private set
@@ -72,6 +73,7 @@ private class RecordingOutbox(initial: List<PendingProgress> = emptyList()) : Pr
     @Synchronized
     override fun clear() {
         cleared = true
+        if (failClear) throw java.io.IOException("read-only config")
         owner = null
         _entries.value = emptyList()
     }
@@ -501,6 +503,18 @@ class PlaybackSyncTest {
         repository.flushProgress()
         assertEquals("Bearer ttsr_new", server.takeRequest().headers["Authorization"])
         assertTrue(FileProgressOutboxStore(file).entries.value.isEmpty())
+    }
+
+    @Test
+    fun `an outbox clear failure does not hide why the session ended`() = runTest {
+        val repository = repositoryWith(true)
+        outbox.failClear = true
+        val end = SessionEnd(SessionEndReason.Revoked, "Revoked from another device")
+
+        repository.endSession(end)
+
+        assertTrue(!sessionStore.current().isLoggedIn)
+        assertEquals(end, repository.sessionEnd.value)
     }
 
     @Test

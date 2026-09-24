@@ -809,6 +809,52 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `a navigation target removed before transition clears the playing state`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val refreshEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseRefresh = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val saveEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseSave = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val repository = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                refreshEntered.complete(Unit)
+                releaseRefresh.await()
+                return ChaptersResponse(fiction = FictionSummary(id = 7), chapters = listOf(chapter(1, "One", 10.0)))
+            }
+
+            override suspend fun saveProgress(
+                fictionId: Int,
+                chapterId: Int,
+                positionSeconds: Double,
+                isPlayed: Boolean,
+            ) {
+                saveEntered.complete(Unit)
+                releaseSave.await()
+                super.saveProgress(fictionId, chapterId, positionSeconds, isPlayed)
+            }
+        }
+        val controller = controllerFor(engine, sources = sources, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(
+            listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0)),
+            startChapterId = 1,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("chapter 1 playing") { it.isPlaying }
+        refreshEntered.await()
+
+        controller.skipToNextChapter()
+        saveEntered.await()
+        releaseRefresh.complete(Unit)
+        controller.await("target removed") { it.queue.map { item -> item.chapterId } == listOf(1) }
+        releaseSave.complete(Unit)
+        controller.await("playback stopped") { !it.isPlaying }
+
+        assertEquals(listOf(1), sources.requestedChapterIds.toList())
+        controller.release()
+    }
+
+    @Test
     fun `an empty refresh drops future chapters so playback does not advance into removed audio`() = runBlocking {
         val engine = FakePlaybackEngine()
         val sources = FakeMediaSourceFactory()

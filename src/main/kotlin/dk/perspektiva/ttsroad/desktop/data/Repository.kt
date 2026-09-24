@@ -576,7 +576,7 @@ class RetrofitTtsRoadRepository(
             sessionGeneration++
             sessionStore.clearToken()
             forgetSessionScopedState(session.state.serverUrl)
-            progressOutbox.clear()
+            runCatching { progressOutbox.clear() }
             _sessionEnd.value = end
         }
     }
