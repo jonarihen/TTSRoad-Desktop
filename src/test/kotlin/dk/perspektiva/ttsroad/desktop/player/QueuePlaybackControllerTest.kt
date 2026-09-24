@@ -771,6 +771,44 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `pausing after refresh inserts an earlier chapter saves progress for the playing chapter`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val repository = FakeRepository()
+        repository.chaptersResult = Result.success(
+            ChaptersResponse(
+                fiction = FictionSummary(id = 7),
+                chapters = listOf(
+                    chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                    chapter(2, "Two", 10.0).copy(displayNumber = 2.0),
+                    chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                    chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+                ),
+            ),
+        )
+        val controller = controllerFor(engine, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(
+            listOf(
+                chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+            ),
+            startChapterId = 3,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("queue grown around chapter 3") { it.isPlaying && it.queue.size == 4 && it.currentIndex == 2 }
+        engine.setPosition(4_000)
+        repository.savedProgress.clear()
+
+        controller.togglePlayPause()
+        controller.await("paused") { !it.isPlaying }
+        kotlinx.coroutines.delay(50)
+
+        assertTrue(repository.savedProgress.isNotEmpty())
+        assertTrue(repository.savedProgress.all { it.first == 3 })
+        controller.release()
+    }
+
+    @Test
     fun `an empty refresh drops future chapters so playback does not advance into removed audio`() = runBlocking {
         val engine = FakePlaybackEngine()
         val sources = FakeMediaSourceFactory()

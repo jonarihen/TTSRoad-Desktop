@@ -205,6 +205,14 @@ class FictionNotificationSettingsStateHolderTest {
 
         assertTrue(holder.state.value.stale)
         assertNotNull(holder.state.value.error)
+
+        repo.fictionNotificationSettingsResult = Result.success(settings(NotificationModeOff, 2.0))
+        holder.refresh()
+        runCurrent()
+
+        assertFalse(holder.state.value.stale)
+        assertNull(holder.state.value.error)
+        assertEquals(NotificationModeOff, holder.state.value.settings?.mode)
         holder.clear()
     }
 

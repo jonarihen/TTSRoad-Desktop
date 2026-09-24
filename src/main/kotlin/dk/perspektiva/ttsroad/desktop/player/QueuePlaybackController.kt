@@ -899,6 +899,9 @@ class QueuePlaybackController(
         is PlaybackFailure.Fatal -> AttemptResult.Fatal(message)
     }
 
+    private fun currentQueueChapter(): ChapterSummary? =
+        synchronized(playbackLock) { queue.getOrNull(queueIndex) }
+
     private fun publishMetadata(chapterId: Int, positionMs: Long): ChapterSummary? =
         synchronized(playbackLock) {
             val index = queue.indexOfFirst { it.resolvedChapterId == chapterId }
@@ -957,7 +960,7 @@ class QueuePlaybackController(
     private fun recordHistory() {
         // Every transition that files a snapshot is also a good moment to bank the minutes.
         flushListening()
-        val chapter = queue.getOrNull(queueIndex) ?: return
+        val chapter = currentQueueChapter() ?: return
         val current = _state.value
         if (!current.hasMedia) return
         val fictionId = chapter.resolvedFictionId
@@ -1004,7 +1007,7 @@ class QueuePlaybackController(
     }
 
     private suspend fun saveProgressNow() {
-        val chapter = queue.getOrNull(queueIndex) ?: return
+        val chapter = currentQueueChapter() ?: return
         if (!_state.value.hasMedia) return
         saveProgress(chapter, lastKnownPositionMs, isPlayed = isEffectivelyComplete())
     }

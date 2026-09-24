@@ -129,7 +129,8 @@ class FictionNotificationSettingsStateHolder(
                             draft = if (keepDraft) it.draft else FictionNotificationDraft.from(settings),
                             loading = false,
                             loadError = null,
-                            stale = it.saveError != null,
+                            saveError = null,
+                            stale = false,
                         )
                     }
                 }
