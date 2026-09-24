@@ -339,7 +339,12 @@ class QueuePlaybackController(
             val requestedFound = playable[startIndex].resolvedChapterId == startChapterId
             val startMs = startPositionMs?.takeIf { requestedFound }?.coerceAtLeast(0L)
                 ?: resumeMsOf(playable[startIndex])
-            begin(startIndex, startMs, leaveCurrent = false)
+            begin(
+                startIndex,
+                startMs,
+                leaveCurrent = false,
+                expectedChapterId = playable[startIndex].resolvedChapterId,
+            )
             startQueueRefresh(request, fictionId, immediate = refreshImmediately)
         }
     }
@@ -362,7 +367,7 @@ class QueuePlaybackController(
         synchronized(playbackLock) {
             if (!isCurrent(request) || request.generation != requestGeneration) return
         }
-        val seekGen = seekGeneration
+        val seekGen = synchronized(playbackLock) { seekGeneration }
         val loaded = try {
             repository.chapters(fictionId).chapters
         } catch (_: CancellationException) {
@@ -436,7 +441,7 @@ class QueuePlaybackController(
 
     override fun seekTo(positionMs: Long) {
         if (!_state.value.hasMedia) return
-        seekGeneration++
+        synchronized(playbackLock) { seekGeneration++ }
         val clamped = positionMs.coerceIn(0L, _state.value.durationMs.coerceAtLeast(0L))
         engine.seekTo(clamped)
         lastKnownPositionMs = clamped
@@ -451,10 +456,10 @@ class QueuePlaybackController(
     override fun skipBackward() = skipBy(-preferencesStore.preferences.value.skipIntervalMs)
 
     override fun skipToNextChapter() {
-        val next = queueIndex + 1
-        if (next in queue.indices) scope.launch {
+        val targetId = synchronized(playbackLock) { queue.getOrNull(queueIndex + 1)?.resolvedChapterId } ?: return
+        scope.launch {
             synchronized(playbackLock) { playbackRequested = true }
-            begin(next, 0L)
+            begin(0, 0L, expectedChapterId = targetId)
         }
     }
 
@@ -463,19 +468,23 @@ class QueuePlaybackController(
         if (_state.value.positionMs > PREVIOUS_RESTARTS_AFTER_MS || queueIndex == 0) {
             seekTo(0L)
         } else {
+            val targetId = synchronized(playbackLock) {
+                queue.getOrNull(queueIndex - 1)?.resolvedChapterId
+            } ?: return
             scope.launch {
                 synchronized(playbackLock) { playbackRequested = true }
-                begin(queueIndex - 1, 0L)
+                begin(0, 0L, expectedChapterId = targetId)
             }
         }
     }
 
     override fun skipToQueueIndex(index: Int) {
-        if (index in queue.indices && index != queueIndex) {
-            scope.launch {
-                synchronized(playbackLock) { playbackRequested = true }
-                begin(index, 0L)
-            }
+        val targetId = synchronized(playbackLock) {
+            queue.getOrNull(index)?.takeIf { index != queueIndex }?.resolvedChapterId
+        } ?: return
+        scope.launch {
+            synchronized(playbackLock) { playbackRequested = true }
+            begin(0, 0L, expectedChapterId = targetId)
         }
     }
 
@@ -519,10 +528,10 @@ class QueuePlaybackController(
 
     override fun retry() {
         if (!_state.value.canRetry) return
-        val index = queueIndex.takeIf { it in queue.indices } ?: return
+        val targetId = synchronized(playbackLock) { queue.getOrNull(queueIndex)?.resolvedChapterId } ?: return
         scope.launch {
             synchronized(playbackLock) { playbackRequested = true }
-            begin(index, lastKnownPositionMs)
+            begin(0, lastKnownPositionMs, expectedChapterId = targetId)
         }
     }
 
@@ -601,19 +610,32 @@ class QueuePlaybackController(
         recordHistory()
     }
 
-    private suspend fun begin(startIndex: Int, startMs: Long, leaveCurrent: Boolean = true) {
+    private suspend fun begin(
+        startIndex: Int,
+        startMs: Long,
+        leaveCurrent: Boolean = true,
+        expectedChapterId: Int? = null,
+    ) {
         if (leaveCurrent) {
             leaveCurrentChapter()
         } else {
             playJob?.cancelAndJoin()
             playJob = null
         }
-        queueIndex = startIndex
+        val targetChapterId = synchronized(playbackLock) {
+            expectedChapterId ?: queue.getOrNull(startIndex)?.resolvedChapterId
+        } ?: return
+        val resolvedIndex = synchronized(playbackLock) {
+            queue.indexOfFirst { it.resolvedChapterId == targetChapterId }.takeIf { it >= 0 }
+        } ?: return
+        queueIndex = resolvedIndex
         lastKnownPositionMs = startMs
-        publishMetadata(startIndex, startMs)
+        publishMetadata(resolvedIndex, startMs)
 
         playJob = scope.launch {
-            var index = startIndex
+            var index = synchronized(playbackLock) {
+                queue.indexOfFirst { it.resolvedChapterId == targetChapterId }
+            }
             var positionMs = startMs
             while (isActive && index in queue.indices) {
                 queueIndex = index

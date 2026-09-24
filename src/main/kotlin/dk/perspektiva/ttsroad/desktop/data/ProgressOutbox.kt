@@ -91,6 +91,7 @@ interface ProgressOutboxStore {
     val entries: StateFlow<List<PendingProgress>>
     val owner: String?
     fun bindOwner(owner: String)
+    fun migrateOwner(previousOwner: String, owner: String): Boolean = false
     fun record(entry: PendingProgress)
     fun drop(sent: Collection<PendingProgress>)
     fun clear()
@@ -123,6 +124,14 @@ class FileProgressOutboxStore(private val file: File) : ProgressOutboxStore {
     override fun bindOwner(owner: String) {
         require(owner.isNotBlank())
         if (stored.owner != owner) write(StoredOutbox(owner = owner))
+    }
+
+    @Synchronized
+    override fun migrateOwner(previousOwner: String, owner: String): Boolean {
+        require(previousOwner.isNotBlank() && owner.isNotBlank())
+        if (stored.owner != previousOwner) return false
+        write(stored.copy(owner = owner))
+        return true
     }
 
     /**

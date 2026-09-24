@@ -216,6 +216,35 @@ class FileProgressOutboxStoreTest {
     }
 
     @Test
+    fun `moving from connect address to advertised identity preserves queued progress`() {
+        val store = store()
+        val pending = entry(7, 120.0)
+        store.record(pending)
+        val advertisedOwner = StorageIdentity.of(
+            "https://lan.example/",
+            "https://public.example/",
+            "Reader",
+        ).relativePath
+
+        assertTrue(store.migrateOwner(owner, advertisedOwner))
+
+        val reopened = FileProgressOutboxStore(file)
+        assertEquals(advertisedOwner, reopened.owner)
+        assertEquals(listOf(pending), reopened.entries.value)
+    }
+
+    @Test
+    fun `owner migration refuses a different account or server`() {
+        val store = store()
+        val pending = entry(7, 120.0)
+        store.record(pending)
+
+        assertTrue(!store.migrateOwner("somebody-else", "new-owner"))
+        assertEquals(owner, store.owner)
+        assertEquals(listOf(pending), store.entries.value)
+    }
+
+    @Test
     fun `a different account or server cannot adopt persisted progress`() {
         val owners = listOf(
             StorageIdentity.of("https://server.example/", username = "reader"),

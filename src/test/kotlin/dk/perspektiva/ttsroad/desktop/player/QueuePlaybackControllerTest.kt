@@ -639,6 +639,64 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `next chapter navigation keeps its target when refresh inserts an earlier chapter`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val refreshEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseRefresh = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val saveEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseSave = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val repository = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                refreshEntered.complete(Unit)
+                releaseRefresh.await()
+                return ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(
+                        chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                        chapter(2, "Two", 10.0).copy(displayNumber = 2.0),
+                        chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                        chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+                    ),
+                )
+            }
+
+            override suspend fun saveProgress(
+                fictionId: Int,
+                chapterId: Int,
+                positionSeconds: Double,
+                isPlayed: Boolean,
+            ) {
+                saveEntered.complete(Unit)
+                releaseSave.await()
+                super.saveProgress(fictionId, chapterId, positionSeconds, isPlayed)
+            }
+        }
+        val controller = controllerFor(engine, sources = sources, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(
+            listOf(
+                chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+            ),
+            startChapterId = 3,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("chapter 3 playing") { it.isPlaying && it.currentIndex == 1 }
+        refreshEntered.await()
+
+        controller.skipToNextChapter()
+        saveEntered.await()
+        releaseRefresh.complete(Unit)
+        controller.await("queue refreshed") { it.queue.map { item -> item.chapterId } == listOf(1, 2, 3, 4) }
+        releaseSave.complete(Unit)
+        controller.await("chapter 4 playing") { it.currentIndex == 3 }
+
+        assertEquals(listOf(3, 4), sources.requestedChapterIds.toList())
+        controller.release()
+    }
+
+    @Test
     fun `seeking while the final chapter refresh is in flight prevents auto advance`() = runBlocking {
         val engine = FakePlaybackEngine()
         val sources = FakeMediaSourceFactory()

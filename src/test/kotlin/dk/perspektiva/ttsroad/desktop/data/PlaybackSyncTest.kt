@@ -52,6 +52,13 @@ private class RecordingOutbox(initial: List<PendingProgress> = emptyList()) : Pr
     }
 
     @Synchronized
+    override fun migrateOwner(previousOwner: String, owner: String): Boolean {
+        if (this.owner != previousOwner) return false
+        this.owner = owner
+        return true
+    }
+
+    @Synchronized
     override fun record(entry: PendingProgress) {
         check(owner != null)
         _entries.value = ProgressOutbox.record(_entries.value, entry)

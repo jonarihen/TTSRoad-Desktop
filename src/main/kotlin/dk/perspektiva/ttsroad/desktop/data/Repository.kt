@@ -1118,7 +1118,14 @@ class RetrofitTtsRoadRepository(
 
     private fun bindProgressOwner(session: SessionState): Boolean {
         if (!session.isLoggedIn || session.username.isNullOrBlank()) return false
-        progressOutbox.bindOwner(StorageIdentity.of(session.serverUrl, username = session.username).relativePath)
+        val owner = StorageIdentity.of(
+            session.serverUrl,
+            session.advertisedBaseUrl,
+            session.username,
+        ).relativePath
+        val fallbackOwner = StorageIdentity.of(session.serverUrl, username = session.username).relativePath
+        if (owner != fallbackOwner) progressOutbox.migrateOwner(fallbackOwner, owner)
+        progressOutbox.bindOwner(owner)
         return true
     }
 
