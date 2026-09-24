@@ -4,9 +4,11 @@ import dk.perspektiva.ttsroad.desktop.FakeRepository
 import dk.perspektiva.ttsroad.desktop.data.ChapterRetryOutcome
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionMaintenanceAction
+import dk.perspektiva.ttsroad.desktop.data.FictionPollScope
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.MaintenanceResponse
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
+import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -307,6 +309,74 @@ class ChapterMaintenanceStateHolderTest {
             "both write to the same fiction; the second would race the first",
         )
         assertEquals(1, fixture.repository.fictionMaintenanceCalls.size)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `scoped poll passes parameters and updates state`() = runTest {
+        val fixture = fixture()
+        fixture.repository.capabilitiesResult = ServerCapabilities(fictionMaintenance = true)
+        fixture.repository.refreshCurrentCapabilities()
+        fixture.repository.pollFictionResult = Result.success(MaintenanceResponse(firstN = 25))
+
+        fixture.holder.pollFiction(fiction, FictionPollScope(firstN = 25))
+        runCurrent()
+
+        assertEquals(listOf(7 to FictionPollScope(firstN = 25)), fixture.repository.pollFictionCalls)
+        assertEquals("Checked the source — re-read the first 25 chapters.", fixture.holder.state.value.notice)
+        assertNull(fixture.holder.state.value.error)
+        assertNull(fixture.holder.state.value.busyAction)
+
+        fixture.close()
+    }
+
+    @Test
+    fun `scoped poll is gated on capability`() = runTest {
+        val fixture = fixture()
+        fixture.repository.capabilitiesResult = ServerCapabilities.Baseline
+        fixture.repository.refreshCurrentCapabilities()
+
+        fixture.holder.pollFiction(fiction, FictionPollScope(full = true))
+        runCurrent()
+
+        assertTrue(fixture.repository.pollFictionCalls.isEmpty())
+
+        fixture.close()
+    }
+
+    @Test
+    fun `scoped poll is blocked for unsupported source types`() = runTest {
+        val fixture = fixture()
+        fixture.repository.capabilitiesResult = ServerCapabilities(fictionMaintenance = true)
+        fixture.repository.refreshCurrentCapabilities()
+
+        val epubFiction = fiction.copy(sourceType = "epub")
+        fixture.holder.pollFiction(epubFiction, FictionPollScope(lastN = 10))
+        fixture.holder.startFictionAction(epubFiction, FictionMaintenanceAction.Poll)
+        runCurrent()
+
+        assertTrue(fixture.repository.pollFictionCalls.isEmpty())
+        assertTrue(fixture.repository.fictionMaintenanceCalls.isEmpty())
+
+        fixture.close()
+    }
+
+    @Test
+    fun `scoped poll is rejected when already busy`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val fixture = fixture(dispatcher)
+        fixture.repository.capabilitiesResult = ServerCapabilities(fictionMaintenance = true)
+        fixture.repository.refreshCurrentCapabilities()
+        fixture.repository.pollFictionResult = Result.success(MaintenanceResponse(firstN = 10))
+
+        fixture.holder.startFictionAction(fiction, FictionMaintenanceAction.Retag)
+        assertEquals(FictionMaintenanceAction.Retag, fixture.holder.state.value.busyAction)
+
+        fixture.holder.pollFiction(fiction, FictionPollScope(firstN = 10))
+        runCurrent()
+
+        assertTrue(fixture.repository.pollFictionCalls.isEmpty())
 
         fixture.close()
     }

@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.desktop.data
 
 import kotlin.math.abs
+import kotlin.math.ceil
 
 /** A half-open `[start, end)` character range into a chapter's narration text. */
 data class TextSpan(val start: Int, val end: Int) {
@@ -98,7 +99,32 @@ data class ReadAlongDocument(
             }
         }
         if (before < 0 || !cues[before].span.contains(offset)) return null
-        return cues[before].startSeconds
+        val start = cues[before].span.start
+        low = 0
+        high = before
+        while (low < high) {
+            val middle = (low + high) ushr 1
+            if (cues[middle].span.start < start) low = middle + 1 else high = middle
+        }
+        return cues[low].startSeconds
+    }
+
+    fun seekMillisForOffset(offset: Int): Long? {
+        val seconds = seekSecondsForOffset(offset) ?: return null
+        if (!seconds.isSeekableTime()) return null
+        var millis = ceil(seconds * 1000.0).toLong()
+        if (millis < Long.MAX_VALUE && millis / 1000.0 < seconds) millis++
+        if (millis > 0L && (millis - 1) / 1000.0 >= seconds) millis--
+        if (millis / 1000.0 >= seconds && (millis == 0L || (millis - 1) / 1000.0 < seconds)) {
+            return millis
+        }
+        var low = 0L
+        var high = Long.MAX_VALUE
+        while (low < high) {
+            val middle = low + (high - low) / 2
+            if (middle / 1000.0 < seconds) low = middle + 1 else high = middle
+        }
+        return low
     }
 
     private fun spanIndexAt(spans: List<TextSpan>, offset: Int): Int {
@@ -120,21 +146,18 @@ data class ReadAlongDocument(
     companion object {
         fun from(response: ReadAlongResponse): ReadAlongDocument {
             val text = response.text
-            val paragraphs = response.paragraphs
-                .mapNotNull { it.toSpan(text.length) }
-                .sortedBy { it.start }
-                .withoutOverlaps()
-                .ifEmpty { paragraphsFromLineBreaks(text) }
+            val boundaries = codePointBoundaries(text)
+            val paragraphs = validatedParagraphs(text, response.paragraphs, boundaries)
+                ?: paragraphsFromLineBreaks(text)
 
             val parsed = response.cues.mapNotNull { row ->
-                if (row.size < 3 || !row[2].isFinite() || row[2] < 0.0) return@mapNotNull null
-                row.toSpan(text.length)?.let { ReadAlongCue(it, row[2]) }
-            }.sortedBy { it.startSeconds }
+                if (row.size != 3 || !row[2].isSeekableTime()) return@mapNotNull null
+                row.toSpan(boundaries)?.let { ReadAlongCue(it, row[2]) }
+            }
 
-            // Time and character order must agree. Otherwise a binary time lookup can highlight a
-            // word behind the one just spoken, which is less honest than disabling highlights.
             val monotonic = parsed.zipWithNext().all { (left, right) ->
-                right.startSeconds >= left.startSeconds && right.span.start >= left.span.end
+                right.startSeconds >= left.startSeconds &&
+                    (right.span.start >= left.span.end || right.span == left.span)
             }
             val timingState = when {
                 !response.chapter.hasTimings && response.cues.isEmpty() -> ReadAlongTimingState.TextOnly
@@ -158,18 +181,55 @@ data class ReadAlongDocument(
             )
         }
 
-        private fun List<Double>.toSpan(textLength: Int): TextSpan? {
-            if (size < 2 || !this[0].isFinite() || !this[1].isFinite()) return null
-            val start = this[0].toInt().coerceIn(0, textLength)
-            val end = this[1].toInt().coerceIn(0, textLength)
-            return if (end > start) TextSpan(start, end) else null
+        private fun Double.isSeekableTime(): Boolean =
+            isFinite() && this >= 0.0 && this <= Long.MAX_VALUE / 1000.0
+
+        private fun codePointBoundaries(text: String): IntArray {
+            val boundaries = IntArray(text.codePointCount(0, text.length) + 1)
+            var utf16Offset = 0
+            var codePointOffset = 0
+            while (utf16Offset < text.length) {
+                utf16Offset += Character.charCount(text.codePointAt(utf16Offset))
+                boundaries[++codePointOffset] = utf16Offset
+            }
+            return boundaries
         }
 
-        private fun List<TextSpan>.withoutOverlaps(): List<TextSpan> {
-            if (size < 2) return this
-            val result = ArrayList<TextSpan>(size)
-            forEach { span -> if (result.isEmpty() || span.start >= result.last().end) result += span }
-            return result
+        private fun List<Double>.toSpan(boundaries: IntArray): TextSpan? {
+            if (size < 2) return null
+            val start = this[0].toOffset(boundaries.lastIndex) ?: return null
+            val end = this[1].toOffset(boundaries.lastIndex) ?: return null
+            return if (end > start) TextSpan(boundaries[start], boundaries[end]) else null
+        }
+
+        private fun Double.toOffset(maxOffset: Int): Int? {
+            if (!isFinite() || this < 0.0 || this > maxOffset.toDouble()) return null
+            val offset = toInt()
+            return offset.takeIf { it.toDouble() == this }
+        }
+
+        private fun validatedParagraphs(
+            text: String,
+            rows: List<List<Double>>,
+            boundaries: IntArray,
+        ): List<TextSpan>? {
+            if (rows.isEmpty()) return null
+            val paragraphs = ArrayList<TextSpan>(rows.size)
+            var previousEnd = 0
+            for (row in rows) {
+                if (row.size != 2) return null
+                val span = row.toSpan(boundaries) ?: return null
+                if (span.start < previousEnd) return null
+                while (previousEnd < span.start) {
+                    if (!text[previousEnd++].isWhitespace()) return null
+                }
+                paragraphs += span
+                previousEnd = span.end
+            }
+            while (previousEnd < text.length) {
+                if (!text[previousEnd++].isWhitespace()) return null
+            }
+            return paragraphs
         }
 
         private fun paragraphsFromLineBreaks(text: String): List<TextSpan> {

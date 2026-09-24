@@ -95,7 +95,7 @@ class LibraryCache(
                 state = _library,
                 fallback = "Could not load library",
                 onLoaded = { value, savedAt -> persistent?.storeLibrary(value, savedAt) },
-            ) { refreshLibraryValue(current, forceFull) }
+            ) { refreshLibraryValue(current, forceFull).withLocalListening() }
         }
     }
 
@@ -112,7 +112,7 @@ class LibraryCache(
         _browseAll.update { it.copy(isRefreshing = true, error = null) }
         browseAllJob = scope.launch {
             load(state = _browseAll, fallback = "Could not load the server's fictions") {
-                repository.library(LibraryScope.All)
+                repository.library(LibraryScope.All).withLocalListening()
             }
         }
     }
@@ -322,6 +322,34 @@ class LibraryCache(
         restorePlayback(fictionId, rejected)
     }
 
+    private val localListening = HashMap<Int, String>()
+
+    fun recordListening(fictionId: Int, listenedAt: String = nowStamp()) {
+        synchronized(localListening) {
+            val previous = localListening[fictionId]
+            if (previous == null || listenedAt > previous) localListening[fictionId] = listenedAt
+        }
+        _library.update { cached -> cached.copy(value = cached.value?.withLocalListening()) }
+        _browseAll.update { cached -> cached.copy(value = cached.value?.withLocalListening()) }
+    }
+
+    private fun LibraryResponse.withLocalListening(): LibraryResponse {
+        val stamps = synchronized(localListening) { localListening.toMap() }
+        if (stamps.isEmpty()) return this
+        return copy(
+            fictions = fictions.map { fiction ->
+                val local = stamps[fiction.id] ?: return@map fiction
+                val progress = fiction.progress ?: FictionProgress()
+                val remote = progress.lastListenedAt
+                if (remote != null && remote >= local) {
+                    fiction
+                } else {
+                    fiction.copy(progress = progress.copy(lastListenedAt = local))
+                }
+            },
+        )
+    }
+
     /** Patches the cached rows without a request. Public so a test can pin the identity rule. */
     fun applyPlayed(fictionId: Int, chapterIds: List<Int>, played: Boolean) {
         val state = chapterStates[fictionId] ?: return
@@ -422,6 +450,7 @@ class LibraryCache(
         chapterJobs.clear()
         chapterStates.clear()
         chapterOptions.clear()
+        synchronized(localListening) { localListening.clear() }
         _library.value = Cached()
         _browseAll.value = Cached()
     }

@@ -18,6 +18,34 @@ All notable changes to TTSRoad Desktop are recorded here. The format follows
 
 ## [Unreleased]
 
+Parity with the Android client (0.14–0.18) and the TTSRoad server additions since 1.3.2.
+
+### Added
+
+- Per-fiction chapter notification settings for followed books: every chapter, off, or a 1/2/5 h
+  or custom backlog. Shows the server's own **Armed** / **Waiting** / **Off** / **Every chapter**
+  status and the ready-to-listen amount at 1×. Backlog notices are labelled **Backlog alert** and
+  use the server's message. Requires `backlog_notifications`.
+- **Export EPUB** streams a fiction's text to a file you choose, over the authenticated client,
+  and replaces the file atomically. Requires `ebook_export`.
+- **Fetch chapters…** fetches all chapters, or the first or last 10/25/50/100/custom chapters.
+  Available to every account where `fiction_maintenance` is advertised.
+- Library ordering by **New chapters first** (`last_chapter_at`) and **Recently listened**. The
+  old "Recently updated" order is migrated. Adds a source filter and server source labels.
+- The playback queue picks up chapters that finish converting while you listen.
+
+### Fixed
+
+- Read-along offsets are converted from Unicode code points, so emoji and other non-BMP text
+  highlights correctly. Word highlighting no longer changes font weight. The reader follows the
+  spoken line inside long paragraphs. Reader documents can no longer cross sessions.
+- Unsent listening progress is tied to its account and server, and is dropped at sign-out. An
+  acknowledgement can no longer delete a newer queued position. A late 401 from an earlier
+  session no longer signs out a new one.
+- Update checks propagate cancellation, run off the UI thread and clean up cancelled downloads.
+- Notification chapter numbers accept fractional values. Refused dismissals are reported.
+- The sleep timer uses a monotonic clock.
+
 ## [1.3.2] - 2026-09-10
 
 ### Fixed

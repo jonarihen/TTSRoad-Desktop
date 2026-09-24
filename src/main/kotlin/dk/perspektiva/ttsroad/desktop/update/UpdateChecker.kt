@@ -4,13 +4,28 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dk.perspektiva.ttsroad.desktop.BuildInfo
 import dk.perspektiva.ttsroad.desktop.data.AppLog
+import dk.perspektiva.ttsroad.desktop.di.AppDispatchers
 import java.awt.Desktop
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import okhttp3.CacheControl
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 
 /** Where the update check looks. Public releases only; the endpoint needs no credential. */
 const val ReleaseRepositorySlug: String = "jonarihen/TTSRoad-Desktop"
@@ -53,13 +68,14 @@ private data class GitHubRelease(
 class GitHubReleaseSource(
     private val client: OkHttpClient,
     private val repositorySlug: String = ReleaseRepositorySlug,
+    private val ioDispatcher: CoroutineDispatcher = AppDispatchers.Default.io,
 ) : ReleaseSource {
     private val adapter = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
         .adapter(GitHubRelease::class.java)
 
-    override suspend fun latestRelease(): LatestRelease? {
+    override suspend fun latestRelease(): LatestRelease? = withContext(ioDispatcher) {
         val request = Request.Builder()
             .url("https://api.github.com/repos/$repositorySlug/releases/latest")
             .header("Accept", "application/vnd.github+json")
@@ -70,15 +86,16 @@ class GitHubReleaseSource(
             .cacheControl(CacheControl.FORCE_NETWORK)
             .build()
 
-        client.newCall(request).execute().use { response ->
+        client.newCall(request).useCancellable { response, context ->
             // A project with no releases answers 404. That is "nothing published", not a failure.
-            if (response.code == 404) return null
+            if (response.code == 404) return@useCancellable null
             if (!response.isSuccessful) throw IOException("GitHub answered ${response.code}")
-            val payload = response.body.string()
-            val release = adapter.fromJson(payload) ?: return null
-            if (release.draft == true || release.prerelease == true) return null
-            val tag = release.tag_name?.takeIf { it.isNotBlank() } ?: return null
-            return LatestRelease(
+            val payload = response.readText(context)
+            val release = adapter.fromJson(payload) ?: return@useCancellable null
+            context.ensureActive()
+            if (release.draft == true || release.prerelease == true) return@useCancellable null
+            val tag = release.tag_name?.takeIf { it.isNotBlank() } ?: return@useCancellable null
+            LatestRelease(
                 tag = tag,
                 version = tag.removePrefix("v"),
                 notes = release.body.orEmpty().trim(),
@@ -108,8 +125,9 @@ class UpdateChecker(
     private val osName: String = System.getProperty("os.name").orEmpty(),
     private val architecture: String = System.getProperty("os.arch").orEmpty(),
     private val clock: () -> Long = System::currentTimeMillis,
+    private val ioDispatcher: CoroutineDispatcher = AppDispatchers.Default.io,
 ) {
-    private var checkedThisLaunch = false
+    private val checkedThisLaunch = AtomicBoolean()
 
     /**
      * Runs a check unless an automatic one is not due yet.
@@ -117,35 +135,48 @@ class UpdateChecker(
      * [manual] bypasses the throttle and the "already checked" flag, because a user who presses
      * the button is asking for a network round trip, not for the cached verdict.
      */
-    suspend fun check(manual: Boolean): UpdateStatus {
+    suspend fun check(manual: Boolean): UpdateStatus = withContext(ioDispatcher) {
+        currentCoroutineContext().ensureActive()
         val settings = settingsStore.settings.value
-        if (!manual && !shouldCheckAutomatically(settings, clock(), checkedThisLaunch)) {
-            return UpdateStatus.Unknown
+        if (!manual) {
+            if (!shouldCheckAutomatically(settings, clock(), checkedThisLaunch.get()) ||
+                !checkedThisLaunch.compareAndSet(false, true)
+            ) {
+                return@withContext UpdateStatus.Unknown
+            }
         }
-        checkedThisLaunch = true
+        checkedThisLaunch.set(true)
 
         val release = try {
             source.latestRelease()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: IOException) {
+            currentCoroutineContext().ensureActive()
             // The reason is a short human sentence. A response body could carry anything, so it
             // never becomes UI text.
             AppLog.warn("the update check could not reach GitHub", failure)
-            return UpdateStatus.Failed("Could not reach the update server")
+            return@withContext UpdateStatus.Failed("Could not reach the update server")
         } catch (failure: RuntimeException) {
+            currentCoroutineContext().ensureActive()
             AppLog.warn("the update check returned something unreadable", failure)
-            return UpdateStatus.Failed("The update information could not be read")
+            return@withContext UpdateStatus.Failed("The update information could not be read")
         }
 
+        currentCoroutineContext().ensureActive()
         val now = clock()
         settingsStore.update { it.copy(lastCheckMillis = now) }
+        currentCoroutineContext().ensureActive()
 
         if (release == null || !isNewerVersion(release.version, installedVersion)) {
-            return UpdateStatus.UpToDate(now)
+            return@withContext UpdateStatus.UpToDate(now)
         }
         // A dismissal covers exactly the version it was made against. A newer one asks again.
-        if (!manual && settings.dismissedVersion == release.version) return UpdateStatus.UpToDate(now)
+        if (!manual && settingsStore.settings.value.dismissedVersion == release.version) {
+            return@withContext UpdateStatus.UpToDate(now)
+        }
 
-        return UpdateStatus.Available(
+        UpdateStatus.Available(
             release = release,
             asset = selectAssetFor(release.assets, osName, architecture),
         )
@@ -179,79 +210,142 @@ sealed interface DownloadOutcome {
 class UpdateDownloader(
     private val client: OkHttpClient,
     private val targetDirectory: File,
+    private val ioDispatcher: CoroutineDispatcher = AppDispatchers.Default.io,
     private val open: (File) -> Unit = ::openWithDesktop,
 ) {
     suspend fun download(release: LatestRelease, asset: ReleaseAsset): DownloadOutcome {
-        val checksumAsset = release.assets.firstOrNull { it.name == ChecksumAssetName }
-            ?: return DownloadOutcome.Failed("The release publishes no checksums")
+        var attemptDirectory: File? = null
+        var retained = false
+        try {
+            return withContext(ioDispatcher) {
+                currentCoroutineContext().ensureActive()
+                if (asset.name.isBlank() || asset.name == "." || asset.name == ".." ||
+                    asset.name.any { it == '/' || it == '\\' }
+                ) {
+                    return@withContext DownloadOutcome.Failed("The installer filename is invalid")
+                }
+                val checksumAsset = release.assets.firstOrNull { it.name == ChecksumAssetName }
+                    ?: return@withContext DownloadOutcome.Failed("The release publishes no checksums")
 
-        val expected = try {
-            parseChecksums(fetchText(checksumAsset.browserDownloadUrl))[asset.name]
-        } catch (failure: IOException) {
-            AppLog.warn("could not download the release checksums", failure)
-            return DownloadOutcome.Failed("Could not download the checksums")
-        } ?: return DownloadOutcome.Failed("The checksums do not cover ${asset.name}")
+                val expected = try {
+                    parseChecksums(fetchText(checksumAsset.browserDownloadUrl))[asset.name]
+                } catch (failure: IOException) {
+                    currentCoroutineContext().ensureActive()
+                    AppLog.warn("could not download the release checksums", failure)
+                    return@withContext DownloadOutcome.Failed("Could not download the checksums")
+                } ?: return@withContext DownloadOutcome.Failed("The checksums do not cover ${asset.name}")
 
-        targetDirectory.mkdirs()
-        // A partial file never carries the final name, so an interrupted download cannot be
-        // mistaken for a verified one by this or any later run.
-        val partial = File(targetDirectory, "${asset.name}.part")
-        val target = File(targetDirectory, asset.name)
-        val actual = try {
-            downloadTo(asset.browserDownloadUrl, partial)
+                currentCoroutineContext().ensureActive()
+                targetDirectory.mkdirs()
+                val directory = Files.createTempDirectory(targetDirectory.toPath(), "download-").toFile()
+                attemptDirectory = directory
+                val partial = File(directory, "${asset.name}.part")
+                val target = File(directory, asset.name)
+                val actual = downloadTo(asset.browserDownloadUrl, partial)
+
+                currentCoroutineContext().ensureActive()
+                if (!actual.equals(expected, ignoreCase = true)) {
+                    AppLog.warn("rejected a release asset whose checksum did not match")
+                    return@withContext DownloadOutcome.Failed("The download failed its checksum check and was deleted")
+                }
+
+                currentCoroutineContext().ensureActive()
+                if (!partial.renameTo(target)) {
+                    return@withContext DownloadOutcome.Failed("The verified download could not be saved")
+                }
+                currentCoroutineContext().ensureActive()
+                try {
+                    open(target)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    currentCoroutineContext().ensureActive()
+                    AppLog.warn("could not hand the installer to the desktop", failure)
+                }
+                retained = true
+                currentCoroutineContext().ensureActive()
+                DownloadOutcome.Verified(target)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: IOException) {
-            partial.delete()
+            currentCoroutineContext().ensureActive()
             AppLog.warn("could not download the release asset", failure)
             return DownloadOutcome.Failed("The download did not complete")
+        } finally {
+            if (!retained) {
+                withContext(NonCancellable + ioDispatcher) {
+                    attemptDirectory?.deleteRecursively()
+                }
+            }
         }
-
-        if (!actual.equals(expected, ignoreCase = true)) {
-            partial.delete()
-            AppLog.warn("rejected a release asset whose checksum did not match")
-            return DownloadOutcome.Failed("The download failed its checksum check and was deleted")
-        }
-
-        target.delete()
-        if (!partial.renameTo(target)) {
-            partial.delete()
-            return DownloadOutcome.Failed("The verified download could not be saved")
-        }
-        runCatching { open(target) }
-            .onFailure { AppLog.warn("could not hand the installer to the desktop", it) }
-        return DownloadOutcome.Verified(target)
     }
 
-    private fun fetchText(url: String): String {
+    private suspend fun fetchText(url: String): String {
         val request = Request.Builder().url(url).build()
-        client.newCall(request).execute().use { response ->
+        return client.newCall(request).useCancellable { response, context ->
             if (!response.isSuccessful) throw IOException("download answered ${response.code}")
-            return response.body.string()
+            response.readText(context)
         }
     }
 
     /** Streams to disk and returns the hex SHA-256 of what was actually written. */
-    private fun downloadTo(url: String, destination: File): String {
+    private suspend fun downloadTo(url: String, destination: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val request = Request.Builder().url(url).build()
-        client.newCall(request).execute().use { response ->
+        client.newCall(request).useCancellable { response, context ->
             if (!response.isSuccessful) throw IOException("download answered ${response.code}")
             val body = response.body
             destination.outputStream().use { output ->
                 body.byteStream().use { input ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     while (true) {
+                        context.ensureActive()
                         val read = input.read(buffer)
+                        context.ensureActive()
                         if (read < 0) break
                         digest.update(buffer, 0, read)
                         output.write(buffer, 0, read)
                     }
                 }
+                context.ensureActive()
                 output.flush()
             }
         }
+        currentCoroutineContext().ensureActive()
         return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 }
+
+private suspend fun <T> Call.useCancellable(block: (Response, CoroutineContext) -> T): T =
+    suspendCancellableCoroutine { continuation ->
+        continuation.invokeOnCancellation { cancel() }
+        val result = try {
+            continuation.context.ensureActive()
+            execute().use { response ->
+                continuation.context.ensureActive()
+                block(response, continuation.context)
+            }
+        } catch (failure: Exception) {
+            continuation.resumeWithException(failure)
+            return@suspendCancellableCoroutine
+        }
+        continuation.resume(result)
+    }
+
+private fun Response.readText(context: CoroutineContext): String =
+    body.charStream().use { reader ->
+        val result = StringBuilder()
+        val buffer = CharArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            context.ensureActive()
+            val read = reader.read(buffer)
+            context.ensureActive()
+            if (read < 0) break
+            result.append(buffer, 0, read)
+        }
+        result.toString()
+    }
 
 /**
  * Hands a verified file to the desktop's own handler.

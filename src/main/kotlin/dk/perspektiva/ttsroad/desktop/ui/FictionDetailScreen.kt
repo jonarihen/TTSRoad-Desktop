@@ -97,11 +97,15 @@ import dk.perspektiva.ttsroad.desktop.data.reconvertConfirmation
 import dk.perspektiva.ttsroad.desktop.data.statusLabel
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
 import dk.perspektiva.ttsroad.desktop.player.PlaybackController
+import dk.perspektiva.ttsroad.desktop.data.FictionPollScope
+import dk.perspektiva.ttsroad.desktop.data.supportsFictionPoll
 import dk.perspektiva.ttsroad.desktop.player.playingChapterIdIn
 import kotlinx.coroutines.launch
 
 /** Test handle for "how many chapter rows did the lazy list actually compose". */
 const val PollFictionButtonTestTag: String = "pollFictionButton"
+const val ScopedFetchButtonTestTag: String = "scopedFetchButton"
+const val ExportEpubButtonTestTag: String = "exportEpubButton"
 const val ChapterRowTestTag: String = "chapterRow"
 
 /** Test handle for the chapter list's scroll container. */
@@ -191,11 +195,20 @@ data class ChapterMaintenanceUi(
     val busyAction: FictionMaintenanceAction? = null,
     val confirming: FictionMaintenanceAction? = null,
     val onFictionAction: (FictionMaintenanceAction) -> Unit = {},
+    val onPollScoped: (FictionPollScope) -> Unit = {},
     val onConfirmAction: () -> Unit = {},
     val onDismissConfirmation: () -> Unit = {},
     val onRetry: (ChapterSummary) -> Unit = {},
     val onSetExcluded: (ChapterSummary, Boolean) -> Unit = { _, _ -> },
     val onDelete: (ChapterSummary) -> Unit = {},
+)
+
+data class EpubExportUi(
+    val available: Boolean = false,
+    val isBusy: Boolean = false,
+    val notice: String? = null,
+    val error: String? = null,
+    val onExport: () -> Unit = {},
 )
 
 data class ChapterQueueUi(
@@ -229,6 +242,8 @@ fun FictionDetailScreen(
     queue: ChapterQueueUi = ChapterQueueUi(),
     maintenance: ChapterMaintenanceUi = ChapterMaintenanceUi(),
     fictionManagement: FictionManagementUiState = FictionManagementUiState(),
+    epub: EpubExportUi = EpubExportUi(),
+    onNotificationSettingsSaved: () -> Unit = {},
     onEditFiction: (FictionSummary) -> Unit = {},
     onDeleteFiction: (FictionSummary) -> Unit = {},
     nowMillis: () -> Long = System::currentTimeMillis,
@@ -244,6 +259,7 @@ fun FictionDetailScreen(
     // Which chapter's admin disclosure is open, and which delete is awaiting a second answer.
     var managingChapter by remember { mutableStateOf<ChapterSummary?>(null) }
     var deletingChapter by remember { mutableStateOf<ChapterSummary?>(null) }
+    var showFetchDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     val loaded = state.value
@@ -270,7 +286,11 @@ fun FictionDetailScreen(
     // moment its chapters arrived. See [FictionSummary.following].
     var followOverride by remember(fiction.id) { mutableStateOf<Boolean?>(null) }
     var followBusy by remember(fiction.id) { mutableStateOf(false) }
-    val following = followOverride ?: fiction.following ?: cache.followingOf(fiction.id)
+    val shelf by cache.library.collectAsState()
+    val everything by cache.browseAll.collectAsState()
+    val following = followOverride ?: fiction.following ?: remember(shelf, everything, fiction.id) {
+        cache.followingOf(fiction.id)
+    }
 
     fun toggleFollow() {
         val target = !(following ?: false)
@@ -359,6 +379,11 @@ fun FictionDetailScreen(
                         Spacer(Modifier.height(20.dp))
                     }
 
+                    val epubExportUi = if (capabilities.ebookExport) epub.copy(available = true) else epub
+                    val pollSourceType = header.sourceType?.takeIf { it.isNotBlank() } ?: fiction.sourceType
+                    val pollSupported = FictionMaintenanceAction.Poll in maintenance.fictionActions &&
+                        supportsFictionPoll(pollSourceType)
+
                     // `resumeTarget` is null until chapters load, so the button appears with the list.
                     FictionHeader(
                         header,
@@ -381,23 +406,44 @@ fun FictionDetailScreen(
                         } else {
                             null
                         },
+                        epub = epubExportUi,
+                        notificationsControl = {
+                            FictionNotificationSettingsControl(
+                                repository = repository,
+                                fictionId = header.id,
+                                isFollowed = following ?: false,
+                                sessionKey = repository,
+                                onSaved = onNotificationSettingsSaved,
+                            )
+                        },
                         compact = compact,
                     )
 
                     // Outside the admin block on purpose: the server leaves polling open to any
                     // account, so gating it on `canManage` would hide it from most of them.
-                    if (FictionMaintenanceAction.Poll in maintenance.fictionActions) {
+                    if (pollSupported) {
                         Spacer(Modifier.height(16.dp))
-                        AarisSecondaryAction(
-                            label = if (maintenance.busyAction == FictionMaintenanceAction.Poll) {
-                                "Checking…"
-                            } else {
-                                FictionMaintenanceAction.Poll.title
-                            },
-                            onClick = { maintenance.onFictionAction(FictionMaintenanceAction.Poll) },
-                            enabled = maintenance.busyAction == null,
-                            modifier = Modifier.testTag(PollFictionButtonTestTag),
-                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            AarisSecondaryAction(
+                                label = if (maintenance.busyAction == FictionMaintenanceAction.Poll) {
+                                    "Checking…"
+                                } else {
+                                    FictionMaintenanceAction.Poll.title
+                                },
+                                onClick = { maintenance.onFictionAction(FictionMaintenanceAction.Poll) },
+                                enabled = maintenance.busyAction == null,
+                                modifier = Modifier.testTag(PollFictionButtonTestTag),
+                            )
+                            AarisSecondaryAction(
+                                label = "Fetch chapters…",
+                                onClick = { showFetchDialog = true },
+                                enabled = maintenance.busyAction == null,
+                                modifier = Modifier.testTag(ScopedFetchButtonTestTag),
+                            )
+                        }
                     }
 
                     if (fictionManagement.canManage) {
@@ -409,7 +455,17 @@ fun FictionDetailScreen(
                                 onDelete = { onDeleteFiction(header) },
                             ),
                             maintenance = maintenance,
+                            epub = epubExportUi,
                         )
+                    }
+
+                    epub.error?.let { message ->
+                        Spacer(Modifier.height(12.dp))
+                        Text(message, color = MaterialTheme.colorScheme.error)
+                    }
+                    epub.notice?.let { message ->
+                        Spacer(Modifier.height(12.dp))
+                        MetaText(message, color = AarisColor.Ok)
                     }
 
                     actionError?.let { message ->
@@ -578,6 +634,18 @@ fun FictionDetailScreen(
                 deletingChapter = null
             },
             onDismiss = { deletingChapter = null },
+        )
+    }
+
+    if (showFetchDialog) {
+        ScopedFetchDialog(
+            fictionTitle = header.title,
+            busy = maintenance.busyAction == FictionMaintenanceAction.Poll,
+            onFetch = { scope ->
+                showFetchDialog = false
+                maintenance.onPollScoped(scope)
+            },
+            onDismiss = { showFetchDialog = false },
         )
     }
 }
@@ -756,6 +824,8 @@ private fun FictionHeader(
     onResume: (ChapterSummary) -> Unit,
     follow: FollowUi? = null,
     management: FictionManagementActions? = null,
+    epub: EpubExportUi? = null,
+    notificationsControl: @Composable (() -> Unit)? = null,
     /** Below this the cover shrinks; the app promises 720 dp and the cover was a fixed 190. */
     compact: Boolean = false,
 ) {
@@ -827,7 +897,7 @@ private fun FictionHeader(
                 MetaText(listeningTotalsLabel(totals), color = AarisColor.Muted)
             }
             val target = remember(chapters) { resumeTarget(chapters) }
-            if (target != null || follow != null || management != null) {
+            if (target != null || follow != null || management != null || (epub != null && epub.available) || notificationsControl != null) {
                 Spacer(Modifier.height(16.dp))
                 // One primary control, then a wrapping row of secondaries. The admin pair moves out
                 // entirely — see `ManageFictionBlock`: an edit that permanently takes a field away
@@ -845,6 +915,15 @@ private fun FictionHeader(
                         )
                     }
                     follow?.let { FollowButton(it) }
+                    notificationsControl?.invoke()
+                    if (epub != null && epub.available) {
+                        AarisSecondaryAction(
+                            label = if (epub.isBusy) "Exporting EPUB…" else "Export EPUB",
+                            onClick = epub.onExport,
+                            enabled = !epub.isBusy,
+                            modifier = Modifier.testTag(ExportEpubButtonTestTag),
+                        )
+                    }
                 }
             }
         }
@@ -864,6 +943,7 @@ const val ManageFictionTestTag: String = "manageFiction"
 private fun ManageFictionBlock(
     actions: FictionManagementActions,
     maintenance: ChapterMaintenanceUi = ChapterMaintenanceUi(),
+    epub: EpubExportUi? = null,
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
     Column(
@@ -882,6 +962,15 @@ private fun ManageFictionBlock(
                 enabled = !actions.busy,
                 modifier = Modifier.testTag(EditFictionButtonTestTag),
             )
+            if (epub != null && epub.available) {
+                AarisActionRow(
+                    title = if (epub.isBusy) "Exporting EPUB…" else "Export EPUB",
+                    subtitle = "Downloads an EPUB document of this fiction to a folder of your choice.",
+                    onClick = epub.onExport,
+                    enabled = !actions.busy && !epub.isBusy,
+                    modifier = Modifier.testTag("manageExportEpubRow"),
+                )
+            }
             // The admin maintenance rows sit between editing and deleting: each needs its own
             // sentence, which is the same reason Edit and Delete are rows rather than buttons.
             maintenance.fictionActions.filter { it.adminOnly }.forEach { action ->

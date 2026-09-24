@@ -1,5 +1,7 @@
 package dk.perspektiva.ttsroad.desktop.data
 
+import java.time.Instant
+
 /**
  * How the shelf can be ordered.
  *
@@ -13,16 +15,10 @@ package dk.perspektiva.ttsroad.desktop.data
  */
 enum class FictionSort(
     val label: String,
-    /**
-     * The line under the option, where the label alone would mislead. Null where it would not.
-     *
-     * [RecentlyUpdated] is the reason this exists: it follows the fiction row, and the poller
-     * touches that row whether or not a check found anything, so it means *recently active* rather
-     * than *new chapters*. Saying so under the option is cheaper than the support question.
-     */
     val detail: String? = null,
 ) {
-    RecentlyUpdated("Recently updated", "Server activity, which is not the same as new chapters"),
+    NewChapters("New chapters first"),
+    RecentlyListened("Recently listened"),
     RecentlyAdded("Recently added"),
     Title("Title"),
     Author("Author"),
@@ -34,11 +30,11 @@ enum class FictionSort(
     ;
 
     companion object {
-        val Default: FictionSort = RecentlyUpdated
+        val Default: FictionSort = NewChapters
 
         /** Parsed leniently, because this arrives from a file an older or newer build wrote. */
         fun fromStorage(value: String?): FictionSort =
-            entries.firstOrNull { it.name == value } ?: Default
+            if (value == "RecentlyUpdated") NewChapters else entries.firstOrNull { it.name == value } ?: Default
     }
 }
 
@@ -54,10 +50,11 @@ enum class FictionSort(
  * recompositions of the same data is a scroll position that will not stay still.
  */
 fun sortFictions(fictions: List<FictionSummary>, sort: FictionSort): List<FictionSummary> {
-    val byTitle = compareBy<FictionSummary> { it.title.lowercase() }
+    val byTitle = compareBy<FictionSummary> { it.title.lowercase() }.thenBy { it.id }
     return when (sort) {
-        FictionSort.RecentlyUpdated -> fictions.sortedWith(descendingNullsLast(byTitle) { it.updatedAt })
-        FictionSort.RecentlyAdded -> fictions.sortedWith(descendingNullsLast(byTitle) { it.createdAt })
+        FictionSort.NewChapters -> sortByDate(fictions, byTitle) { it.lastChapterAt }
+        FictionSort.RecentlyListened -> sortByDate(fictions, byTitle) { it.progress?.lastListenedAt }
+        FictionSort.RecentlyAdded -> sortByDate(fictions, byTitle) { it.createdAt }
         FictionSort.Title -> fictions.sortedWith(byTitle)
         FictionSort.Author -> fictions.sortedWith(
             ascendingNullsLast(byTitle) { it.author?.trim()?.lowercase()?.takeIf(String::isNotEmpty) },
@@ -76,6 +73,19 @@ fun sortFictions(fictions: List<FictionSummary>, sort: FictionSort): List<Fictio
             descendingNullsLast(byTitle) { it.takeIf { f -> f.totalChapters > 0 }?.readyFraction },
         )
     }
+}
+
+private fun sortByDate(
+    fictions: List<FictionSummary>,
+    tieBreak: Comparator<FictionSummary>,
+    key: (FictionSummary) -> String?,
+): List<FictionSummary> {
+    val dates = mutableMapOf<String?, Instant?>()
+    return fictions.sortedWith(descendingNullsLast(tieBreak) { fiction ->
+        val value = key(fiction)
+        if (value !in dates) dates[value] = parseServerInstant(value)
+        dates[value]
+    })
 }
 
 private fun <T : Comparable<T>> descendingNullsLast(
@@ -106,6 +116,50 @@ private class NullsFirstNaturalOrder<T : Comparable<T>> : Comparator<T?> {
     }
 }
 
+data class SourceOption(val key: String, val label: String)
+
+const val UnknownSourceKey: String = "__unknown__"
+const val UnknownSourceLabel: String = "Unknown"
+
+val FictionSummary.sourceFilterKey: String
+    get() = sourceType?.trim()?.takeIf(String::isNotEmpty) ?: UnknownSourceKey
+
+val FictionSummary.sourceTypeLabel: String?
+    get() = sourceLabel?.trim()?.takeIf(String::isNotEmpty)
+        ?: sourceType?.trim()?.takeIf(String::isNotEmpty)?.let(::sourceLabelForKey)
+
+private fun sourceLabelForKey(key: String): String = when (key) {
+    "royalroad" -> "Royal Road"
+    "epub" -> "EPUB"
+    "patreon" -> "Patreon"
+    UnknownSourceKey -> UnknownSourceLabel
+    else -> key
+}
+
+fun availableSources(
+    fictions: List<FictionSummary>,
+    selected: Set<String> = emptySet(),
+): List<SourceOption> {
+    val grouped = fictions.groupBy { it.sourceFilterKey }
+    return (grouped.keys + selected).map { key ->
+        val label = if (key == UnknownSourceKey) {
+            UnknownSourceLabel
+        } else {
+            grouped[key].orEmpty().mapNotNull { it.sourceLabel?.trim()?.takeIf(String::isNotEmpty) }
+                .sortedWith(compareBy<String> { it == key }.thenBy { it.lowercase() }.thenBy { it })
+                .firstOrNull() ?: sourceLabelForKey(key)
+        }
+        SourceOption(key, label)
+    }.sortedWith(
+        compareBy<SourceOption> { it.key == UnknownSourceKey }
+            .thenBy { it.label.lowercase() }
+            .thenBy { it.key },
+    )
+}
+
+fun filterBySources(fictions: List<FictionSummary>, sources: Set<String>): List<FictionSummary> =
+    if (sources.isEmpty()) fictions else fictions.filter { it.sourceFilterKey in sources }
+
 /**
  * Every tag carried by the loaded shelf, in one alphabetical list.
  *
@@ -113,8 +167,12 @@ private class NullsFirstNaturalOrder<T : Comparable<T>> : Comparator<T?> {
  * whatever the source happened to publish and there is no endpoint that enumerates them. Compared
  * case-insensitively, keeping the first spelling seen, for the same reason [cleanFictionTags] does.
  */
-fun availableTags(fictions: List<FictionSummary>): List<String> {
+fun availableTags(fictions: List<FictionSummary>, selected: Set<String> = emptySet()): List<String> {
     val seen = LinkedHashMap<String, String>()
+    for (tag in selected) {
+        val label = tag.trim()
+        if (label.isNotEmpty()) seen.putIfAbsent(label.lowercase(), label)
+    }
     for (fiction in fictions) {
         for (tag in fiction.tags) {
             val key = tag.trim().lowercase()
@@ -164,6 +222,7 @@ data class BrowseResult(
     /** How many survived the tag filter, before the text query. What "N of M" is counted against. */
     val taggedCount: Int,
     val totalCount: Int,
+    val sourcedCount: Int = taggedCount,
 ) {
     val isEmpty: Boolean get() = fictions.isEmpty()
 }
@@ -173,13 +232,16 @@ fun browseFictions(
     query: String,
     tags: Set<String>,
     sort: FictionSort,
+    sources: Set<String> = emptySet(),
 ): BrowseResult {
     val tagged = filterByTags(fictions, tags)
-    val searched = filterFictionsByText(tagged, query)
+    val sourced = filterBySources(tagged, sources)
+    val searched = filterFictionsByText(sourced, query)
     return BrowseResult(
         fictions = sortFictions(searched, sort),
         taggedCount = tagged.size,
         totalCount = fictions.size,
+        sourcedCount = sourced.size,
     )
 }
 
@@ -200,13 +262,14 @@ fun filterFictionsByText(fictions: List<FictionSummary>, query: String): List<Fi
  * "No fictions found" is a lie with a tag ticked or on an empty shelf: it reads as the server
  * having lost the library rather than as something one click undoes.
  */
-enum class EmptyBrowseReason { NothingOnServer, NothingFollowed, TagFilter, TextQuery }
+enum class EmptyBrowseReason { NothingOnServer, NothingFollowed, TagFilter, SourceFilter, TextQuery }
 
 fun emptyBrowseReason(
     result: BrowseResult,
     query: String,
     tags: Set<String>,
     browsingAll: Boolean,
+    sources: Set<String> = emptySet(),
 ): EmptyBrowseReason? = when {
     !result.isEmpty -> null
     result.totalCount == 0 && browsingAll -> EmptyBrowseReason.NothingOnServer
@@ -214,6 +277,7 @@ fun emptyBrowseReason(
     // Order matters: with both a tag and a query in force, the tag is the one hiding the most, and
     // it is also the one a reader is most likely to have forgotten is on.
     tags.isNotEmpty() && result.taggedCount == 0 -> EmptyBrowseReason.TagFilter
+    sources.isNotEmpty() && result.sourcedCount == 0 -> EmptyBrowseReason.SourceFilter
     query.isNotBlank() -> EmptyBrowseReason.TextQuery
     tags.isNotEmpty() -> EmptyBrowseReason.TagFilter
     else -> EmptyBrowseReason.NothingOnServer

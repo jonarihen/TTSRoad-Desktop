@@ -86,6 +86,7 @@ class ModelParsingTest {
                 "duration_label": "15h",
                 "remaining_seconds": 32400.0,
                 "remaining_label": "9h",
+                "last_listened_at": "2026-09-23T12:34:56Z",
                 "some_key_this_build_has_never_seen": 1
               }
             }
@@ -96,8 +97,62 @@ class ModelParsingTest {
         assertEquals(30, progress.chaptersReady)
         assertEquals(18, progress.chaptersUnplayed)
         assertEquals("9h", progress.remainingLabel)
+        assertEquals("2026-09-23T12:34:56Z", progress.lastListenedAt)
         assertEquals(0.4f, progress.listenedFraction)
         assertTrue(progress.isMeaningful)
+    }
+
+    @Test
+    fun `fiction browse fields decode and round trip without conflating their clocks`() {
+        val fiction = parse<LibraryResponse>(
+            """
+            {"fictions":[{
+              "id":7,
+              "source_type":"ao3",
+              "source_label":"Archive of Our Own",
+              "enabled":false,
+              "updated_at":"2026-09-24T12:00:00Z",
+              "last_polled_at":"2026-09-24T11:59:00Z",
+              "last_chapter_at":"2026-09-20T10:00:00Z",
+              "last_listened_at":"not the caller aggregate",
+              "progress":{"last_listened_at":"2026-09-22T09:00:00Z"},
+              "future_field":true
+            }]}
+            """.trimIndent(),
+        ).fictions.single()
+
+        assertEquals("ao3", fiction.sourceType)
+        assertEquals("Archive of Our Own", fiction.sourceLabel)
+        assertEquals(false, fiction.enabled)
+        assertEquals("2026-09-24T12:00:00Z", fiction.updatedAt)
+        assertEquals("2026-09-24T11:59:00Z", fiction.lastPolledAt)
+        assertEquals("2026-09-20T10:00:00Z", fiction.lastChapterAt)
+        assertEquals("2026-09-22T09:00:00Z", fiction.progress?.lastListenedAt)
+        assertEquals(fiction, parse<FictionSummary>(moshi.adapter(FictionSummary::class.java).toJson(fiction)))
+    }
+
+    @Test
+    fun `absent and null fiction browse fields remain unknown on older servers`() {
+        for (json in listOf(
+            "{}",
+            """{"source_type":null,"source_label":null,"enabled":null,"last_polled_at":null,"last_chapter_at":null}""",
+        )) {
+            val fiction = parse<FictionSummary>(json)
+            assertNull(fiction.sourceType)
+            assertNull(fiction.sourceLabel)
+            assertNull(fiction.enabled)
+            assertNull(fiction.lastPolledAt)
+            assertNull(fiction.lastChapterAt)
+            assertNull(fiction.progress)
+        }
+        for (json in listOf("{}", """{"last_listened_at":null}""")) {
+            assertNull(parse<FictionProgress>(json).lastListenedAt)
+        }
+        val fiction = parse<FictionSummary>(
+            """{"last_chapter_at":"bad date","progress":{"last_listened_at":"bad date"}}""",
+        )
+        assertEquals("bad date", fiction.lastChapterAt)
+        assertEquals("bad date", fiction.progress?.lastListenedAt)
     }
 
     @Test

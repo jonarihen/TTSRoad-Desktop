@@ -59,7 +59,7 @@ enum class SleepTimerEvent {
  * Threading: every method is synchronised on the instance. The controller ticks from its own
  * coroutine while the UI arms and cancels from the Compose thread, and both mutate the deadline.
  */
-class SleepTimer(private val now: () -> Long = System::currentTimeMillis) {
+class SleepTimer(private val now: () -> Long = { System.nanoTime() / 1_000_000L }) {
 
     private val _state = MutableStateFlow(SleepTimerState())
     val state: StateFlow<SleepTimerState> = _state.asStateFlow()

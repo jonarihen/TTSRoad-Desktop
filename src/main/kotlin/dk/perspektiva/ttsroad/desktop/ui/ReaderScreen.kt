@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.DragInteraction
@@ -25,7 +26,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -55,11 +55,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -115,9 +117,13 @@ import dk.perspektiva.ttsroad.desktop.player.PlaybackController
 import dk.perspektiva.ttsroad.desktop.player.PlayerUiState
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 const val ReaderListTestTag: String = "readerList"
+const val ReaderScrollbarTestTag: String = "readerScrollbar"
 const val ReaderFindFieldTestTag: String = "readerFindField"
 const val ReaderSettingsButtonTestTag: String = "readerSettingsButton"
 const val ReaderParagraphTestTag: String = "readerParagraph"
@@ -206,6 +212,20 @@ fun readerFollowAfter(current: Boolean, event: ReaderFollowEvent): Boolean = whe
 fun readerAutoScrollOffsetPx(viewportHeightPx: Int): Int =
     if (viewportHeightPx <= 0) 0 else -(viewportHeightPx / 3)
 
+fun readerFollowScrollDelta(lineTopPx: Int, lineBottomPx: Int, viewportHeightPx: Int): Int? {
+    if (viewportHeightPx <= 0 || lineBottomPx <= lineTopPx) return null
+    if (lineTopPx >= viewportHeightPx / 5 && lineBottomPx <= viewportHeightPx * 2 / 3) return null
+    return (lineTopPx - viewportHeightPx / 3).takeIf { it != 0 }
+}
+
+internal data class ReaderLine(val index: Int, val top: Int, val bottom: Int)
+
+internal fun readerSpokenLine(layout: TextLayoutResult, localOffset: Int): ReaderLine? {
+    if (localOffset !in layout.layoutInput.text.text.indices) return null
+    val line = layout.getLineForOffset(localOffset)
+    return ReaderLine(line, layout.getLineTop(line).roundToInt(), layout.getLineBottom(line).roundToInt())
+}
+
 fun readerShouldPrefetch(positionMs: Long, durationMs: Long): Boolean =
     durationMs > 0L && positionMs.coerceAtLeast(0L).toDouble() / durationMs >= 0.8
 
@@ -276,20 +296,31 @@ fun ReaderScreen(
     val player by playback.state.collectAsState()
     val prefs by preferences.preferences.collectAsState()
     val palette = remember(prefs.theme) { readerPalette(prefs.theme) }
-    val scope = rememberCoroutineScope()
+    val generation by cache.changes.collectAsState(initial = remember(cache) { cache.currentGeneration() })
 
-    var document by remember(chapterId) { mutableStateOf<ReadAlongDocument?>(null) }
-    var loading by remember(chapterId) { mutableStateOf(true) }
-    var error by remember(chapterId) { mutableStateOf<String?>(null) }
-    var reload by remember(chapterId) { mutableIntStateOf(0) }
+    var document by remember(cache, generation, chapterId) { mutableStateOf<ReadAlongDocument?>(null) }
+    var loading by remember(cache, generation, chapterId) { mutableStateOf(true) }
+    var error by remember(cache, generation, chapterId) { mutableStateOf<String?>(null) }
+    var reload by remember(cache, generation, chapterId) { mutableIntStateOf(0) }
 
-    LaunchedEffect(chapterId, reload) {
+    LaunchedEffect(cache, generation, chapterId, reload) {
         loading = true
         error = null
-        runCatching { cache.load(chapterId) }
-            .onSuccess { document = it }
-            .onFailure { error = userFacingMessage(it, "Could not load chapter text") }
-        loading = false
+        try {
+            val loaded = cache.load(chapterId)
+            currentCoroutineContext().ensureActive()
+            if (generation == cache.currentGeneration()) document = loaded
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (failure: Exception) {
+            currentCoroutineContext().ensureActive()
+            if (generation == cache.currentGeneration()) {
+                document = null
+                error = userFacingMessage(failure, "Could not load chapter text")
+            }
+        } finally {
+            if (generation == cache.currentGeneration()) loading = false
+        }
     }
 
     val currentItem = player.queue.getOrNull(player.currentIndex)
@@ -298,8 +329,8 @@ fun ReaderScreen(
 
     // Opening a non-playing chapter must never jump to whatever happens to be playing. Once this
     // reader has followed its own playing chapter, however, queue auto-advance carries it forward.
-    var followsQueue by remember(chapterId) { mutableStateOf(isPlayingThisChapter) }
-    LaunchedEffect(currentChapterId, chapterId) {
+    var followsQueue by remember(cache, generation, chapterId) { mutableStateOf(isPlayingThisChapter) }
+    LaunchedEffect(cache, generation, currentChapterId, chapterId) {
         when {
             currentChapterId == chapterId -> followsQueue = true
             followsQueue && currentChapterId > 0 -> {
@@ -309,8 +340,8 @@ fun ReaderScreen(
         }
     }
 
-    var prefetchedChapter by remember(chapterId) { mutableIntStateOf(0) }
-    LaunchedEffect(chapterId, player.positionMs, player.durationMs, currentChapterId) {
+    var prefetchedChapter by remember(cache, generation, chapterId) { mutableIntStateOf(0) }
+    LaunchedEffect(cache, generation, chapterId, player.positionMs, player.durationMs, currentChapterId) {
         if (!isPlayingThisChapter || !readerShouldPrefetch(player.positionMs, player.durationMs)) {
             return@LaunchedEffect
         }
@@ -391,6 +422,15 @@ private fun ReaderDocumentPage(
         else ReadAlongHighlight.None
     }
     val activeParagraph = highlight.word?.let { document.paragraphIndexAt(it.start) } ?: -1
+    var activeLayout by remember(document) { mutableStateOf<Pair<Int, TextLayoutResult>?>(null) }
+    val activeLine = activeLayout?.takeIf { it.first == activeParagraph }?.second?.let { layout ->
+        val word = highlight.word ?: return@let null
+        val paragraph = document.paragraphs.getOrNull(activeParagraph) ?: return@let null
+        readerSpokenLine(layout, word.start - paragraph.start)
+    }
+    val viewport by remember(listState) {
+        derivedStateOf { listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset }
+    }
 
     val bookmarkAnchor = remember(document, highlight, isPlayingThisChapter, timingsMatch, player.positionMs) {
         readerBookmarkAnchor(
@@ -402,7 +442,7 @@ private fun ReaderDocumentPage(
         )
     }
 
-    LaunchedEffect(listState) {
+    LaunchedEffect(listState, document.chapterId) {
         listState.interactionSource.interactions.collect { interaction ->
             if (interaction is DragInteraction.Start) {
                 followPlayback = readerFollowAfter(followPlayback, ReaderFollowEvent.ManualScroll)
@@ -410,14 +450,18 @@ private fun ReaderDocumentPage(
         }
     }
 
-    suspend fun scrollToActive() {
-        if (activeParagraph < 0) return
-        val viewport = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-        listState.animateScrollToItem(activeParagraph + 1, readerAutoScrollOffsetPx(viewport))
-    }
-
-    LaunchedEffect(activeParagraph, followPlayback) {
-        if (followPlayback) scrollToActive()
+    LaunchedEffect(activeParagraph, activeLine, followPlayback, viewport) {
+        if (!followPlayback || activeParagraph < 0 || viewport <= 0) return@LaunchedEffect
+        val info = listState.layoutInfo
+        val item = info.visibleItemsInfo.firstOrNull { it.index == activeParagraph + 1 }
+        val line = activeLine
+        if (item == null || line == null) {
+            listState.animateScrollToItem(activeParagraph + 1, (line?.top ?: 0) + readerAutoScrollOffsetPx(viewport))
+        } else {
+            val paragraphTop = item.offset - info.viewportStartOffset
+            val delta = readerFollowScrollDelta(paragraphTop + line.top, paragraphTop + line.bottom, viewport)
+            if (delta != null) listState.animateScrollBy(delta.toFloat())
+        }
     }
 
     var findOpen by rememberSaveable(document.chapterId) { mutableStateOf(false) }
@@ -438,8 +482,8 @@ private fun ReaderDocumentPage(
 
     fun seekToOffset(offset: Int) {
         if (!isPlayingThisChapter || !timingsMatch) return
-        val seconds = document.seekSecondsForOffset(offset) ?: return
-        playback.seekTo((seconds * 1000.0).roundToLong())
+        val positionMs = document.seekMillisForOffset(offset) ?: return
+        playback.seekTo(positionMs)
         followPlayback = readerFollowAfter(followPlayback, ReaderFollowEvent.BackToCurrent)
     }
 
@@ -484,10 +528,16 @@ private fun ReaderDocumentPage(
             // Watched on the *initial* pass, before the list and the paragraphs get the event.
             // Whether the frame comes back must not depend on which descendant happens to be
             // under the pointer, and a scrolling lazy list is a descendant that consumes.
-            .pointerInput(Unit) {
+            .pointerInput(document.chapterId) {
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.type == PointerEventType.Scroll || event.changes.any {
+                                it.pressed && it.previousPressed && it.position != it.previousPosition
+                            }
+                        ) {
+                            followPlayback = readerFollowAfter(followPlayback, ReaderFollowEvent.ManualScroll)
+                        }
                         pointerY = when (event.type) {
                             PointerEventType.Exit -> null
                             else -> event.changes.lastOrNull()?.position?.y ?: pointerY
@@ -580,7 +630,7 @@ private fun ReaderDocumentPage(
                     itemsIndexed(
                         document.paragraphs,
                         key = { index, span -> "paragraph-$index-${span.start}" },
-                    ) { _, paragraph ->
+                    ) { index, paragraph ->
                         ReaderParagraph(
                             document = document,
                             paragraph = paragraph,
@@ -590,6 +640,8 @@ private fun ReaderDocumentPage(
                             prefs = prefs,
                             palette = palette,
                             onSeek = ::seekToOffset,
+                            isActiveParagraph = index == activeParagraph,
+                            onActiveLayout = { activeLayout = index to it },
                         )
                     }
                 }
@@ -598,7 +650,8 @@ private fun ReaderDocumentPage(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .fillMaxHeight()
-                        .onPointerEvent(PointerEventType.Press) {
+                        .testTag(ReaderScrollbarTestTag)
+                        .onPointerEvent(PointerEventType.Press, PointerEventPass.Initial) {
                             followPlayback = readerFollowAfter(followPlayback, ReaderFollowEvent.ManualScroll)
                         },
                 )
@@ -623,7 +676,6 @@ private fun ReaderDocumentPage(
             OutlinedButton(
                 onClick = {
                     followPlayback = readerFollowAfter(followPlayback, ReaderFollowEvent.BackToCurrent)
-                    scope.launch { scrollToActive() }
                 },
                 shape = RectangleShape,
                 modifier = Modifier
@@ -798,8 +850,42 @@ private fun ReaderHeading(
     }
 }
 
+internal fun readerWordStyle(mode: ReaderHighlight, palette: ReaderPalette): SpanStyle = SpanStyle(
+    color = palette.accent,
+    background = if (mode == ReaderHighlight.Word) palette.sentenceBand else Color.Unspecified,
+)
+
+internal fun readerParagraphText(
+    document: ReadAlongDocument,
+    paragraph: TextSpan,
+    sentence: TextSpan?,
+    word: TextSpan?,
+    matches: List<TextSpan>,
+    activeMatch: TextSpan?,
+    mode: ReaderHighlight,
+    palette: ReaderPalette,
+): AnnotatedString = buildAnnotatedString {
+    append(document.textIn(paragraph))
+    if (mode == ReaderHighlight.Sentence) {
+        sentence?.let { addReaderStyle(SpanStyle(background = palette.sentenceBand), paragraph, it) }
+    }
+    matches.forEach { match ->
+        addReaderStyle(
+            SpanStyle(
+                background = palette.findBand,
+                fontWeight = if (match == activeMatch) FontWeight.Bold else FontWeight.Normal,
+            ),
+            paragraph,
+            match,
+        )
+    }
+    if (mode != ReaderHighlight.Off) {
+        word?.let { addReaderStyle(readerWordStyle(mode, palette), paragraph, it) }
+    }
+}
+
 @Composable
-private fun ReaderParagraph(
+internal fun ReaderParagraph(
     document: ReadAlongDocument,
     paragraph: TextSpan,
     highlight: ReadAlongHighlight,
@@ -808,30 +894,21 @@ private fun ReaderParagraph(
     prefs: ReaderPreferences,
     palette: ReaderPalette,
     onSeek: (Int) -> Unit,
+    isActiveParagraph: Boolean,
+    onActiveLayout: (TextLayoutResult) -> Unit,
 ) {
     val sentence = highlight.sentence?.takeIf { prefs.highlight == ReaderHighlight.Sentence && it.overlaps(paragraph) }
     val word = highlight.word?.takeIf { prefs.highlight != ReaderHighlight.Off && it.overlaps(paragraph) }
     val localMatches = matches.filter { it.overlaps(paragraph) }
-    val annotated = remember(paragraph, sentence, word, localMatches, activeMatch, palette) {
-        buildAnnotatedString {
-            append(document.textIn(paragraph))
-            sentence?.let { addReaderStyle(SpanStyle(background = palette.sentenceBand), paragraph, it) }
-            localMatches.forEach { match ->
-                addReaderStyle(
-                    SpanStyle(
-                        background = palette.findBand,
-                        fontWeight = if (match == activeMatch) FontWeight.Bold else FontWeight.Normal,
-                    ),
-                    paragraph,
-                    match,
-                )
-            }
-            word?.let {
-                addReaderStyle(SpanStyle(color = palette.accent, fontWeight = FontWeight.Bold), paragraph, it)
-            }
-        }
+    val annotated = remember(document.text, paragraph, sentence, word, localMatches, activeMatch, prefs.highlight, palette) {
+        readerParagraphText(document, paragraph, sentence, word, localMatches, activeMatch, prefs.highlight, palette)
     }
-    var layout by remember(paragraph) { mutableStateOf<TextLayoutResult?>(null) }
+    val currentOnSeek by rememberUpdatedState(onSeek)
+    var layout by remember(document.text, paragraph) { mutableStateOf<TextLayoutResult?>(null) }
+    LaunchedEffect(isActiveParagraph, layout) {
+        val measured = layout
+        if (isActiveParagraph && measured != null) onActiveLayout(measured)
+    }
     SelectionContainer {
         Text(
             text = annotated,
@@ -861,7 +938,7 @@ private fun ReaderParagraph(
                 .pointerInput(paragraph) {
                     detectTapGestures { position ->
                         val local = layout?.getOffsetForPosition(position) ?: return@detectTapGestures
-                        onSeek(paragraph.start + local)
+                        currentOnSeek(paragraph.start + local)
                     }
                 },
         )

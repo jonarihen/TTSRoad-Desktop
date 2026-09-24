@@ -4,6 +4,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 class FictionMaintenanceTest {
 
@@ -21,6 +22,43 @@ class FictionMaintenanceTest {
             fictionMaintenanceActions(capable, isAdmin = true),
         )
         assertTrue(fictionMaintenanceActions(ServerCapabilities.Baseline, isAdmin = true).isEmpty())
+    }
+
+    @Test
+    fun `poll is excluded for epub and patreon source types`() {
+        val capable = ServerCapabilities(fictionMaintenance = true)
+
+        assertFalse(supportsFictionPoll("epub"))
+        assertFalse(supportsFictionPoll("EPUB"))
+        assertFalse(supportsFictionPoll("patreon"))
+        assertFalse(supportsFictionPoll(" Patreon "))
+        assertTrue(supportsFictionPoll("royalroad"))
+        assertTrue(supportsFictionPoll(null))
+
+        assertEquals(
+            emptyList(),
+            fictionMaintenanceActions(capable, isAdmin = false, sourceType = "epub"),
+        )
+        assertEquals(
+            FictionMaintenanceAction.entries - FictionMaintenanceAction.Poll,
+            fictionMaintenanceActions(capable, isAdmin = true, sourceType = "patreon"),
+        )
+    }
+
+    @Test
+    fun `fiction poll scope validates inputs and exclusivity`() {
+        assertEquals(FictionPollScope(full = true), fictionPollScope(FictionFetchRange.All, "0"))
+        assertEquals(FictionPollScope(firstN = 25), fictionPollScope(FictionFetchRange.First, "25"))
+        assertEquals(FictionPollScope(lastN = 50), fictionPollScope(FictionFetchRange.Last, "50"))
+        assertEquals(null, fictionPollScope(FictionFetchRange.First, "0"))
+        assertEquals(null, fictionPollScope(FictionFetchRange.Last, "-5"))
+        assertEquals(null, fictionPollScope(FictionFetchRange.First, "abc"))
+
+        assertThrows<IllegalArgumentException> { FictionPollScope(firstN = 0) }
+        assertThrows<IllegalArgumentException> { FictionPollScope(lastN = -1) }
+        assertThrows<IllegalArgumentException> { FictionPollScope(full = false) }
+        assertThrows<IllegalArgumentException> { FictionPollScope(full = true, firstN = 10) }
+        assertThrows<IllegalArgumentException> { FictionPollScope(firstN = 10, lastN = 10) }
     }
 
     @Test
@@ -52,8 +90,28 @@ class FictionMaintenanceTest {
             message(FictionMaintenanceAction.Poll, MaintenanceResponse(fullIngest = true)),
         )
         assertEquals(
+            "Checked the source — re-read the first 10 chapters.",
+            message(FictionMaintenanceAction.Poll, MaintenanceResponse(firstN = 10)),
+        )
+        assertEquals(
+            "Checked the source — re-read the first chapter.",
+            message(FictionMaintenanceAction.Poll, MaintenanceResponse(firstN = 1)),
+        )
+        assertEquals(
+            "Checked the source — re-read the last 50 chapters.",
+            message(FictionMaintenanceAction.Poll, MaintenanceResponse(lastN = 50)),
+        )
+        assertEquals(
+            "Checked the source — re-read the last chapter.",
+            message(FictionMaintenanceAction.Poll, MaintenanceResponse(lastN = 1)),
+        )
+        assertEquals(
             "Checked the source — re-read the last 25 chapters.",
             message(FictionMaintenanceAction.Poll, MaintenanceResponse(partialSync = 25)),
+        )
+        assertEquals(
+            "Server throttled poll.",
+            message(FictionMaintenanceAction.Poll, MaintenanceResponse(detail = "Server throttled poll.")),
         )
         assertEquals(
             "Checked the source for new chapters.",

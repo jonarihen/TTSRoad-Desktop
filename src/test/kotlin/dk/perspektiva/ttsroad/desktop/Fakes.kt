@@ -110,6 +110,10 @@ open class FakeRepository(
     var deletePronunciationReportResult: Result<Boolean> = Result.success(false),
     /** Null models a server whose notifications route answers 404. */
     var chapterNotificationsResult: Result<ChapterNotificationsResponse?> = Result.success(null),
+    var fictionNotificationSettingsResult: Result<dk.perspektiva.ttsroad.desktop.data.FictionNotificationSettings?> =
+        Result.success(null),
+    var updateFictionNotificationSettingsResult: Result<dk.perspektiva.ttsroad.desktop.data.FictionNotificationSettings?> =
+        Result.success(null),
 ) : TtsRoadRepository {
     var loginCalls: Int = 0
         private set
@@ -136,6 +140,8 @@ open class FakeRepository(
     val excludedChapters: MutableList<Pair<Int, Boolean>> = mutableListOf()
     val deletedChapters: MutableList<Int> = mutableListOf()
     val fictionMaintenanceCalls: MutableList<Pair<Int, FictionMaintenanceAction>> = mutableListOf()
+    val pollFictionCalls: MutableList<Pair<Int, dk.perspektiva.ttsroad.desktop.data.FictionPollScope>> = mutableListOf()
+    var pollFictionResult: Result<MaintenanceResponse?>? = null
     var feedsCalls: Int = 0
         private set
     var rotateFeedCalls: Int = 0
@@ -172,7 +178,8 @@ open class FakeRepository(
     /** Every queue mutation body, in order — the action and what it addressed are both observable. */
     val queueRequests: MutableList<ServerQueueRequest> = mutableListOf()
     val markedPlayed: MutableList<Pair<List<Int>, Boolean>> = mutableListOf()
-    val savedProgress: MutableList<Triple<Int, Double, Boolean>> = mutableListOf()
+    val savedProgress: MutableList<Triple<Int, Double, Boolean>> =
+        java.util.concurrent.CopyOnWriteArrayList()
 
     /** Bookmark traffic, in order — the `kind` filter is part of what the tests assert. */
     val bookmarkListCalls: MutableList<Pair<String?, Int?>> = mutableListOf()
@@ -186,8 +193,12 @@ open class FakeRepository(
 
     /** Notification ids passed to [dismissChapterNotification], in order. */
     val dismissedNotifications: MutableList<Int> = mutableListOf()
+    var dismissedNotificationResult: Result<Boolean> = Result.success(true)
+    var dismissReadResult: Result<Boolean> = Result.success(true)
     var dismissReadCalls: Int = 0
     var chapterNotificationCalls: Int = 0
+    val fictionNotificationSettingsRequests:
+        MutableList<Pair<Int, dk.perspektiva.ttsroad.desktop.data.FictionNotificationSettingsRequest>> = mutableListOf()
 
     /** `(fictionId, file)` pairs passed to [uploadFictionCover], in order. */
     val uploadedCovers: MutableList<Pair<Int, java.io.File>> = mutableListOf()
@@ -284,12 +295,23 @@ open class FakeRepository(
 
     override suspend fun dismissChapterNotification(notificationId: Int): Boolean {
         dismissedNotifications += notificationId
-        return true
+        return dismissedNotificationResult.getOrThrow()
     }
 
     override suspend fun dismissReadChapterNotifications(): Boolean {
         dismissReadCalls++
-        return true
+        return dismissReadResult.getOrThrow()
+    }
+
+    override suspend fun fictionNotificationSettings(fictionId: Int): dk.perspektiva.ttsroad.desktop.data.FictionNotificationSettings? =
+        fictionNotificationSettingsResult.getOrThrow()
+
+    override suspend fun updateFictionNotificationSettings(
+        fictionId: Int,
+        request: dk.perspektiva.ttsroad.desktop.data.FictionNotificationSettingsRequest,
+    ): dk.perspektiva.ttsroad.desktop.data.FictionNotificationSettings? {
+        fictionNotificationSettingsRequests += fictionId to request
+        return updateFictionNotificationSettingsResult.getOrThrow()
     }
 
     override suspend fun uploadFictionCover(fictionId: Int, file: java.io.File): CoverUploadResult {
@@ -339,6 +361,11 @@ open class FakeRepository(
     ): MaintenanceResponse? {
         fictionMaintenanceCalls += fictionId to action
         return fictionMaintenanceResult.getOrThrow()
+    }
+
+    override suspend fun pollFiction(fictionId: Int, scope: dk.perspektiva.ttsroad.desktop.data.FictionPollScope): MaintenanceResponse? {
+        pollFictionCalls += fictionId to scope
+        return (pollFictionResult ?: fictionMaintenanceResult).getOrThrow()
     }
 
     override suspend fun feeds(): FeedsResponse? {

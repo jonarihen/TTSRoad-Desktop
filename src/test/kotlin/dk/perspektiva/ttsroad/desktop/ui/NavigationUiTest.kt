@@ -1,14 +1,19 @@
 package dk.perspektiva.ttsroad.desktop.ui
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.isFocusable
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
@@ -31,8 +36,11 @@ import androidx.compose.ui.unit.Density
 import dk.perspektiva.ttsroad.desktop.App
 import dk.perspektiva.ttsroad.desktop.FakePlaybackController
 import dk.perspektiva.ttsroad.desktop.FakeRepository
+import dk.perspektiva.ttsroad.desktop.data.BrowsePreferences
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.ChaptersResponse
+import dk.perspektiva.ttsroad.desktop.data.FictionProgress
+import dk.perspektiva.ttsroad.desktop.data.FictionSort
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
 import dk.perspektiva.ttsroad.desktop.data.InMemoryPlaybackHistoryStore
 import dk.perspektiva.ttsroad.desktop.data.InMemoryBrowsePreferencesStore
@@ -41,16 +49,20 @@ import dk.perspektiva.ttsroad.desktop.data.InMemoryReaderPreferencesStore
 import dk.perspektiva.ttsroad.desktop.data.InMemorySessionStore
 import dk.perspektiva.ttsroad.desktop.data.LibraryCache
 import dk.perspektiva.ttsroad.desktop.data.LibraryResponse
+import dk.perspektiva.ttsroad.desktop.data.LibraryScope
 import dk.perspektiva.ttsroad.desktop.data.ReadAlongChapter
 import dk.perspektiva.ttsroad.desktop.data.ReadAlongFetchResult
 import dk.perspektiva.ttsroad.desktop.data.ReadAlongResponse
 import dk.perspektiva.ttsroad.desktop.data.ServerCapabilities
 import dk.perspektiva.ttsroad.desktop.data.SessionState
+import dk.perspektiva.ttsroad.desktop.data.UnknownSourceKey
 import dk.perspektiva.ttsroad.desktop.di.AppContainer
 import dk.perspektiva.ttsroad.desktop.download.DownloadCoordinator
 import dk.perspektiva.ttsroad.desktop.player.PlayerUiState
+import dk.perspektiva.ttsroad.desktop.testLibraryCache
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import org.junit.Rule
 import org.junit.Test
@@ -100,6 +112,7 @@ class NavigationUiTest {
     private fun container(
         repository: FakeRepository,
         playback: FakePlaybackController = FakePlaybackController(playing),
+        browsePreferences: InMemoryBrowsePreferencesStore = InMemoryBrowsePreferencesStore(),
     ) = AppContainer(
         sessionStore = InMemorySessionStore(
             SessionState(serverUrl = "https://x/", token = "t", username = "admin", serverName = "Perspektiva"),
@@ -109,7 +122,7 @@ class NavigationUiTest {
         // In-memory, so rendering a screen in a test never touches the real
         // ~/.config/TTSRoad files the production stores default to.
         playbackPreferences = InMemoryPlaybackPreferencesStore(),
-        browsePreferences = InMemoryBrowsePreferencesStore(),
+        browsePreferences = browsePreferences,
         playbackHistory = InMemoryPlaybackHistoryStore(),
         readerPreferencesFactory = { _, _ -> InMemoryReaderPreferencesStore() },
         // See `testLibraryCache`: immediate main dispatch is what makes `waitForIdle` sufficient.
@@ -287,6 +300,210 @@ class NavigationUiTest {
         // Two ticked tags mean both, and no fiction here carries both.
         compose.onNode(hasText("NO FICTIONS CARRY ALL 2 OF THOSE TAGS", substring = true))
             .assertIsDisplayed()
+    }
+
+    @Test
+    fun `source controls use labelled accessible checkboxes and persist keys with union semantics`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(
+                LibraryResponse(fictions = listOf(
+                    FictionSummary(id = 1, title = "Road", sourceType = "royalroad", tags = listOf("Fantasy", "LitRPG")),
+                    FictionSummary(id = 2, title = "Archive", sourceType = "ao3", sourceLabel = "Archive of Our Own", tags = listOf("Fantasy")),
+                    FictionSummary(id = 3, title = "Unknown book", tags = listOf("Fantasy", "LitRPG")),
+                )),
+            ),
+        )
+        val preferences = InMemoryBrowsePreferencesStore()
+        compose.setContent { TtsRoadTheme { App(container(repository, FakePlaybackController(), preferences)) } }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("ARCHIVE OF OUR OWN", substring = true).assertExists()
+        compose.onNodeWithTag(BrowseSourceTestTag).assert(isFocusable()).performClick()
+        val checkbox = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox)
+        compose.onNode(checkbox and hasText("Archive of Our Own")).assert(isFocusable()).performClick()
+        compose.onNode(checkbox and hasText("· Archive of Our Own")).assertIsSelected()
+        compose.onNode(checkbox and hasText("Unknown")).performClick()
+        compose.onNodeWithText("DONE").performClick()
+        compose.waitForIdle()
+
+        assertEquals(setOf("ao3", UnknownSourceKey), preferences.preferences.value.sources)
+        compose.onNodeWithText("Road").assertDoesNotExist()
+        compose.onNodeWithText("Archive").assertExists()
+        compose.onNodeWithText("Unknown book").assertExists()
+        compose.onNodeWithTag(BrowseFilterSummaryTestTag).assertIsDisplayed()
+        compose.onNodeWithTag(BrowseTagTestTag).performClick()
+        compose.onNodeWithText("Fantasy").performClick()
+        compose.onNodeWithText("LitRPG").performClick()
+        compose.onNodeWithText("DONE").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Archive").assertDoesNotExist()
+        compose.onNodeWithText("Unknown book").assertExists()
+        compose.onNodeWithText("CLEAR SOURCES").performClick()
+        compose.waitForIdle()
+        assertTrue(preferences.preferences.value.sources.isEmpty())
+        assertEquals(setOf("Fantasy", "LitRPG"), preferences.preferences.value.tags)
+        compose.onNodeWithText("Road").assertExists()
+        compose.onNodeWithText("Archive").assertDoesNotExist()
+        compose.onNodeWithText("CLEAR TAGS").performClick()
+        compose.onNodeWithText("SEARCH TITLE, AUTHOR OR TAG").performTextInput("Archive")
+        compose.waitForIdle()
+        compose.onNodeWithText("Road").assertDoesNotExist()
+        compose.onNodeWithText("Unknown book").assertDoesNotExist()
+        compose.onAllNodesWithTag(FictionCardTestTag).assertCountEquals(1)
+    }
+
+    @Test
+    fun `one source hides the filter until a saved selection needs to remain reachable`() {
+        val repository = FakeRepository(
+            libraryResult = Result.success(
+                LibraryResponse(fictions = listOf(FictionSummary(id = 1, title = "Book", sourceType = "epub"))),
+            ),
+        )
+        val preferences = InMemoryBrowsePreferencesStore()
+        compose.setContent { TtsRoadTheme { App(container(repository, FakePlaybackController(), preferences)) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag(BrowseSourceTestTag).assertDoesNotExist()
+        compose.onNodeWithText("EPUB", substring = true).assertExists()
+
+        compose.runOnIdle { preferences.update { it.copy(sources = setOf("ao3")) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag(BrowseSourceTestTag).assertIsDisplayed().performClick()
+        compose.onNodeWithText("· ao3").assertIsSelected().performClick()
+        compose.onNodeWithText("DONE").performClick()
+        compose.waitForIdle()
+        assertTrue(preferences.preferences.value.sources.isEmpty())
+        compose.onNodeWithTag(BrowseSourceTestTag).assertDoesNotExist()
+        compose.onNodeWithText("Book").assertExists()
+    }
+
+    @Test
+    fun `filters survive startup fallback loading an all catalogue and returning to a partial shelf`() {
+        val all = CompletableDeferred<LibraryResponse>()
+        val shelf = LibraryResponse(
+            scope = "followed",
+            fictions = listOf(FictionSummary(id = 1, title = "Road", sourceType = "royalroad", tags = listOf("LitRPG"))),
+        )
+        val repository = object : FakeRepository(libraryResult = Result.success(shelf)) {
+            override suspend fun library(scope: LibraryScope): LibraryResponse =
+                if (scope == LibraryScope.All) all.await() else super.library(scope)
+        }
+        val preferences = InMemoryBrowsePreferencesStore(
+            BrowsePreferences(tags = setOf("Romance"), sources = setOf("ao3"), browsingAll = true),
+        )
+        val follows = mutableStateOf(false)
+        val cache = testLibraryCache(repository)
+        compose.setContent {
+            TtsRoadTheme {
+                LibraryScreen(
+                    cache, repository, FakePlaybackController(), onOpenFiction = {}, onOpenPlayer = {},
+                    followsAvailable = follows.value, browsePreferences = preferences,
+                )
+            }
+        }
+        compose.waitForIdle()
+        assertEquals(setOf("Romance"), preferences.preferences.value.tags)
+        assertEquals(setOf("ao3"), preferences.preferences.value.sources)
+        compose.onNodeWithTag(BrowseSourceTestTag).performClick()
+        compose.onNodeWithText("· ao3").assertIsSelected()
+        compose.onNodeWithText("DONE").performClick()
+        compose.runOnIdle { follows.value = true }
+        compose.waitForIdle()
+        assertEquals(setOf("Romance"), preferences.preferences.value.tags)
+        assertEquals(setOf("ao3"), preferences.preferences.value.sources)
+        compose.onNodeWithTag(BrowseSourceTestTag).assertExists()
+
+        compose.runOnIdle {
+            all.complete(LibraryResponse(scope = "all", fictions = shelf.fictions + FictionSummary(
+                id = 2, title = "Archive", sourceType = "ao3", sourceLabel = "Archive of Our Own", tags = listOf("Romance"),
+            )))
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Archive").assertExists()
+        compose.onNodeWithTag(BrowseSourceTestTag).performClick()
+        compose.onNodeWithText("· Archive of Our Own").assertIsSelected()
+        compose.onNodeWithText("DONE").performClick()
+        compose.onNodeWithText("MY SHELF").performClick()
+        compose.waitForIdle()
+        assertEquals(setOf("ao3"), preferences.preferences.value.sources)
+        assertEquals(setOf("Romance"), preferences.preferences.value.tags)
+        compose.onNodeWithTag(BrowseTagTestTag).performClick()
+        compose.onNodeWithText("· Romance").assertIsSelected()
+        compose.onNodeWithText("DONE").performClick()
+        compose.onNodeWithText("CLEAR TAGS").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("NO FICTIONS FROM THE SELECTED SOURCES").assertExists()
+        compose.onNodeWithText("CLEAR SOURCES").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Road").assertExists()
+        cache.close()
+    }
+
+    @Test
+    fun `an empty shelf keeps saved source and tag selections clearable`() {
+        val repository = FakeRepository(libraryResult = Result.success(LibraryResponse()))
+        val preferences = InMemoryBrowsePreferencesStore(
+            BrowsePreferences(tags = setOf("Romance"), sources = setOf("ao3")),
+        )
+        compose.setContent { TtsRoadTheme { App(container(repository, FakePlaybackController(), preferences)) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag(BrowseSourceTestTag).assertDoesNotExist()
+        compose.onNodeWithText("CLEAR SOURCES").assertExists()
+        compose.onNodeWithTag(BrowseTagTestTag).performClick()
+        compose.onNodeWithText("· Romance").assertIsSelected()
+        compose.onNodeWithText("DONE").performClick()
+        compose.onNodeWithText("CLEAR SOURCES").performClick()
+        compose.onNodeWithText("CLEAR TAGS").performClick()
+        compose.waitForIdle()
+        assertTrue(preferences.preferences.value.sources.isEmpty())
+        assertTrue(preferences.preferences.value.tags.isEmpty())
+    }
+
+    @Test
+    fun `sort changes reset the listing but same sort and navigation preserve its position`() {
+        val library = bigLibrary(60).let { response ->
+            response.copy(
+                fictions = response.fictions.map {
+                    it.copy(progress = FictionProgress(lastListenedAt = "2026-09-01T00:00:%02dZ".format(it.id - 1)))
+                },
+                continueListening = listOf(ChapterSummary(id = 99, fictionId = 99, title = "Continue somewhere")),
+            )
+        }
+        val repository = FakeRepository(libraryResult = Result.success(library), chaptersResult = Result.success(chapters))
+        val preferences = InMemoryBrowsePreferencesStore()
+        compose.setContent { TtsRoadTheme { App(container(repository, FakePlaybackController(), preferences)) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag(LibraryGridTestTag).performScrollToNode(hasText("Serial 50"))
+        compose.runOnIdle { preferences.update { it.copy(sort = FictionSort.Default) } }
+        compose.waitForIdle()
+        compose.onNodeWithText("Serial 50").assertIsDisplayed()
+
+        compose.runOnIdle { preferences.update { it.copy(sort = FictionSort.RecentlyListened) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag(BrowseSortTestTag).assertIsDisplayed()
+        compose.onNodeWithText("ORDER: RECENTLY LISTENED").assertIsDisplayed()
+        compose.onNodeWithText("Serial 60").assertIsDisplayed()
+        compose.onNodeWithTag(LibraryGridTestTag).performScrollToNode(hasText("Serial 50"))
+        compose.onNodeWithText("Serial 50").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Serial 50").assertIsDisplayed()
+        assertEquals(FictionSort.RecentlyListened, preferences.preferences.value.sort)
+    }
+
+    @Test
+    fun `the sort picker replaces polling order with new chapters and recently listened`() {
+        val repository = FakeRepository(libraryResult = Result.success(bigLibrary(2)))
+        compose.setContent { TtsRoadTheme { App(container(repository, FakePlaybackController())) } }
+        compose.waitForIdle()
+        compose.onNodeWithText("ORDER: NEW CHAPTERS FIRST").assertIsDisplayed()
+        compose.onNodeWithTag(BrowseSortTestTag).performClick()
+        compose.onNodeWithText("Recently updated").assertDoesNotExist()
+        compose.onNodeWithText("· New chapters first").assertIsSelected()
+        compose.onNodeWithText("Recently listened").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("ORDER: RECENTLY LISTENED").assertIsDisplayed()
     }
 
     @Test

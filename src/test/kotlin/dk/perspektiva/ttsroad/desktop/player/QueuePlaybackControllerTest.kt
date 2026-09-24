@@ -37,23 +37,27 @@ class QueuePlaybackControllerTest {
         )
 
     private fun controllerFor(
-        engine: FakePlaybackEngine,
+        engine: PlaybackEngine,
         sources: FakeMediaSourceFactory = FakeMediaSourceFactory(),
         repository: FakeRepository = FakeRepository(),
         retryDelaysMs: List<Long> = emptyList(),
         history: InMemoryPlaybackHistoryStore = InMemoryPlaybackHistoryStore(),
         ownerKey: () -> String = { "" },
         historyRecordIntervalMs: Long = 5 * 60_000L,
+        sleepTimer: SleepTimer = SleepTimer(),
+        queueRefreshIntervalMs: Long = 15_000L,
     ) = QueuePlaybackController(
         repository = repository,
         sources = sources,
         engine = engine,
         ioDispatcher = Dispatchers.Default,
         historyStore = history,
+        sleepTimer = sleepTimer,
         ownerKey = ownerKey,
         retryDelaysMs = retryDelaysMs,
         tickIntervalMs = 10,
         historyRecordIntervalMs = historyRecordIntervalMs,
+        queueRefreshIntervalMs = queueRefreshIntervalMs,
     )
 
     private suspend fun PlaybackController.await(
@@ -533,5 +537,539 @@ class QueuePlaybackControllerTest {
 
         val state = controller.await("the single chapter is queued") { it.queue.size == 1 }
         assertFalse(state.hasNext, "nothing was loaded to advance to")
+    }
+
+    @Test
+    fun `deferred refresh is discarded when a new queue or session starts`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        var slowLoad = true
+        val slowRepo = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                if (slowLoad && fictionId == 7) {
+                    kotlinx.coroutines.delay(200)
+                    return ChaptersResponse(
+                        fiction = FictionSummary(id = 7),
+                        chapters = listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0)),
+                    )
+                }
+                return ChaptersResponse(
+                    fiction = FictionSummary(id = 8),
+                    chapters = listOf(chapter(99, "Other", 10.0).copy(fictionId = 8)),
+                )
+            }
+        }
+        val controller = controllerFor(engine, repository = slowRepo)
+        controller.play(chapter(1, "One", 10.0), FictionSummary(id = 7))
+        controller.await("initial chapter to start") { it.hasMedia && it.queue.size == 1 }
+
+        controller.play(chapter(99, "Other", 10.0).copy(fictionId = 8), FictionSummary(id = 8))
+        controller.await("switched to second fiction") { it.fictionId == 8 && it.queue.size == 1 }
+
+        kotlinx.coroutines.delay(300)
+        assertEquals(8, controller.state.value.fictionId)
+        assertEquals(listOf(99), controller.state.value.queue.map { it.chapterId })
+        controller.release()
+    }
+
+    @Test
+    fun `next converted chapter follows automatically on queue end without restarting ended chapter`() = runBlocking {
+        val engine = FakePlaybackEngine(completeOnPlay = true)
+        val sources = FakeMediaSourceFactory()
+        val repository = FakeRepository(
+            chaptersResult = Result.success(
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(
+                        chapter(1, "One", 1.0),
+                        chapter(2, "Two", 1.0),
+                    ),
+                ),
+            ),
+        )
+        val controller = controllerFor(engine, sources = sources, repository = repository)
+
+        controller.playQueue(
+            listOf(chapter(1, "One", 1.0)),
+            startChapterId = 1,
+            fiction = FictionSummary(id = 7),
+        )
+
+        controller.await("the converted chapter to be played automatically") {
+            it.currentIndex == 1 && finished(it)
+        }
+
+        assertEquals(listOf(1, 2), sources.requestedChapterIds.toList())
+        assertEquals(2, engine.prepareCount.get())
+        assertTrue(repository.savedProgress.any { it.first == 1 && it.third })
+        assertTrue(repository.savedProgress.any { it.first == 2 && it.third })
+        controller.release()
+    }
+
+    @Test
+    fun `queue refresh preserves canonical reading order without duplicating or skipping current chapter`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val repository = FakeRepository()
+        val initialChapters = listOf(
+            chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+            chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+        )
+        val refreshedChapters = listOf(
+            chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+            chapter(2, "Two", 10.0).copy(displayNumber = 2.0),
+            chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+            chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+        )
+        repository.chaptersResult = Result.success(
+            ChaptersResponse(fiction = FictionSummary(id = 7), chapters = refreshedChapters),
+        )
+        val controller = controllerFor(
+            engine,
+            repository = repository,
+            queueRefreshIntervalMs = 50,
+        )
+
+        controller.playQueue(initialChapters, startChapterId = 3, fiction = FictionSummary(id = 7))
+        controller.await("chapter 3 playing") { it.hasMedia && it.queue.size == 2 && it.currentIndex == 1 }
+
+        controller.await("queue to grow with canonical order and current chapter maintained") {
+            it.queue.size == 4 && it.currentIndex == 2 && it.queue.map { item -> item.chapterId } == listOf(1, 2, 3, 4)
+        }
+        assertEquals(3, controller.state.value.queue[controller.state.value.currentIndex].chapterId)
+        controller.release()
+    }
+
+    @Test
+    fun `next chapter navigation keeps its target when refresh inserts an earlier chapter`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val refreshEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseRefresh = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val saveEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseSave = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val repository = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                refreshEntered.complete(Unit)
+                releaseRefresh.await()
+                return ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(
+                        chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                        chapter(2, "Two", 10.0).copy(displayNumber = 2.0),
+                        chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                        chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+                    ),
+                )
+            }
+
+            override suspend fun saveProgress(
+                fictionId: Int,
+                chapterId: Int,
+                positionSeconds: Double,
+                isPlayed: Boolean,
+            ) {
+                saveEntered.complete(Unit)
+                releaseSave.await()
+                super.saveProgress(fictionId, chapterId, positionSeconds, isPlayed)
+            }
+        }
+        val controller = controllerFor(engine, sources = sources, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(
+            listOf(
+                chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+            ),
+            startChapterId = 3,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("chapter 3 playing") { it.isPlaying && it.currentIndex == 1 }
+        refreshEntered.await()
+
+        controller.skipToNextChapter()
+        saveEntered.await()
+        releaseRefresh.complete(Unit)
+        controller.await("queue refreshed") { it.queue.map { item -> item.chapterId } == listOf(1, 2, 3, 4) }
+        releaseSave.complete(Unit)
+        controller.await("chapter 4 playing") {
+            it.currentIndex == 3 && sources.requestedChapterIds.contains(4)
+        }
+
+        assertEquals(listOf(3, 4), sources.requestedChapterIds.toList())
+        controller.release()
+    }
+
+    @Test
+    fun `seeking while the final chapter refresh is in flight prevents auto advance`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val repository = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                entered.complete(Unit)
+                release.await()
+                return ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0)),
+                )
+            }
+        }
+        val controller = controllerFor(engine, sources = sources, repository = repository)
+        controller.playQueue(listOf(chapter(1, "One", 10.0)), startChapterId = 1, fiction = FictionSummary(id = 7))
+        controller.await("playing final known chapter") { it.isPlaying }
+
+        engine.emit(EngineEvent.Completed)
+        entered.await()
+        controller.seekTo(500)
+        release.complete(Unit)
+        kotlinx.coroutines.delay(100)
+
+        assertEquals(listOf(1), sources.requestedChapterIds.toList())
+        assertEquals(listOf(500L), engine.seeks.toList())
+        controller.release()
+    }
+
+    @Test
+    fun `seeking while completed progress is saving prevents auto advance`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val saveEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseSave = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val repository = object : FakeRepository() {
+            override suspend fun saveProgress(
+                fictionId: Int,
+                chapterId: Int,
+                positionSeconds: Double,
+                isPlayed: Boolean,
+            ) {
+                if (isPlayed) {
+                    saveEntered.complete(Unit)
+                    releaseSave.await()
+                }
+                super.saveProgress(fictionId, chapterId, positionSeconds, isPlayed)
+            }
+
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse =
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0)),
+                )
+        }
+        val controller = controllerFor(engine, sources = sources, repository = repository)
+        controller.playQueue(listOf(chapter(1, "One", 10.0)), startChapterId = 1, fiction = FictionSummary(id = 7))
+        controller.await("playing final known chapter") { it.isPlaying }
+
+        engine.emit(EngineEvent.Completed)
+        saveEntered.await()
+        controller.seekTo(500)
+        releaseSave.complete(Unit)
+        kotlinx.coroutines.delay(100)
+
+        assertEquals(listOf(1), sources.requestedChapterIds.toList())
+        assertEquals(listOf(500L), engine.seeks.toList())
+        controller.release()
+    }
+
+    @Test
+    fun `pausing after refresh inserts an earlier chapter saves progress for the playing chapter`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val repository = FakeRepository()
+        repository.chaptersResult = Result.success(
+            ChaptersResponse(
+                fiction = FictionSummary(id = 7),
+                chapters = listOf(
+                    chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                    chapter(2, "Two", 10.0).copy(displayNumber = 2.0),
+                    chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                    chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+                ),
+            ),
+        )
+        val controller = controllerFor(engine, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(
+            listOf(
+                chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+            ),
+            startChapterId = 3,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("queue grown around chapter 3") { it.isPlaying && it.queue.size == 4 && it.currentIndex == 2 }
+        engine.setPosition(4_000)
+        repository.savedProgress.clear()
+
+        controller.togglePlayPause()
+        controller.await("paused") { !it.isPlaying }
+        kotlinx.coroutines.delay(50)
+
+        assertTrue(repository.savedProgress.isNotEmpty())
+        assertTrue(repository.savedProgress.all { it.first == 3 })
+        controller.release()
+    }
+
+    @Test
+    fun `a navigation target removed before transition clears the playing state`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val refreshEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseRefresh = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val saveEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseSave = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val repository = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                refreshEntered.complete(Unit)
+                releaseRefresh.await()
+                return ChaptersResponse(fiction = FictionSummary(id = 7), chapters = listOf(chapter(1, "One", 10.0)))
+            }
+
+            override suspend fun saveProgress(
+                fictionId: Int,
+                chapterId: Int,
+                positionSeconds: Double,
+                isPlayed: Boolean,
+            ) {
+                saveEntered.complete(Unit)
+                releaseSave.await()
+                super.saveProgress(fictionId, chapterId, positionSeconds, isPlayed)
+            }
+        }
+        val controller = controllerFor(engine, sources = sources, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(
+            listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0)),
+            startChapterId = 1,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("chapter 1 playing") { it.isPlaying }
+        refreshEntered.await()
+
+        controller.skipToNextChapter()
+        saveEntered.await()
+        releaseRefresh.complete(Unit)
+        controller.await("target removed") { it.queue.map { item -> item.chapterId } == listOf(1) }
+        releaseSave.complete(Unit)
+        controller.await("playback stopped") { !it.isPlaying }
+
+        assertEquals(listOf(1), sources.requestedChapterIds.toList())
+        controller.release()
+    }
+
+    @Test
+    fun `an empty refresh drops future chapters so playback does not advance into removed audio`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val repository = FakeRepository()
+        repository.chaptersResult = Result.success(ChaptersResponse(fiction = FictionSummary(id = 7)))
+        val controller = controllerFor(engine, sources = sources, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(
+            listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0)),
+            startChapterId = 1,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("future chapter dropped") { it.queue.map { item -> item.chapterId } == listOf(1) }
+
+        engine.emit(EngineEvent.Completed)
+        controller.await("playback ended") { !it.isPlaying }
+        kotlinx.coroutines.delay(50)
+
+        assertEquals(listOf(1), sources.requestedChapterIds.toList())
+        controller.release()
+    }
+
+    @Test
+    fun `refresh removes future chapters the server no longer reports as playable`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val repository = FakeRepository()
+        repository.chaptersResult = Result.success(
+            ChaptersResponse(
+                fiction = FictionSummary(id = 7),
+                chapters = listOf(
+                    chapter(1, "One", 10.0),
+                    chapter(2, "Two", 10.0).copy(playable = false, audio = null),
+                    chapter(3, "Three", 10.0),
+                ),
+            ),
+        )
+        val controller = controllerFor(engine, sources = sources, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(
+            listOf(chapter(1, "One", 10.0), chapter(2, "Two", 10.0), chapter(3, "Three", 10.0)),
+            startChapterId = 1,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("chapter 2 removed") { it.queue.map { item -> item.chapterId } == listOf(1, 3) }
+
+        engine.emit(EngineEvent.Completed)
+        controller.await("chapter 3 playing") { it.currentIndex == 1 && sources.requestedChapterIds.contains(3) }
+
+        assertEquals(listOf(1, 3), sources.requestedChapterIds.toList())
+        controller.release()
+    }
+
+    @Test
+    fun `queue refresh stops asking the server while playback is paused`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val repository = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                calls.incrementAndGet()
+                return ChaptersResponse(fiction = FictionSummary(id = 7), chapters = listOf(chapter(1, "One", 10.0)))
+            }
+        }
+        val controller = controllerFor(engine, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(listOf(chapter(1, "One", 10.0)), startChapterId = 1, fiction = FictionSummary(id = 7))
+        controller.await("playing") { it.isPlaying }
+        controller.togglePlayPause()
+        controller.await("paused") { !it.isPlaying }
+        kotlinx.coroutines.delay(60)
+        val afterPause = calls.get()
+        kotlinx.coroutines.delay(200)
+        assertEquals(afterPause, calls.get())
+        controller.release()
+    }
+
+    @Test
+    fun `an earlier chapter inserted by refresh does not replay the current one when it ends`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val sources = FakeMediaSourceFactory()
+        val repository = FakeRepository()
+        repository.chaptersResult = Result.success(
+            ChaptersResponse(
+                fiction = FictionSummary(id = 7),
+                chapters = listOf(
+                    chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                    chapter(2, "Two", 10.0).copy(displayNumber = 2.0),
+                    chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+                    chapter(4, "Four", 10.0).copy(displayNumber = 4.0),
+                ),
+            ),
+        )
+        val controller = controllerFor(engine, sources = sources, repository = repository, queueRefreshIntervalMs = 50)
+
+        controller.playQueue(
+            listOf(
+                chapter(1, "One", 10.0).copy(displayNumber = 1.0),
+                chapter(3, "Three", 10.0).copy(displayNumber = 3.0),
+            ),
+            startChapterId = 3,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("queue grown around chapter 3") { it.isPlaying && it.queue.size == 4 && it.currentIndex == 2 }
+
+        engine.emit(EngineEvent.Completed)
+        controller.await("chapter 4 playing") { it.currentIndex == 3 }
+
+        assertEquals(listOf(3, 4), sources.requestedChapterIds.toList())
+        controller.release()
+    }
+
+    @Test
+    fun `offline failure during queue refresh retains existing queue and auto advance continues`() = runBlocking {
+        val engine = FakePlaybackEngine(completeOnPlay = true)
+        val repository = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                throw java.io.IOException("Offline")
+            }
+        }
+        val controller = controllerFor(
+            engine,
+            repository = repository,
+            queueRefreshIntervalMs = 20,
+        )
+
+        controller.playQueue(
+            listOf(chapter(1, "One", 1.0), chapter(2, "Two", 1.0)),
+            startChapterId = 1,
+            fiction = FictionSummary(id = 7),
+        )
+
+        controller.await("second chapter reaches completion despite offline refresh errors") {
+            it.currentIndex == 1 && finished(it)
+        }
+        assertEquals(2, controller.state.value.queue.size)
+        controller.release()
+    }
+
+    @Test
+    fun `pause prevents resumed audio when queue end refresh finds new chapter`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val repository = FakeRepository(
+            chaptersResult = Result.success(
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(chapter(1, "One", 1.0), chapter(2, "Two", 1.0)),
+                ),
+            ),
+        )
+        val controller = controllerFor(engine, repository = repository)
+
+        controller.playQueue(listOf(chapter(1, "One", 1.0)), startChapterId = 1, fiction = FictionSummary(id = 7))
+        controller.await("first chapter playing") { it.hasMedia && it.isPlaying }
+
+        controller.togglePlayPause()
+        controller.await("pause to register") { !it.isPlaying }
+
+        engine.emit(EngineEvent.Completed)
+        kotlinx.coroutines.delay(200)
+
+        assertFalse(controller.state.value.isPlaying)
+        assertEquals(1, engine.prepareCount.get())
+        controller.release()
+    }
+
+    @Test
+    fun `sleep timer prevents auto advance to newly converted chapter at queue end`() = runBlocking {
+        val engine = FakePlaybackEngine(completeOnPlay = true)
+        val timer = SleepTimer()
+        val repository = FakeRepository(
+            chaptersResult = Result.success(
+                ChaptersResponse(
+                    fiction = FictionSummary(id = 7),
+                    chapters = listOf(chapter(1, "One", 1.0), chapter(2, "Two", 1.0)),
+                ),
+            ),
+        )
+        val controller = controllerFor(engine, repository = repository, sleepTimer = timer)
+        controller.setSleepTimer(SleepTimerMode.EndOfChapter)
+
+        controller.playQueue(listOf(chapter(1, "One", 1.0)), startChapterId = 1, fiction = FictionSummary(id = 7))
+
+        controller.await("playback to stop at end of chapter") { !it.isPlaying && it.hasMedia }
+        kotlinx.coroutines.delay(200)
+
+        assertEquals(1, engine.prepareCount.get())
+        assertFalse(controller.state.value.isPlaying)
+        controller.release()
+    }
+
+    @Test
+    fun `progress is completed before auto advance prepares next chapter`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val savedBeforeNextPrepare = java.util.concurrent.atomic.AtomicBoolean(false)
+        val repository = FakeRepository()
+        val engineWithCheck = object : PlaybackEngine by engine {
+            override fun prepare(source: MediaSource, startPositionMs: Long) {
+                if (engine.prepareCount.get() == 1) {
+                    if (repository.savedProgress.any { it.first == 1 && it.third }) {
+                        savedBeforeNextPrepare.set(true)
+                    }
+                }
+                engine.prepare(source, startPositionMs)
+            }
+        }
+        val controller = controllerFor(engineWithCheck, repository = repository)
+
+        controller.playQueue(
+            listOf(chapter(1, "One", 1.0), chapter(2, "Two", 1.0)),
+            startChapterId = 1,
+            fiction = FictionSummary(id = 7),
+        )
+        controller.await("first chapter playing") { it.isPlaying && it.currentIndex == 0 }
+
+        engine.emit(EngineEvent.Completed)
+        controller.await("second chapter playing") { it.currentIndex == 1 }
+
+        assertTrue(savedBeforeNextPrepare.get())
+        controller.release()
     }
 }

@@ -84,6 +84,7 @@ import dk.perspektiva.ttsroad.desktop.ui.BookmarksStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.ChapterNotificationsStateHolder
 import dk.perspektiva.ttsroad.desktop.ui.NotificationsScreen
 import dk.perspektiva.ttsroad.desktop.ui.ContentMaxWidth
+import dk.perspektiva.ttsroad.desktop.ui.EpubExportUi
 import dk.perspektiva.ttsroad.desktop.ui.FictionDetailScreen
 import dk.perspektiva.ttsroad.desktop.ui.FictionManagementDialogs
 import dk.perspektiva.ttsroad.desktop.ui.FictionManagementStateHolder
@@ -213,6 +214,10 @@ fun App(
     }
     val fictionManagementState by fictionManagement.state.collectAsState()
     val chapterMaintenanceState by chapterMaintenance.state.collectAsState()
+    val epubExport = rememberStateHolder(container, repository) {
+        container.epubExportStateHolder()
+    }
+    val epubExportState by epubExport.state.collectAsState()
     // Hoisted for the same reason the management holder is: the editor is a form, a save is a
     // request, and neither may be lost because the user glanced at the library mid-edit.
     val fictionMetadata = rememberStateHolder(repository, cache) {
@@ -232,6 +237,11 @@ fun App(
     val screenState = rememberSaveableStateHolder()
     val nav = remember { NavigationState(onDestinationDropped = screenState::removeState) }
     val playerState by playback.state.collectAsState()
+    val listeningChapterId = playerState.queue.getOrNull(playerState.currentIndex)?.chapterId
+    LaunchedEffect(playerState.fictionId, listeningChapterId, playerState.isPlaying) {
+        val fictionId = playerState.fictionId
+        if (playerState.isPlaying && fictionId > 0) cache.recordListening(fictionId)
+    }
 
     val scope = rememberCoroutineScope()
 
@@ -672,12 +682,25 @@ fun App(
                                         onConfirmAction = {
                                             chapterMaintenance.confirmFictionAction(destination.fiction)
                                         },
-                                        onDismissConfirmation = chapterMaintenance::dismissConfirmation,
+                                         onDismissConfirmation = chapterMaintenance::dismissConfirmation,
+                                         onPollScoped = { scope ->
+                                             chapterMaintenance.pollFiction(destination.fiction, scope)
+                                         },
+                                     ),
+                                     fictionManagement = fictionManagementState,
+                                    epub = EpubExportUi(
+                                        available = capabilities.ebookExport,
+                                        isBusy = epubExportState.isBusy,
+                                        notice = epubExportState.notice
+                                            .takeIf { epubExportState.fictionId == destination.fiction.id },
+                                        error = epubExportState.error
+                                            .takeIf { epubExportState.fictionId == destination.fiction.id },
+                                        onExport = { epubExport.download(destination.fiction) },
                                     ),
-                                    fictionManagement = fictionManagementState,
-                                    onEditFiction = { nav.open(Destination.FictionMetadata(it)) },
-                                    onDeleteFiction = fictionManagement::askDelete,
-                                )
+                                    onNotificationSettingsSaved = chapterNotifications::refresh,
+                                     onEditFiction = { nav.open(Destination.FictionMetadata(it)) },
+                                     onDeleteFiction = fictionManagement::askDelete,
+                                 )
 
                                 is Destination.FictionMetadata -> {
                                     // Re-pointed on every fresher copy the cache publishes, and on

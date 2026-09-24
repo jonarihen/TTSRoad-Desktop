@@ -24,13 +24,14 @@ class BrowsePreferencesTest {
     fun `an order survives a restart`() {
         val file = file()
         FileBrowsePreferencesStore(file).update {
-            it.copy(sort = FictionSort.Title, tags = setOf("LitRPG"), browsingAll = true)
+            it.copy(sort = FictionSort.Title, tags = setOf("LitRPG"), browsingAll = true, sources = setOf("ao3", UnknownSourceKey))
         }
 
         val reopened = FileBrowsePreferencesStore(file).preferences.value
 
         assertEquals(FictionSort.Title, reopened.sort)
         assertEquals(setOf("LitRPG"), reopened.tags)
+        assertEquals(setOf("ao3", UnknownSourceKey), reopened.sources)
         assertTrue(reopened.browsingAll)
     }
 
@@ -45,6 +46,64 @@ class BrowsePreferencesTest {
         assertEquals(FictionSort.Default, loaded.sort)
         assertEquals(setOf("LitRPG"), loaded.tags)
         assertTrue(loaded.browsingAll)
+    }
+
+    @Test
+    fun `recently updated migrates to new chapters and subsequent writes use the new name`() {
+        val file = file()
+        file.writeText("""{"sort":"RecentlyUpdated","tags":["LitRPG"],"browsingAll":true}""")
+        val store = FileBrowsePreferencesStore(file)
+
+        assertEquals(FictionSort.NewChapters, store.preferences.value.sort)
+        assertEquals(setOf("LitRPG"), store.preferences.value.tags)
+        assertTrue(store.preferences.value.browsingAll)
+        assertTrue(store.preferences.value.sources.isEmpty())
+        store.update { it.copy(sources = setOf("ao3")) }
+        assertTrue(file.readText().contains("\"sort\":\"NewChapters\""))
+        assertTrue(!file.readText().contains("RecentlyUpdated"))
+        assertEquals(store.preferences.value, FileBrowsePreferencesStore(file).preferences.value)
+    }
+
+    @Test
+    fun `new and existing sort names round trip with the desktop default preserved`() {
+        assertEquals(FictionSort.NewChapters, FictionSort.Default)
+        for (sort in FictionSort.entries) {
+            assertEquals(sort, FictionSort.fromStorage(sort.name))
+            val file = file()
+            file.writeText("""{"sort":"${sort.name}"}""")
+            assertEquals(sort, FileBrowsePreferencesStore(file).preferences.value.sort)
+        }
+        assertEquals(FictionSort.Default, FictionSort.fromStorage(null))
+        assertEquals(FictionSort.Default, FictionSort.fromStorage("future order"))
+    }
+
+    @Test
+    fun `null fields and future fields do not lose source keys`() {
+        val file = file()
+        file.writeText("""{"sort":null,"tags":null,"browsingAll":null,"sources":["ao3","__unknown__"],"future":true}""")
+        assertEquals(
+            BrowsePreferences(sources = setOf("ao3", UnknownSourceKey)),
+            FileBrowsePreferencesStore(file).preferences.value,
+        )
+        file.writeText("""{"sort":"RecentlyListened","sources":null}""")
+        assertEquals(
+            BrowsePreferences(sort = FictionSort.RecentlyListened),
+            FileBrowsePreferencesStore(file).preferences.value,
+        )
+    }
+
+    @Test
+    fun `source keys are trimmed bounded and never case folded or replaced by labels`() {
+        val file = file()
+        val store = FileBrowsePreferencesStore(file)
+        store.update { it.copy(sources = setOf(" ao3 ", "ao3", "AO3", "", " \t", UnknownSourceKey)) }
+        assertEquals(setOf("ao3", "AO3", UnknownSourceKey), store.preferences.value.sources)
+        assertEquals(store.preferences.value, FileBrowsePreferencesStore(file).preferences.value)
+        assertTrue(!file.readText().contains("Archive of Our Own"))
+        store.update { it.copy(sources = (1..BrowsePreferences.MaxRememberedSources + 10).map { "adapter$it" }.toSet()) }
+        assertEquals(BrowsePreferences.MaxRememberedSources, store.preferences.value.sources.size)
+        store.update { it.copy(sources = emptySet()) }
+        assertTrue(FileBrowsePreferencesStore(file).preferences.value.sources.isEmpty())
     }
 
     @Test
@@ -64,6 +123,7 @@ class BrowsePreferencesTest {
 
         assertEquals(FictionSort.Default, loaded.sort)
         assertTrue(loaded.tags.isEmpty())
+        assertTrue(loaded.sources.isEmpty())
         assertTrue(!loaded.browsingAll)
     }
 

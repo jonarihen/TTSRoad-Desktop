@@ -94,7 +94,12 @@ interface TtsRoadApi {
 
     /** Check the source for new chapters now rather than waiting for the scheduler. */
     @POST("api/mobile/fictions/{fiction_id}/poll")
-    suspend fun pollFiction(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+    suspend fun pollFiction(
+        @Path("fiction_id") fictionId: Int,
+        @Query("full") full: Boolean? = null,
+        @Query("first_n") firstN: Int? = null,
+        @Query("last_n") lastN: Int? = null,
+    ): MaintenanceResponse
 
     /** Requeue every errored chapter of one fiction. */
     @POST("api/mobile/fictions/{fiction_id}/retry-failed")
@@ -341,6 +346,15 @@ interface TtsRoadApi {
      */
     @GET("api/mobile/notifications")
     suspend fun chapterNotifications(): ChapterNotificationsResponse
+
+    @GET("api/fictions/{fiction_id}/notification-settings")
+    suspend fun fictionNotificationSettings(@Path("fiction_id") fictionId: Int): FictionNotificationSettings
+
+    @PATCH("api/fictions/{fiction_id}/notification-settings")
+    suspend fun updateFictionNotificationSettings(
+        @Path("fiction_id") fictionId: Int,
+        @Body request: FictionNotificationSettingsRequest,
+    ): FictionNotificationSettings
 
     /**
      * Clears one notice.

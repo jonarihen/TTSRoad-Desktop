@@ -6,6 +6,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ProgressOutboxTest {
@@ -17,6 +18,7 @@ class ProgressOutboxTest {
             positionSeconds = position,
             isPlayed = false,
             clientUpdatedAt = stamp,
+            generation = "$chapterId:$position:$stamp",
         )
 
     @Test
@@ -56,10 +58,26 @@ class ProgressOutboxTest {
     fun `dropping acknowledged chapters leaves the rest queued`() {
         val queued = ProgressOutbox.drop(
             listOf(entry(7, 1.0), entry(8, 2.0), entry(9, 3.0)),
-            listOf(7, 9),
+            listOf(entry(7, 1.0), entry(9, 3.0)),
         )
 
         assertEquals(listOf(8), queued.map { it.chapterId })
+    }
+
+    @Test
+    fun `acknowledging an old position preserves its replacement even at the same timestamp`() {
+        val sent = entry(7, 1.0)
+        val replacement = entry(7, 2.0)
+
+        assertEquals(listOf(replacement), ProgressOutbox.drop(listOf(replacement), listOf(sent)))
+    }
+
+    @Test
+    fun `identical positions with different generations are independent acknowledgements`() {
+        val sent = entry(7, 1.0)
+        val replacement = sent.copy(generation = "next")
+
+        assertEquals(listOf(replacement), ProgressOutbox.drop(listOf(replacement), listOf(sent)))
     }
 
     @Test
@@ -113,6 +131,11 @@ class ProgressOutboxTest {
 class FileProgressOutboxStoreTest {
     private lateinit var dir: File
     private lateinit var file: File
+    private val owner = StorageIdentity.of("https://server.example/", username = "Reader").relativePath
+
+    private fun store(): FileProgressOutboxStore = FileProgressOutboxStore(file).apply {
+        bindOwner(this@FileProgressOutboxStoreTest.owner)
+    }
 
     @BeforeTest
     fun setUp() {
@@ -136,7 +159,7 @@ class FileProgressOutboxStoreTest {
     /** The whole reason the queue is on disk: the app closing is the case that loses data. */
     @Test
     fun `a queued position survives a restart`() {
-        FileProgressOutboxStore(file).record(entry(7, 120.0))
+        store().record(entry(7, 120.0))
 
         val reopened = FileProgressOutboxStore(file).entries.value
 
@@ -148,18 +171,33 @@ class FileProgressOutboxStoreTest {
 
     @Test
     fun `a drop is persisted, not just applied in memory`() {
-        val store = FileProgressOutboxStore(file)
+        val store = store()
         store.record(entry(7, 120.0))
         store.record(entry(8, 60.0))
 
-        store.drop(listOf(7))
+        store.drop(store.entries.value.filter { it.chapterId == 7 })
 
         assertEquals(listOf(8), FileProgressOutboxStore(file).entries.value.map { it.chapterId })
     }
 
     @Test
+    fun `clear forgets in-memory progress even when the file cannot be replaced`() {
+        val store = store()
+        store.record(entry(7, 120.0))
+        val parent = file.parentFile
+        parent.deleteRecursively()
+        parent.writeText("not a directory")
+
+        kotlin.test.assertFails { store.clear() }
+
+        assertNull(store.owner)
+        assertTrue(store.entries.value.isEmpty())
+        parent.delete()
+    }
+
+    @Test
     fun `clear empties the file too`() {
-        val store = FileProgressOutboxStore(file)
+        val store = store()
         store.record(entry(7, 120.0))
 
         store.clear()
@@ -177,6 +215,86 @@ class FileProgressOutboxStoreTest {
         file.writeText("{ this is not the json you are looking for")
 
         assertTrue(FileProgressOutboxStore(file).entries.value.isEmpty())
+    }
+
+    @Test
+    fun `owner and generation survive restart without storing credentials`() {
+        val entry = entry(7, 120.0)
+        store().record(entry)
+
+        val reopened = store()
+
+        assertEquals(owner, reopened.owner)
+        assertEquals(listOf(entry), reopened.entries.value)
+        assertTrue(!file.readText().contains("token", ignoreCase = true))
+        assertTrue(!file.readText().contains("Bearer"))
+        assertTrue(!file.readText().contains("server.example"))
+    }
+
+    @Test
+    fun `moving from connect address to advertised identity preserves queued progress`() {
+        val store = store()
+        val pending = entry(7, 120.0)
+        store.record(pending)
+        val advertisedOwner = StorageIdentity.of(
+            "https://lan.example/",
+            "https://public.example/",
+            "Reader",
+        ).relativePath
+
+        assertTrue(store.migrateOwner(owner, advertisedOwner))
+
+        val reopened = FileProgressOutboxStore(file)
+        assertEquals(advertisedOwner, reopened.owner)
+        assertEquals(listOf(pending), reopened.entries.value)
+    }
+
+    @Test
+    fun `owner migration refuses a different account or server`() {
+        val store = store()
+        val pending = entry(7, 120.0)
+        store.record(pending)
+
+        assertTrue(!store.migrateOwner("somebody-else", "new-owner"))
+        assertEquals(owner, store.owner)
+        assertEquals(listOf(pending), store.entries.value)
+    }
+
+    @Test
+    fun `a different account or server cannot adopt persisted progress`() {
+        val owners = listOf(
+            StorageIdentity.of("https://server.example/", username = "reader"),
+            StorageIdentity.of("https://other.example/", username = "Reader"),
+            StorageIdentity.of("https://server.example/other/", username = "Reader"),
+        )
+        for (other in owners) {
+            store().record(entry(7, 120.0))
+            val reopened = FileProgressOutboxStore(file)
+            reopened.bindOwner(other.relativePath)
+            assertTrue(reopened.entries.value.isEmpty())
+            assertEquals(other.relativePath, FileProgressOutboxStore(file).owner)
+        }
+    }
+
+    @Test
+    fun `ownerless legacy data is discarded rather than attributed to the next account`() {
+        file.writeText("""{"version":1,"entries":[{"fictionId":1,"chapterId":7,"positionSeconds":5.0,"isPlayed":false,"clientUpdatedAt":"2026-08-11T10:00:00.000Z"}]}""")
+
+        assertTrue(store().entries.value.isEmpty())
+        assertTrue(FileProgressOutboxStore(file).entries.value.isEmpty())
+    }
+
+    @Test
+    fun `an old acknowledgement cannot remove a persisted replacement`() {
+        val store = store()
+        val sent = entry(7, 120.0)
+        val replacement = sent.copy(generation = "next")
+        store.record(sent)
+        store.record(replacement)
+
+        store.drop(listOf(sent))
+
+        assertEquals(listOf(replacement), FileProgressOutboxStore(file).entries.value)
     }
 
     @Test

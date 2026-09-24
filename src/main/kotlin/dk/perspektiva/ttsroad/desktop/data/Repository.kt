@@ -4,12 +4,16 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -239,6 +243,11 @@ interface TtsRoadRepository {
         action: FictionMaintenanceAction,
     ): MaintenanceResponse? = null
 
+    suspend fun pollFiction(fictionId: Int, scope: FictionPollScope): MaintenanceResponse? =
+        if (scope == FictionPollScope()) runFictionMaintenance(fictionId, FictionMaintenanceAction.Poll) else null
+
+    fun epubExportSession(fictionId: Int): EpubExportSession? = null
+
     /** Podcast URLs for this account, or null on a server without the route. */
     suspend fun feeds(): FeedsResponse? = null
 
@@ -355,6 +364,13 @@ interface TtsRoadRepository {
      */
     suspend fun chapterNotifications(): ChapterNotificationsResponse? = null
 
+    suspend fun fictionNotificationSettings(fictionId: Int): FictionNotificationSettings? = null
+
+    suspend fun updateFictionNotificationSettings(
+        fictionId: Int,
+        request: FictionNotificationSettingsRequest,
+    ): FictionNotificationSettings? = null
+
     /**
      * Clears one notice. Answers false when the server refused because the chapter cannot be
      * played yet.
@@ -418,6 +434,39 @@ class RetrofitTtsRoadRepository(
     private val stamp: () -> String = ::nowStamp,
 ) : TtsRoadRepository {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+    private val sessionLock = Any()
+    private var sessionGeneration = 0L
+    private val progressFlushMutex = Mutex()
+
+    private var requestSession: RequestSession? = null
+
+    private inner class RequestSession(val state: SessionState, val generation: Long) {
+        val api: TtsRoadApi by lazy {
+            Retrofit.Builder()
+                .baseUrl(normalizeBaseUrl(state.serverUrl))
+                .callFactory { request ->
+                    sessionClient.newCall(request.newBuilder().tag(RequestSession::class.java, this).build())
+                }
+                .addConverterFactory(MoshiConverterFactory.create(moshi))
+                .build()
+                .create(TtsRoadApi::class.java)
+        }
+    }
+
+    private val sessionClient = client.newBuilder().addInterceptor { chain ->
+        val request = chain.request()
+        val expected = request.tag(RequestSession::class.java)
+            ?: throw IOException("Missing request session")
+        synchronized(sessionLock) {
+            if (!isCurrentSession(expected) ||
+                request.header("Authorization") != expected.state.authorizationHeader ||
+                !isSameOrigin(expected.state.serverUrl, request.url)
+            ) {
+                throw IOException("Request session changed")
+            }
+        }
+        chain.proceed(request)
+    }.build()
 
     // One Retrofit per base URL so connections, the TLS session, and thread pools are reused
     // across calls (a new client per request would re-handshake).
@@ -465,20 +514,25 @@ class RetrofitTtsRoadRepository(
                     totpCode = totpCode?.trim()?.ifBlank { null },
                 ),
             )
-            sessionStore.save(
-                SessionState(
-                    serverUrl = normalized,
-                    token = response.token,
-                    username = response.user.username,
-                    isAdmin = response.user.isAdmin,
-                    serverName = response.server?.name ?: "TTSRoad",
-                    serverVersion = response.server?.version,
-                    advertisedBaseUrl = response.server?.baseUrl?.trim()?.takeIf { it.isNotEmpty() },
-                    deviceId = response.deviceId,
-                    expiresAt = response.expiresAt,
-                ),
-            )
-            _sessionEnd.value = null
+            synchronized(sessionLock) {
+                sessionGeneration++
+                forgetSessionScopedState(sessionStore.current().serverUrl)
+                sessionStore.save(
+                    SessionState(
+                        serverUrl = normalized,
+                        token = response.token,
+                        username = response.user.username,
+                        isAdmin = response.user.isAdmin,
+                        serverName = response.server?.name ?: "TTSRoad",
+                        serverVersion = response.server?.version,
+                        advertisedBaseUrl = response.server?.baseUrl?.trim()?.takeIf { it.isNotEmpty() },
+                        deviceId = response.deviceId,
+                        expiresAt = response.expiresAt,
+                    ),
+                )
+                runCatching { bindProgressOwner(sessionStore.current()) }
+                _sessionEnd.value = null
+            }
             // Forced: the previous answer may be from a different account or from before an
             // upgrade, and optional UI has to be gated by the time the library renders.
             refreshCurrentCapabilities(forceRefresh = true)
@@ -503,21 +557,28 @@ class RetrofitTtsRoadRepository(
         }
     }
 
-    override suspend fun logout() = withContext(ioDispatcher) {
-        val session = sessionStore.current()
-        runCatching { if (session.isLoggedIn) api(session.serverUrl).logout() }
-        // Local sign-out happens even if the server call failed.
-        sessionStore.clearToken()
-        forgetSessionScopedState(session.serverUrl)
-        // An explicit sign-out is not a session *ending badly*; the login screen has nothing to explain.
-        _sessionEnd.value = null
+    override suspend fun logout() {
+        val session = captureSession()
+        withContext(ioDispatcher) {
+            runCatching { if (session.state.isLoggedIn) session.api.logout() }
+            invalidateSession(session, null)
+        }
     }
 
-    override suspend fun endSession(end: SessionEnd) = withContext(ioDispatcher) {
-        val serverUrl = sessionStore.current().serverUrl
-        sessionStore.clearToken()
-        forgetSessionScopedState(serverUrl)
-        _sessionEnd.value = end
+    override suspend fun endSession(end: SessionEnd) {
+        val session = captureSession()
+        withContext(ioDispatcher) { invalidateSession(session, end) }
+    }
+
+    private fun invalidateSession(session: RequestSession, end: SessionEnd?) {
+        synchronized(sessionLock) {
+            if (!isCurrentSession(session)) return
+            sessionGeneration++
+            sessionStore.clearToken()
+            forgetSessionScopedState(session.state.serverUrl)
+            runCatching { progressOutbox.clear() }
+            _sessionEnd.value = end
+        }
     }
 
     override suspend fun capabilities(
@@ -555,12 +616,16 @@ class RetrofitTtsRoadRepository(
     }
 
     override suspend fun refreshCurrentCapabilities(forceRefresh: Boolean): ServerCapabilities {
-        val session = sessionStore.current()
-        if (!session.isLoggedIn) {
-            _currentCapabilities.value = ServerCapabilities.Baseline
-            return ServerCapabilities.Baseline
+        val session = captureSession()
+        val discovered = if (session.state.isLoggedIn) {
+            capabilities(session.state.serverUrl, forceRefresh)
+        } else {
+            ServerCapabilities.Baseline
         }
-        return capabilities(session.serverUrl, forceRefresh).also { _currentCapabilities.value = it }
+        synchronized(sessionLock) {
+            if (isCurrentSession(session)) _currentCapabilities.value = discovered
+        }
+        return discovered
     }
 
     override fun forgetCapabilities(baseUrl: String) {
@@ -670,6 +735,40 @@ class RetrofitTtsRoadRepository(
             FictionMaintenanceAction.Retag -> api.retagFiction(fictionId)
             FictionMaintenanceAction.ApplyFilter -> api.applyChapterFilter(fictionId)
             FictionMaintenanceAction.ReconvertAll -> api.reconvertAllChapters(fictionId)
+        }
+    }
+
+    override suspend fun pollFiction(fictionId: Int, scope: FictionPollScope): MaintenanceResponse? {
+        require(fictionId > 0) { "Choose a fiction" }
+        return ifEndpointExists { it.pollFiction(fictionId, scope.full, scope.firstN, scope.lastN) }
+    }
+
+    override fun epubExportSession(fictionId: Int): EpubExportSession? {
+        if (fictionId <= 0 || !currentCapabilities.value.ebookExport) return null
+        val session = captureSession()
+        if (!session.state.isLoggedIn) return null
+        return object : EpubExportSession {
+            override fun newCall(): okhttp3.Call = synchronized(sessionLock) {
+                if (!isCurrentSession(session)) throw CancellationException("Export session changed")
+                sessionClient.newCall(
+                    okhttp3.Request.Builder()
+                        .url(resolveAgainstServer(session.state.serverUrl, "api/fictions/$fictionId/export.epub"))
+                        .tag(RequestSession::class.java, session)
+                        .build(),
+                )
+            }
+
+            override fun isCurrent(): Boolean = synchronized(sessionLock) { isCurrentSession(session) }
+
+            override fun publish(block: () -> Unit): Boolean = synchronized(sessionLock) {
+                if (!isCurrentSession(session)) return@synchronized false
+                block()
+                true
+            }
+
+            override suspend fun endSession(end: SessionEnd) {
+                withContext(ioDispatcher) { invalidateSession(session, end) }
+            }
         }
     }
 
@@ -820,6 +919,18 @@ class RetrofitTtsRoadRepository(
     override suspend fun chapterNotifications(): ChapterNotificationsResponse? =
         ifEndpointExists { it.chapterNotifications() }
 
+    override suspend fun fictionNotificationSettings(fictionId: Int): FictionNotificationSettings? =
+        if (currentCapabilities.value.backlogNotifications) {
+            ifEndpointExists { it.fictionNotificationSettings(fictionId) }
+        } else null
+
+    override suspend fun updateFictionNotificationSettings(
+        fictionId: Int,
+        request: FictionNotificationSettingsRequest,
+    ): FictionNotificationSettings? = if (currentCapabilities.value.backlogNotifications) {
+        ifEndpointExists { it.updateFictionNotificationSettings(fictionId, request) }
+    } else null
+
     override suspend fun dismissChapterNotification(notificationId: Int): Boolean = try {
         withAuthorizedApi { it.dismissChapterNotification(notificationId) }
         true
@@ -846,20 +957,21 @@ class RetrofitTtsRoadRepository(
         positionSeconds: Double,
         isPlayed: Boolean,
     ) {
-        // Nothing is queued while signed out. A position recorded with no account behind it
-        // belongs to nobody, and keeping it would mean the next person to sign in on this machine
-        // flushes the last one's listening history to their own account.
-        if (!sessionStore.current().isLoggedIn) return
-        progressOutbox.record(
-            PendingProgress(
-                fictionId = fictionId,
-                chapterId = chapterId,
-                positionSeconds = positionSeconds.coerceAtLeast(0.0),
-                isPlayed = isPlayed,
-                clientUpdatedAt = stamp(),
-            ),
+        val session = captureSession()
+        if (!session.state.isLoggedIn) return
+        val entry = PendingProgress(
+            fictionId = fictionId,
+            chapterId = chapterId,
+            positionSeconds = positionSeconds.coerceAtLeast(0.0),
+            isPlayed = isPlayed,
+            clientUpdatedAt = stamp(),
         )
-        flushProgress()
+        synchronized(sessionLock) {
+            if (!isCurrentSession(session) || !bindProgressOwner(session.state)) return
+            progressOutbox.record(entry)
+            _serverPlaybackState.value = _serverPlaybackState.value - chapterId
+        }
+        flushProgress(session)
     }
 
     /**
@@ -872,28 +984,28 @@ class RetrofitTtsRoadRepository(
      * working deliberately.
      */
     override suspend fun flushProgress() {
-        if (!sessionStore.current().isLoggedIn) return
-        val pending = progressOutbox.entries.value
-        if (pending.isEmpty()) return
+        flushProgress(captureSession())
+    }
 
-        try {
-            if (currentCapabilities.value.batchProgress) {
-                flushBatched(pending)
-            } else {
-                flushOneByOne(pending)
+    private suspend fun flushProgress(session: RequestSession) {
+        if (!session.state.isLoggedIn) return
+        progressFlushMutex.withLock {
+            val (pending, capabilities) = synchronized(sessionLock) {
+                if (!isCurrentSession(session) || !bindProgressOwner(session.state)) return
+                progressOutbox.entries.value to currentCapabilities.value
             }
-        } catch (e: HttpException) {
-            // A dead credential can never flush this queue, so holding it would mean carrying a
-            // growing file forever. Anything else is transient as far as this client can tell.
-            if (e.code() == 401) progressOutbox.clear()
-            throw e
+            if (pending.isEmpty()) return
+            if (capabilities.batchProgress) {
+                flushBatched(session, pending, capabilities.maxPlaybackSyncItems ?: DefaultMaxPlaybackSyncItems)
+            } else {
+                flushOneByOne(session, pending)
+            }
         }
     }
 
-    private suspend fun flushBatched(pending: List<PendingProgress>) {
-        val limit = currentCapabilities.value.maxPlaybackSyncItems ?: DefaultMaxPlaybackSyncItems
+    private suspend fun flushBatched(session: RequestSession, pending: List<PendingProgress>, limit: Int) {
         for (batch in ProgressOutbox.batches(pending, limit)) {
-            val response = withAuthorizedApi { api ->
+            val response = withSession(session) { api ->
                 api.syncProgress(
                     PlaybackSyncRequest(
                         batch.map {
@@ -907,21 +1019,22 @@ class RetrofitTtsRoadRepository(
                     ),
                 )
             }
-            // Rejections are as final as acceptances — every reason the server can give is terminal
-            // for that item, so re-sending would only get the same answer.
-            progressOutbox.drop(
-                response.accepted.map { it.chapterId } + response.rejected.map { it.chapterId },
-            )
-            if (response.serverState.isNotEmpty()) {
-                _serverPlaybackState.value =
-                    _serverPlaybackState.value + response.serverState.associateBy { it.chapterId }
+            synchronized(sessionLock) {
+                if (!isCurrentSession(session)) return
+                val resolved = (response.accepted.map { it.chapterId } +
+                    response.rejected.map { it.chapterId } + response.serverState.map { it.chapterId }).toSet()
+                val acknowledged = batch.filter { it.chapterId in resolved && it in progressOutbox.entries.value }
+                progressOutbox.drop(acknowledged)
+                val acknowledgedIds = acknowledged.map { it.chapterId }.toSet()
+                val state = response.serverState.filter { it.chapterId in acknowledgedIds }
+                _serverPlaybackState.value = _serverPlaybackState.value + state.associateBy { it.chapterId }
             }
         }
     }
 
-    private suspend fun flushOneByOne(pending: List<PendingProgress>) {
+    private suspend fun flushOneByOne(session: RequestSession, pending: List<PendingProgress>) {
         for (entry in pending) {
-            withAuthorizedApi {
+            withSession(session) {
                 it.saveProgress(
                     PlaybackProgressRequest(
                         entry.fictionId,
@@ -931,7 +1044,10 @@ class RetrofitTtsRoadRepository(
                     ),
                 )
             }
-            progressOutbox.drop(listOf(entry.chapterId))
+            synchronized(sessionLock) {
+                if (!isCurrentSession(session)) return
+                progressOutbox.drop(listOf(entry))
+            }
         }
     }
 
@@ -985,20 +1101,52 @@ class RetrofitTtsRoadRepository(
         if (e.code() == 404) null else throw e
     }
 
+    private fun captureSession(): RequestSession = synchronized(sessionLock) {
+        requestSession?.takeIf(::isCurrentSession) ?: RequestSession(
+            sessionStore.current(),
+            sessionGeneration,
+        ).also { requestSession = it }
+    }
+
+    private fun isCurrentSession(session: RequestSession): Boolean {
+        val current = sessionStore.current()
+        return session.generation == sessionGeneration &&
+            session.state.serverUrl == current.serverUrl &&
+            session.state.username == current.username &&
+            session.state.token == current.token
+    }
+
+    private fun bindProgressOwner(session: SessionState): Boolean {
+        if (!session.isLoggedIn || session.username.isNullOrBlank()) return false
+        val owner = StorageIdentity.of(
+            session.serverUrl,
+            session.advertisedBaseUrl,
+            session.username,
+        ).relativePath
+        val fallbackOwner = StorageIdentity.of(session.serverUrl, username = session.username).relativePath
+        if (owner != fallbackOwner) progressOutbox.migrateOwner(fallbackOwner, owner)
+        progressOutbox.bindOwner(owner)
+        return true
+    }
+
     private suspend fun <T> withAuthorizedApi(block: suspend (TtsRoadApi) -> T): T =
+        withSession(captureSession(), block)
+
+    private suspend fun <T> withSession(session: RequestSession, block: suspend (TtsRoadApi) -> T): T =
         withContext(ioDispatcher) {
-            val session = sessionStore.current()
-            require(session.isLoggedIn) { "Not logged in" }
+            require(session.state.isLoggedIn) { "Not logged in" }
+            synchronized(sessionLock) {
+                if (!isCurrentSession(session)) throw CancellationException("Request session changed")
+            }
             try {
-                block(api(session.serverUrl))
+                block(session.api).also {
+                    synchronized(sessionLock) {
+                        if (!isCurrentSession(session)) throw CancellationException("Request session changed")
+                    }
+                }
             } catch (e: HttpException) {
-                // A 401 on an authenticated endpoint means the stored token can never work again —
-                // expired, revoked from another device, or the server's database was reset — so
-                // retrying is pointless and holding on to it just produces "HTTP 401" on every
-                // screen until the user finds Settings > Sign out. Anything else (500, a socket
-                // error, a proxy) says nothing about the credential and must NOT sign anyone out.
                 if (e.code() == 401) {
-                    endSession(parseSessionEnd(e.response()?.errorBody()?.string()))
+                    invalidateSession(session, parseSessionEnd(e.response()?.errorBody()?.string()))
                 }
                 throw e
             }

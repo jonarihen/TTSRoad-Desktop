@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -77,7 +78,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.desktop.data.ChapterSummary
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
-import dk.perspektiva.ttsroad.desktop.data.staleTags
+import dk.perspektiva.ttsroad.desktop.data.SourceOption
+import dk.perspektiva.ttsroad.desktop.data.availableSources
+import dk.perspektiva.ttsroad.desktop.data.sourceTypeLabel
 import dk.perspektiva.ttsroad.desktop.data.emptyBrowseReason
 import dk.perspektiva.ttsroad.desktop.data.browseFictions
 import dk.perspektiva.ttsroad.desktop.data.availableTags
@@ -194,6 +197,7 @@ fun LibraryScreen(
     // and restoring last session's would be a message with nothing behind it.
     var openError by remember { mutableStateOf<String?>(null) }
     val gridState = rememberLazyGridState()
+    var listingSort by rememberSaveable { mutableStateOf(browse.sort.name) }
 
     // The rails — hero, jump-back, recent — always come from the shelf, in both modes. The server
     // derives them from the followed set either way ("browse-all widens the catalogue, not what the
@@ -208,19 +212,22 @@ fun LibraryScreen(
         rails == null -> CenterProgress()
         else -> {
             val loaded = library?.fictions.orEmpty()
-            // One call rather than four steps inline: the screen must apply scope, tags, text and
-            // order in the same sequence the tests do, or "14 of 200" counts a different stage.
-            val result = remember(loaded, query, browse.tags, browse.sort) {
-                browseFictions(loaded, query, browse.tags, browse.sort)
+            val result = remember(loaded, query, browse.tags, browse.sort, browse.sources) {
+                browseFictions(loaded, query, browse.tags, browse.sort, browse.sources)
             }
             val filtered = result.fictions
-            val tags = remember(loaded) { availableTags(loaded) }
-            // A ticked tag whose last fiction was deleted would otherwise empty the grid with no
-            // box left on screen to un-tick, so it is dropped rather than left in force.
-            val stale = remember(loaded, browse.tags) { staleTags(loaded, browse.tags) }
-            LaunchedEffect(stale) {
-                if (stale.isNotEmpty()) {
-                    browsePreferences.update { it.copy(tags = it.tags - stale) }
+            val vocabulary = remember(rails, everything.value) {
+                rails.fictions + everything.value?.fictions.orEmpty()
+            }
+            val tags = remember(vocabulary, browse.tags) { availableTags(vocabulary, browse.tags) }
+            val sources = remember(vocabulary, browse.sources) { availableSources(vocabulary, browse.sources) }
+            LaunchedEffect(browse.sort) {
+                if (listingSort != browse.sort.name) {
+                    val headerIndex = (if (rails.continueListening.isNotEmpty()) 1 else 0) +
+                        (if (rails.continueListening.size > 1) 1 else 0) +
+                        (if (jumpBack.isNotEmpty()) 1 else 0)
+                    gridState.scrollToItem(headerIndex)
+                    listingSort = browse.sort.name
                 }
             }
             val keys = remember(filtered) { fictionKeys(filtered) }
@@ -365,7 +372,7 @@ fun LibraryScreen(
                                 }
                                 Spacer(Modifier.height(14.dp))
                             }
-                            if (library != null && library.fictions.isNotEmpty()) {
+                            if (loaded.isNotEmpty() || browse.tags.isNotEmpty() || browse.sources.isNotEmpty()) {
                                 OutlinedTextField(
                                     value = query,
                                     onValueChange = { query = it },
@@ -412,6 +419,22 @@ fun LibraryScreen(
                                     onClearTags = {
                                         browsePreferences.update { it.copy(tags = emptySet()) }
                                     },
+                                    sources = sources,
+                                    selectedSources = browse.sources,
+                                    onToggleSource = { key ->
+                                        browsePreferences.update { current ->
+                                            current.copy(
+                                                sources = if (key in current.sources) {
+                                                    current.sources - key
+                                                } else {
+                                                    current.sources + key
+                                                },
+                                            )
+                                        }
+                                    },
+                                    onClearSources = {
+                                        browsePreferences.update { it.copy(sources = emptySet()) }
+                                    },
                                     shown = filtered.size,
                                     total = result.totalCount,
                                 )
@@ -438,7 +461,7 @@ fun LibraryScreen(
                         // is a lie with a tag ticked or on an empty shelf: it reads as the server
                         // having lost the library rather than as something one click undoes.
                         filtered.isEmpty() -> fullWidthItem("no-matches") {
-                            when (emptyBrowseReason(result, query, browse.tags, browseAll)) {
+                            when (emptyBrowseReason(result, query, browse.tags, browseAll, browse.sources)) {
                                 EmptyBrowseReason.NothingOnServer -> EmptyState(
                                     "The server has no fictions",
                                     if (fictionManagement.canManage) {
@@ -456,6 +479,11 @@ fun LibraryScreen(
                                 EmptyBrowseReason.TagFilter -> EmptyState(
                                     "No fictions carry all ${browse.tags.size} of those tags",
                                     "Ticking more tags narrows the list. Clear them to see everything again.",
+                                )
+
+                                EmptyBrowseReason.SourceFilter -> EmptyState(
+                                    "No fictions from the selected sources",
+                                    "Choose another source or clear sources to see everything again.",
                                 )
 
                                 EmptyBrowseReason.TextQuery -> EmptyState(
@@ -661,6 +689,7 @@ private fun InlineRetry(message: String, onRetry: () -> Unit) {
 
 const val BrowseSortTestTag: String = "browseSort"
 const val BrowseTagTestTag: String = "browseTag"
+const val BrowseSourceTestTag: String = "browseSource"
 const val BrowseFilterSummaryTestTag: String = "browseFilterSummary"
 
 /**
@@ -695,13 +724,21 @@ private fun BrowseControls(
     selectedTags: Set<String>,
     onToggleTag: (String) -> Unit,
     onClearTags: () -> Unit,
+    sources: List<SourceOption>,
+    selectedSources: Set<String>,
+    onToggleSource: (String) -> Unit,
+    onClearSources: () -> Unit,
     shown: Int,
     total: Int,
 ) {
     var sortOpen by remember { mutableStateOf(false) }
     var tagsOpen by remember { mutableStateOf(false) }
+    var sourcesOpen by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             OutlinedButton(
                 onClick = { sortOpen = true },
                 shape = RectangleShape,
@@ -718,21 +755,43 @@ private fun BrowseControls(
                     )
                 }
             }
+            if (sources.size > 1) {
+                OutlinedButton(
+                    onClick = { sourcesOpen = true },
+                    shape = RectangleShape,
+                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag(BrowseSourceTestTag),
+                ) {
+                    Text(if (selectedSources.isEmpty()) "SOURCES" else "SOURCES (${selectedSources.size})")
+                }
+            }
         }
-        if (selectedTags.isNotEmpty()) {
+        if (selectedTags.isNotEmpty() || selectedSources.isNotEmpty()) {
             Column(
                 Modifier.testTag(BrowseFilterSummaryTestTag),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                MetaText(
-                    "Showing $shown of $total  ·  ${selectedTags.sorted().joinToString(", ")}",
-                    color = AarisColor.Accent,
-                )
-                OutlinedButton(
-                    onClick = onClearTags,
-                    shape = RectangleShape,
-                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-                ) { Text("CLEAR TAGS") }
+                val filters = listOfNotNull(
+                    selectedTags.takeIf { it.isNotEmpty() }?.sorted()?.joinToString(", "),
+                    sources.filter { it.key in selectedSources }.takeIf { it.isNotEmpty() }
+                        ?.joinToString(", ") { it.label },
+                ).joinToString("  ·  ")
+                MetaText("Showing $shown of $total  ·  $filters", color = AarisColor.Accent)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (selectedTags.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = onClearTags,
+                            shape = RectangleShape,
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) { Text("CLEAR TAGS") }
+                    }
+                    if (selectedSources.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = onClearSources,
+                            shape = RectangleShape,
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) { Text("CLEAR SOURCES") }
+                    }
+                }
             }
         }
     }
@@ -751,6 +810,23 @@ private fun BrowseControls(
                     onSort(option)
                     sortOpen = false
                 }
+            }
+        }
+    }
+
+    if (sourcesOpen) {
+        ChoiceDialog(
+            title = "Sources",
+            subtitle = "A fiction can come from any ticked source",
+            onDismiss = { sourcesOpen = false },
+        ) {
+            sources.forEach { source ->
+                DialogChoiceRow(
+                    label = source.label,
+                    detail = null,
+                    selected = source.key in selectedSources,
+                    toggle = true,
+                ) { onToggleSource(source.key) }
             }
         }
     }
@@ -1025,6 +1101,7 @@ private fun FictionCard(
                 MetaText(
                     listOfNotNull(
                         fiction.author?.takeIf { it.isNotBlank() },
+                        fiction.sourceTypeLabel,
                         "${fiction.doneChapters}/${fiction.totalChapters} ready",
                     ).joinToString("  ·  "),
                     color = AarisColor.Dim,

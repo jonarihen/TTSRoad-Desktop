@@ -6,6 +6,10 @@ import dk.perspektiva.ttsroad.desktop.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.desktop.data.chapterExcludeMessage
 import dk.perspektiva.ttsroad.desktop.data.FictionMaintenanceAction
 import dk.perspektiva.ttsroad.desktop.data.FictionSummary
+import dk.perspektiva.ttsroad.desktop.data.FictionPollScope
+import dk.perspektiva.ttsroad.desktop.data.supportsFictionPoll
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import dk.perspektiva.ttsroad.desktop.data.chapterRetryMessage
 import dk.perspektiva.ttsroad.desktop.data.fictionMaintenanceMessage
 import dk.perspektiva.ttsroad.desktop.data.userFacingMessage
@@ -86,6 +90,7 @@ class ChapterMaintenanceStateHolder(
      */
     fun startFictionAction(fiction: FictionSummary, action: FictionMaintenanceAction) {
         if (_state.value.isBusy) return
+        if (action == FictionMaintenanceAction.Poll && !supportsFictionPoll(fiction.sourceType)) return
         if (action.confirms) {
             _state.update { it.copy(confirming = action, notice = null, error = null) }
         } else {
@@ -101,13 +106,30 @@ class ChapterMaintenanceStateHolder(
 
     fun dismissConfirmation() = _state.update { it.copy(confirming = null) }
 
-    private fun runFiction(fiction: FictionSummary, action: FictionMaintenanceAction) {
+    fun pollFiction(fiction: FictionSummary, pollScope: FictionPollScope) {
+        if (!repository.currentCapabilities.value.fictionMaintenance || repository.authHeaderValue() == null ||
+            !supportsFictionPoll(fiction.sourceType)
+        ) return
+        runFiction(fiction, FictionMaintenanceAction.Poll, pollScope)
+    }
+
+    private fun runFiction(
+        fiction: FictionSummary,
+        action: FictionMaintenanceAction,
+        pollScope: FictionPollScope? = null,
+    ) {
         if (_state.value.isBusy) return
         // Busy before the launch, for the reason the chapter guard is: a body that has not run yet
         // has written nothing for the guard to read.
         _state.update { it.copy(busyAction = action, notice = null, error = null) }
         job = scope.launch {
-            val outcome = runCatching { repository.runFictionMaintenance(fiction.id, action) }
+            val outcome = runCatching {
+                if (action == FictionMaintenanceAction.Poll && pollScope != null) {
+                    repository.pollFiction(fiction.id, pollScope)
+                } else {
+                    repository.runFictionMaintenance(fiction.id, action)
+                }
+            }
             val failure = outcome.exceptionOrNull()
             val response = outcome.getOrNull()
             _state.update {

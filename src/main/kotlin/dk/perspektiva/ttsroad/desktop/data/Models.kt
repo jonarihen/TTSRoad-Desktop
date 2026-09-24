@@ -172,6 +172,11 @@ data class FictionSummary(
      * `_fiction_payload()` and does not add the key, and on any server predating the aggregate.
      */
     val progress: FictionProgress? = null,
+    @param:Json(name = "last_chapter_at") val lastChapterAt: String? = null,
+    @param:Json(name = "source_type") val sourceType: String? = null,
+    @param:Json(name = "source_label") val sourceLabel: String? = null,
+    val enabled: Boolean? = null,
+    @param:Json(name = "last_polled_at") val lastPolledAt: String? = null,
 ) {
     val readyFraction: Float
         get() = if (totalChapters > 0) (doneChapters.toFloat() / totalChapters).coerceIn(0f, 1f) else 0f
@@ -193,6 +198,7 @@ data class FictionProgress(
     @param:Json(name = "duration_label") val durationLabel: String? = null,
     @param:Json(name = "remaining_seconds") val remainingSeconds: Double = 0.0,
     @param:Json(name = "remaining_label") val remainingLabel: String? = null,
+    @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
 ) {
     /**
      * How much of what can be heard has been heard, or null when nothing can be yet.
@@ -565,6 +571,8 @@ data class MaintenanceResponse(
     @param:Json(name = "full_ingest") val fullIngest: Boolean = false,
     /** How many chapters a partial poll re-read, when it took that branch. */
     @param:Json(name = "partial_sync") val partialSync: Int? = null,
+    @param:Json(name = "first_n") val firstN: Int? = null,
+    @param:Json(name = "last_n") val lastN: Int? = null,
     /**
      * Why nothing happened, when that is worth saying.
      *
