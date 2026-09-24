@@ -639,6 +639,28 @@ class QueuePlaybackControllerTest {
     }
 
     @Test
+    fun `queue refresh stops asking the server while playback is paused`() = runBlocking {
+        val engine = FakePlaybackEngine()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val repository = object : FakeRepository() {
+            override suspend fun chapters(fictionId: Int, playableOnly: Boolean): ChaptersResponse {
+                calls.incrementAndGet()
+                return ChaptersResponse(fiction = FictionSummary(id = 7), chapters = listOf(chapter(1, "One", 10.0)))
+            }
+        }
+        val controller = controllerFor(engine, repository = repository, queueRefreshIntervalMs = 20)
+        controller.playQueue(listOf(chapter(1, "One", 10.0)), startChapterId = 1, fiction = FictionSummary(id = 7))
+        controller.await("playing") { it.isPlaying }
+        controller.togglePlayPause()
+        controller.await("paused") { !it.isPlaying }
+        kotlinx.coroutines.delay(60)
+        val afterPause = calls.get()
+        kotlinx.coroutines.delay(200)
+        assertEquals(afterPause, calls.get())
+        controller.release()
+    }
+
+    @Test
     fun `an earlier chapter inserted by refresh does not replay the current one when it ends`() = runBlocking {
         val engine = FakePlaybackEngine()
         val sources = FakeMediaSourceFactory()

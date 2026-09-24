@@ -353,7 +353,7 @@ class QueuePlaybackController(
             }
             while (isActive) {
                 delay(queueRefreshIntervalMs)
-                refreshQueue(request, fictionId)
+                if (synchronized(playbackLock) { playbackRequested }) refreshQueue(request, fictionId)
             }
         }
     }

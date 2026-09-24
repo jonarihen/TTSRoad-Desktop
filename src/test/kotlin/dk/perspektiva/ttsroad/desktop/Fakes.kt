@@ -178,7 +178,8 @@ open class FakeRepository(
     /** Every queue mutation body, in order — the action and what it addressed are both observable. */
     val queueRequests: MutableList<ServerQueueRequest> = mutableListOf()
     val markedPlayed: MutableList<Pair<List<Int>, Boolean>> = mutableListOf()
-    val savedProgress: MutableList<Triple<Int, Double, Boolean>> = mutableListOf()
+    val savedProgress: MutableList<Triple<Int, Double, Boolean>> =
+        java.util.concurrent.CopyOnWriteArrayList()
 
     /** Bookmark traffic, in order — the `kind` filter is part of what the tests assert. */
     val bookmarkListCalls: MutableList<Pair<String?, Int?>> = mutableListOf()
