@@ -690,7 +690,9 @@ class QueuePlaybackControllerTest {
         releaseRefresh.complete(Unit)
         controller.await("queue refreshed") { it.queue.map { item -> item.chapterId } == listOf(1, 2, 3, 4) }
         releaseSave.complete(Unit)
-        controller.await("chapter 4 playing") { it.currentIndex == 3 }
+        controller.await("chapter 4 playing") {
+            it.currentIndex == 3 && sources.requestedChapterIds.contains(4)
+        }
 
         assertEquals(listOf(3, 4), sources.requestedChapterIds.toList())
         controller.release()

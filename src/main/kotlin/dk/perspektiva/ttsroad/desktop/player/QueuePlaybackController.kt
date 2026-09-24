@@ -630,17 +630,13 @@ class QueuePlaybackController(
         } ?: return
         queueIndex = resolvedIndex
         lastKnownPositionMs = startMs
-        publishMetadata(resolvedIndex, startMs)
+        publishMetadata(targetChapterId, startMs)
 
         playJob = scope.launch {
-            var index = synchronized(playbackLock) {
-                queue.indexOfFirst { it.resolvedChapterId == targetChapterId }
-            }
+            var chapterId = targetChapterId
             var positionMs = startMs
-            while (isActive && index in queue.indices) {
-                queueIndex = index
-                val chapter = queue[index]
-                publishMetadata(index, positionMs)
+            while (isActive) {
+                val chapter = publishMetadata(chapterId, positionMs) ?: return@launch
                 loadPlaybackSkips(chapter.resolvedChapterId)
 
                 val outcome = playChapter(chapter, positionMs)
@@ -662,31 +658,29 @@ class QueuePlaybackController(
                     _state.update { it.copy(isPlaying = false, positionMs = duration) }
                     return@launch
                 }
-                index = synchronized(playbackLock) {
-                    queue.indexOfFirst { it.resolvedChapterId == chapter.resolvedChapterId }
-                        .takeIf { it >= 0 } ?: index
+                var nextChapterId = synchronized(playbackLock) {
+                    val currentIndex = queue.indexOfFirst { it.resolvedChapterId == chapter.resolvedChapterId }
+                    queue.getOrNull(currentIndex + 1)?.resolvedChapterId
                 }
-                if (index >= queue.lastIndex) {
+                if (nextChapterId == null) {
                     val request = synchronized(playbackLock) { queueRequest }
                     val fictionId = (queueFiction?.id ?: queue.firstOrNull()?.resolvedFictionId)
                         ?.takeIf { it > 0 }
                     if (request != null && fictionId != null && synchronized(playbackLock) { playbackRequested }) {
                         synchronized(playbackLock) { endedChapterId = chapter.resolvedChapterId }
                         refreshQueue(request, fictionId, endedEvent = true)
-                        val newNext = synchronized(playbackLock) {
-                            if (queueIndex < queue.lastIndex) queueIndex + 1 else null
-                        }
-                        if (newNext != null && synchronized(playbackLock) { playbackRequested }) {
-                            index = newNext
-                            positionMs = 0L
-                            continue
+                        nextChapterId = synchronized(playbackLock) {
+                            val currentIndex = queue.indexOfFirst { it.resolvedChapterId == chapter.resolvedChapterId }
+                            queue.getOrNull(currentIndex + 1)?.resolvedChapterId
                         }
                     }
+                }
+                if (nextChapterId == null || !synchronized(playbackLock) { playbackRequested }) {
                     synchronized(playbackLock) { playbackRequested = false }
                     _state.update { it.copy(isPlaying = false, positionMs = duration) }
                     return@launch
                 }
-                index++
+                chapterId = nextChapterId
                 positionMs = 0L
             }
         }
@@ -896,10 +890,14 @@ class QueuePlaybackController(
         is PlaybackFailure.Fatal -> AttemptResult.Fatal(message)
     }
 
-    private fun publishMetadata(index: Int, positionMs: Long) {
-        val chapter = queue.getOrNull(index) ?: return
-        _state.value = metadataOf(chapter, queueFiction, positionMs, queue, index)
-    }
+    private fun publishMetadata(chapterId: Int, positionMs: Long): ChapterSummary? =
+        synchronized(playbackLock) {
+            val index = queue.indexOfFirst { it.resolvedChapterId == chapterId }
+            val chapter = queue.getOrNull(index) ?: return@synchronized null
+            queueIndex = index
+            _state.value = metadataOf(chapter, queueFiction, positionMs, queue, index)
+            chapter
+        }
 
     private fun metadataOf(
         chapter: ChapterSummary,
