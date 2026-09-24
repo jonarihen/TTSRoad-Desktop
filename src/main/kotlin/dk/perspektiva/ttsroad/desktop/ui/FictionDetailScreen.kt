@@ -376,8 +376,9 @@ fun FictionDetailScreen(
                     }
 
                     val epubExportUi = if (capabilities.ebookExport) epub.copy(available = true) else epub
+                    val pollSourceType = header.sourceType?.takeIf { it.isNotBlank() } ?: fiction.sourceType
                     val pollSupported = FictionMaintenanceAction.Poll in maintenance.fictionActions &&
-                        supportsFictionPoll(header.sourceType)
+                        supportsFictionPoll(pollSourceType)
 
                     // `resumeTarget` is null until chapters load, so the button appears with the list.
                     FictionHeader(

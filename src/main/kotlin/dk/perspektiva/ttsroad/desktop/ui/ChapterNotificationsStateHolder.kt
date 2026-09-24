@@ -48,6 +48,7 @@ class ChapterNotificationsStateHolder(
     private var actionJob: Job? = null
     private var readySeen: Set<ReadyNotificationKey>? = null
     private var generation = 0L
+    private var refreshPending = false
     private var disposed = false
 
     fun start() {
@@ -61,7 +62,11 @@ class ChapterNotificationsStateHolder(
     }
 
     fun refresh() {
-        if (disposed || _state.value.busy || _state.value.loading) return
+        if (disposed) return
+        if (_state.value.busy || _state.value.loading) {
+            refreshPending = true
+            return
+        }
         val version = ++generation
         _state.update { it.copy(loading = true, error = null) }
         loadJob = scope.launch { load(version) }
@@ -104,6 +109,15 @@ class ChapterNotificationsStateHolder(
                     it.copy(loading = false, error = userFacingMessage(failure, "Could not check for new chapters"))
                 }
             }
+        } finally {
+            drainPendingRefresh()
+        }
+    }
+
+    private fun drainPendingRefresh() {
+        if (refreshPending && !disposed && !_state.value.busy && !_state.value.loading) {
+            refreshPending = false
+            refresh()
         }
     }
 
@@ -147,6 +161,7 @@ class ChapterNotificationsStateHolder(
                 }
             } finally {
                 if (version == generation) _state.update { it.copy(busy = false, loading = false) }
+                drainPendingRefresh()
             }
         }
     }
@@ -157,6 +172,7 @@ class ChapterNotificationsStateHolder(
         loadJob?.cancel()
         actionJob?.cancel()
         readySeen = null
+        refreshPending = false
         _state.value = ChapterNotificationsUiState()
     }
 

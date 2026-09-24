@@ -17,7 +17,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
@@ -173,6 +175,37 @@ class ChapterNotificationsStateHolderTest {
         assertTrue(holder.state.value.unsupported)
         assertTrue(holder.state.value.isEmpty)
         assertNull(holder.state.value.error, "an absent feature is not an error worth retrying")
+        holder.clear()
+    }
+
+    @Test
+    fun `a refresh requested during an older load runs after that load finishes`() = runTest {
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var calls = 0
+        val repository = object : FakeRepository() {
+            override suspend fun chapterNotifications(): ChapterNotificationsResponse? {
+                calls++
+                return if (calls == 1) {
+                    entered.complete(Unit)
+                    release.await()
+                    response(notice(1, "ready"))
+                } else {
+                    response()
+                }
+            }
+        }
+        val holder = ChapterNotificationsStateHolder(repository, StandardTestDispatcher(testScheduler))
+
+        holder.refresh()
+        runCurrent()
+        entered.await()
+        holder.refresh()
+        release.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(2, calls)
+        assertTrue(holder.state.value.notifications.isEmpty())
         holder.clear()
     }
 

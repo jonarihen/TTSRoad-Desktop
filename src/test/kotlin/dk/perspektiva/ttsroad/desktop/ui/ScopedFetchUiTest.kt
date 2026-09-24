@@ -119,7 +119,9 @@ class ScopedFetchUiTest {
         val epubFiction = fiction.copy(sourceType = "epub")
         val repository = FakeRepository()
         repository.capabilitiesResult = ServerCapabilities(fictionMaintenance = true)
-        repository.chaptersResult = Result.success(ChaptersResponse(fiction = epubFiction))
+        repository.chaptersResult = Result.success(
+            ChaptersResponse(fiction = epubFiction.copy(sourceType = null)),
+        )
         val cache = testLibraryCache(repository)
 
         compose.setContent {
