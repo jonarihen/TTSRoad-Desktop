@@ -37,9 +37,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Review dependency changes
-        uses: actions/dependency-review-action@v5
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
 
@@ -52,23 +54,25 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Verifies gradle-wrapper.jar against the checksums Gradle publishes, before it is executed.
       - name: Validate the Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v6
+        uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
       # The build targets a JDK 25 toolchain. Installing it here means the toolchain resolves
       # locally; the foojay resolver in settings.gradle.kts remains the fallback for developers
       # who do not have it.
       - name: Set up JDK 25
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
 
       - name: Set up Gradle (with dependency + build caching)
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
       # Xvfb: Skiko needs a display even for off-screen rendering.
       #
@@ -108,7 +112,7 @@ jobs:
       # Compiles main + test, runs the JUnit 5 unit tests AND the Compose desktop UI tests.
       # Skiko needs a display even for off-screen rendering, hence Xvfb.
       - name: Compile, unit tests and Compose UI tests
-        run: xvfb-run -a ./gradlew ${{ env.GRADLE_FLAGS }} clean check
+        run: xvfb-run -a ./gradlew $GRADLE_FLAGS clean check
 
       # Static analysis for this phase is the two gates baked into GRADLE_FLAGS:
       #   --warning-mode fail          -> Gradle deprecations that break Gradle 10
@@ -116,16 +120,16 @@ jobs:
       # This step re-runs configuration only, so a deprecation introduced in the build script
       # itself is reported separately from a test failure.
       - name: Static analysis (build-script + compiler warnings)
-        run: ./gradlew ${{ env.GRADLE_FLAGS }} help
+        run: ./gradlew $GRADLE_FLAGS help
 
       - name: Build the distributable (bundled runtime image)
-        run: ./gradlew ${{ env.GRADLE_FLAGS }} createDistributable
+        run: ./gradlew $GRADLE_FLAGS createDistributable
 
       # Exercises the release image through Compose's own release task. The environment
       # flag is consumed only by the packaged-process smoke path; normal launchers have no default
       # argument and remain open as expected.
       - name: Run the release distributable
-        run: TTSROAD_SMOKE_TEST=1 xvfb-run -a ./gradlew ${{ env.GRADLE_FLAGS }} runReleaseDistributable
+        run: TTSROAD_SMOKE_TEST=1 xvfb-run -a ./gradlew $GRADLE_FLAGS runReleaseDistributable
 
       # Proves the jlink image actually starts: loads Skiko's native library, composes the real
       # UI, and confirms the mp3spi javax.sound.sampled provider survived module minimisation.
@@ -139,9 +143,9 @@ jobs:
       - name: Build previous and current release .deb packages
         run: |
           mkdir -p build/deb-artifacts
-          ./gradlew ${{ env.GRADLE_FLAGS }} packageReleaseDeb -Pttsroad.debRevision=0
+          ./gradlew $GRADLE_FLAGS packageReleaseDeb -Pttsroad.debRevision=0
           cp build/compose/binaries/main-release/deb/ttsroad_*_amd64.deb build/deb-artifacts/ttsroad-previous.deb
-          ./gradlew ${{ env.GRADLE_FLAGS }} packageReleaseDeb
+          ./gradlew $GRADLE_FLAGS packageReleaseDeb
           revision=$(sed -n 's/^ttsroad\.debRevision=//p' gradle.properties)
           current=$(find build/compose/binaries/main-release/deb -name "ttsroad_*-${revision}_amd64.deb" -print -quit)
           test -n "$current"
@@ -154,7 +158,7 @@ jobs:
           ./packaging/linux/inspect-deb.sh build/deb-artifacts/ttsroad-current.deb
 
       - name: Upload Linux release packages
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-deb-packages
           path: build/deb-artifacts/*.deb
@@ -163,7 +167,7 @@ jobs:
 
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-reports
           path: |
@@ -181,10 +185,12 @@ jobs:
 
     steps:
       - name: Check out verification scripts
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Download the release packages
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: linux-deb-packages
           path: build/deb-artifacts
