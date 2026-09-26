@@ -49,7 +49,7 @@ jna = "5.19.1"
 dbusJava = "5.2.0"
 # dbus-java logs through SLF4J. Version-locked to what dbus-java resolves, because an api/provider
 # mismatch is exactly the case SLF4J reports by printing to stderr — which is what we are avoiding.
-slf4j = "2.0.18"
+slf4j = "2.0.19"
 
 # --- Test ----------------------------------------------------------------------------------
 junit = "6.1.3"
