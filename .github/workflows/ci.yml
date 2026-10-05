@@ -60,7 +60,7 @@ jobs:
 
       # Verifies gradle-wrapper.jar against the checksums Gradle publishes, before it is executed.
       - name: Validate the Gradle wrapper
-        uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
 
       # The build targets a JDK 25 toolchain. Installing it here means the toolchain resolves
       # locally; the foojay resolver in settings.gradle.kts remains the fallback for developers
