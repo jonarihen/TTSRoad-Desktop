@@ -65,7 +65,7 @@ jobs:
         run: ./packaging/release/changelog-section.sh "$VERSION" > release-notes.md
 
       - name: Upload the release notes
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-notes
           path: release-notes.md
@@ -134,7 +134,7 @@ jobs:
           cp build/compose/binaries/main-release/deb/ttsroad_*_amd64.deb build/release-artifacts/
 
       - name: Upload the Linux artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux
           path: build/release-artifacts/*.deb
@@ -151,7 +151,7 @@ jobs:
           upload-release-assets: false
 
       - name: Upload the SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-sbom
           path: ttsroad-${{ needs.verify.outputs.version }}-sbom.spdx.json
@@ -242,7 +242,7 @@ jobs:
         run: TTSROAD_SMOKE_TEST=1 ./gradlew $GRADLE_FLAGS runReleaseDistributable
 
       - name: Upload the Windows artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows
           path: build/compose/binaries/main-release/msi/*.msi
@@ -284,7 +284,7 @@ jobs:
         run: TTSROAD_SMOKE_TEST=1 ./gradlew $GRADLE_FLAGS runReleaseDistributable
 
       - name: Upload the macOS artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos
           path: build/compose/binaries/main-release/dmg/*.dmg
